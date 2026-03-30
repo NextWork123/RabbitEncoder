@@ -16,7 +16,7 @@ const sanitizeAudioTitle = (title: string) => {
 };
 
 function detectReleaseGroup(filename: string): string | null {
-	const match = filename.match(/\]-([A-Za-z0-9_]+)$/);
+	const match = filename.match(/\]-([A-Za-z0-9._-]+)$/);
 	return match?.[1] ?? null;
 }
 
