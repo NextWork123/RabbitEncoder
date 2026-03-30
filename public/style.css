@@ -938,12 +938,12 @@ code {
 }
 
 .library-modal {
-	width: min(600px, calc(100vw - 32px));
+	width: min(800px, calc(100vw - 32px));
 	max-height: calc(100dvh - 64px);
 }
 
 .library-content {
-	max-height: 500px;
+	max-height: 560px;
 	overflow-y: auto;
 	padding: 8px 0;
 }
