@@ -357,7 +357,13 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		setStep(S_AUDIO, { status: "active", progress: 0 });
 		updateJob({ status: "encoding_audio" });
 
-		const audioStreams = probe.audioStreams || [];
+		const allAudioStreams = probe.audioStreams || [];
+		const audioStreams = allAudioStreams.filter((s) => !s.title || !/compatibility/i.test(s.title));
+		const skippedCompat = allAudioStreams.length - audioStreams.length;
+		if (skippedCompat > 0) {
+			Logger.info(`[audio] Skipped ${skippedCompat} compatibility track(s)`);
+		}
+
 		const encodedAudioFiles: string[] = [];
 
 		if (audioStreams.length === 0) {
