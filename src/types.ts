@@ -49,6 +49,10 @@ export interface ProbeResult {
 	masteringDisplay: string;
 	masteringLuminance: string;
 	videoStreamIndex: number;
+	videoFrameRate: string;
+	videoStreamFps: number;
+	videoDisplayFps: number;
+	isFrameRateMismatch: boolean;
 }
 
 export interface JobStep {

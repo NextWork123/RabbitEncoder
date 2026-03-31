@@ -32,6 +32,22 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 	const durationStr = await exec(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", inputPath]);
 	const duration = parseFloat(durationStr) || 0;
 
+	const streamFpsRaw = await exec(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", inputPath]);
+	const containerFpsStr = await mediainfo(inputPath, "Video;%FrameRate%");
+	const containerFpsNum = await mediainfo(inputPath, "Video;%FrameRate_Num%");
+	const containerFpsDen = await mediainfo(inputPath, "Video;%FrameRate_Den%");
+
+	const parseFps = (s: string): number => {
+		const parts = s.split("/");
+		if (parts.length === 2) return parseInt(parts[0]!) / parseInt(parts[1]!);
+		return parseFloat(s) || 23.976;
+	};
+
+	const videoStreamFps = parseFps(streamFpsRaw);
+	const videoDisplayFps = parseFloat(containerFpsStr) || 23.976;
+	const videoFrameRate = containerFpsNum && containerFpsDen ? `${containerFpsNum}/${containerFpsDen}` : "24000/1001";
+	const isFrameRateMismatch = Math.abs(videoStreamFps - videoDisplayFps) > 0.5;
+
 	const audioInfoJson = await exec([
 		"ffprobe",
 		"-v",
@@ -91,6 +107,10 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		masteringDisplay,
 		masteringLuminance,
 		videoStreamIndex: best.index,
+		videoFrameRate,
+		videoStreamFps,
+		videoDisplayFps,
+		isFrameRateMismatch,
 	};
 }
 
