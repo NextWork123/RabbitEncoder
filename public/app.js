@@ -1,4 +1,7 @@
 import Blake2b from "@rabbit-company/blake2b";
+import pkg from "../package.json";
+
+document.getElementById("title-version").innerText = `v${pkg.version}`;
 
 const API = "";
 let defaults = null;

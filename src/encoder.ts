@@ -174,33 +174,17 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		setStep(S_PREPARE, { status: "active", progress: 0 });
 
 		const preparedVideo = join(tempDir, "source_video.mkv");
+		const timecodesFile = join(tempDir, "timecodes_v2.txt");
 
-		if (probe.isFrameRateMismatch) {
-			Logger.info(
-				`[prepare] Frame rate mismatch detected: stream=${probe.videoStreamFps.toFixed(3)} vs display=${probe.videoDisplayFps.toFixed(3)}. Forcing duration to ${probe.videoFrameRate}`,
-			);
-			setStep(S_PREPARE, { detail: `Fixing frame rate metadata → ${probe.videoDisplayFps} fps` });
+		const tcRes = await run(["mkvextract", job.inputPath, "timestamps_v2", `${probe.videoStreamIndex}:${timecodesFile}`]);
+		if (tcRes.code !== 0) {
+			Logger.warn(`[prepare] Timecodes extraction failed, will use default timing: ${tcRes.stderr}`);
+		}
 
-			const extractRes = await run([
-				"mkvmerge",
-				"-o",
-				preparedVideo,
-				"--no-audio",
-				"--no-subtitles",
-				"--default-duration",
-				`0:${probe.videoFrameRate}p`,
-				job.inputPath,
-			]);
+		const extractRes = await run(["ffmpeg", "-y", "-i", job.inputPath, "-map", `0:v:0`, "-c:v", "copy", "-an", "-sn", preparedVideo]);
 
-			if (extractRes.code !== 0 && extractRes.code !== 1) {
-				throw new Error(`Failed to prepare video stream (frame rate fix): ${extractRes.stderr}`);
-			}
-		} else {
-			const extractRes = await run(["ffmpeg", "-y", "-i", job.inputPath, "-map", "0:v:0", "-c:v", "copy", "-an", "-sn", preparedVideo]);
-
-			if (extractRes.code !== 0) {
-				throw new Error(`Failed to extract video stream: ${extractRes.stderr}`);
-			}
+		if (extractRes.code !== 0) {
+			throw new Error(`Failed to extract video stream: ${extractRes.stderr}`);
 		}
 
 		setStep(S_PREPARE, { status: "done", progress: 100 });
@@ -447,7 +431,13 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		setStep(S_MUX, { progress: 30, detail: "Merging MKV" });
 
-		const mkvArgs = ["mkvmerge", "-o", finalOutput, "--title", baseTitle, "--global-tags", xmlPath, "--no-audio", "--no-subtitles", videoMkv];
+		const mkvArgs = ["mkvmerge", "-o", finalOutput, "--title", baseTitle, "--global-tags", xmlPath, "--no-audio", "--no-subtitles"];
+
+		if (existsSync(timecodesFile)) {
+			mkvArgs.push("--timestamps", `0:${timecodesFile}`);
+		}
+
+		mkvArgs.push(videoMkv);
 
 		for (let i = 0; i < audioStreams.length; i++) {
 			const stream = audioStreams[i]!;
