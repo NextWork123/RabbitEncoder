@@ -5,15 +5,60 @@ import { probeFile, getOpusBitrateForLayout, getAudioReplacementLabel, normalize
 import { Logger } from "./logger";
 import pkg from "../package.json";
 
-const AUDIO_CODEC_NAMES = /\b(?:TrueHD(?:\s+Atmos)?|E-?AC-?3|DDP?|AC-?3|DTS(?:-?HD(?:[\s-]?MA)?|-?ES|-?X|-?MA)?|FLAC|AAC|L?PCM|MP3|Vorbis|WMA|Opus|Atmos)\b/gi;
+type AudioTrackType = "main" | "commentary" | "descriptive";
 
-const sanitizeAudioTitle = (title: string) => {
-	return title
-		.replace(AUDIO_CODEC_NAMES, "Opus")
-		.replace(/\s*-\s*/g, " - ")
-		.replace(/\s{2,}/g, " ")
-		.trim();
-};
+const COMMENTARY_PATTERN = /\b(commentary|director'?s?\s+commentary)\b/i;
+const DESCRIPTIVE_PATTERN = /\b(descriptive|description|audio\s*desc(?:ription)?|visually\s*impaired|\bAD\b)\b/i;
+
+function detectAudioTrackType(stream: AudioStreamInfo): AudioTrackType {
+	if (!stream.title) return "main";
+	if (COMMENTARY_PATTERN.test(stream.title)) return "commentary";
+	if (DESCRIPTIVE_PATTERN.test(stream.title)) return "descriptive";
+	return "main";
+}
+
+/**
+ * Sort audio streams: Japanese first, English second, then everything else
+ * alphabetically by language code. Within each language group, main tracks
+ * come before commentary/descriptive tracks.
+ */
+function sortAudioStreams(streams: AudioStreamInfo[]): AudioStreamInfo[] {
+	const langPriority = (lang: string | undefined): number => {
+		const l = (lang || "und").toLowerCase();
+		if (l === "jpn" || l === "ja" || l === "japanese") return 0;
+		if (l === "eng" || l === "en" || l === "english") return 1;
+		return 2;
+	};
+
+	const typePriority = (stream: AudioStreamInfo): number => {
+		const type = detectAudioTrackType(stream);
+		if (type === "main") return 0;
+		if (type === "commentary") return 1;
+		return 2; // descriptive
+	};
+
+	return [...streams].sort((a, b) => {
+		const langA = langPriority(a.language);
+		const langB = langPriority(b.language);
+		if (langA !== langB) return langA - langB;
+
+		// Within the "other" group, sort alphabetically by language code
+		if (langA === 2 && langB === 2) {
+			const la = (a.language || "und").toLowerCase();
+			const lb = (b.language || "und").toLowerCase();
+			if (la !== lb) return la.localeCompare(lb);
+		}
+
+		// Within same language, main tracks first
+		const typeA = typePriority(a);
+		const typeB = typePriority(b);
+		if (typeA !== typeB) return typeA - typeB;
+
+		// Within same language + same type, sort by channel count ascending
+		// (stereo before 5.1 = better default for compatibility)
+		return (a.channels || 2) - (b.channels || 2);
+	});
+}
 
 function detectReleaseGroup(filename: string): string | null {
 	const match = filename.match(/\]-([A-Za-z0-9._-]+)$/);
@@ -50,13 +95,6 @@ function getResolutionTag(width: number, height: number) {
 	if (width >= 1000 || height >= 560) return "576p";
 	if (width > 0 && height > 0) return "480p";
 	return "1080p";
-}
-
-function shouldKeepAudioTitle(stream: AudioStreamInfo, streams: AudioStreamInfo[]) {
-	if (!stream.title?.trim()) return false;
-	if (!stream.language) return true;
-	const lang = stream.language || "und";
-	return streams.filter((s) => (s.language || "und") === lang).length > 1;
 }
 
 function fmtFrames(current: number, total: number): string {
@@ -178,13 +216,13 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		const tcRes = await run(["mkvextract", job.inputPath, "timestamps_v2", `${probe.videoStreamIndex}:${timecodesFile}`]);
 		if (tcRes.code !== 0) {
-			Logger.warn(`[prepare] Timecodes extraction failed, will use default timing: ${tcRes.stderr}`);
+			Logger.warn(`[prepare] Timecodes extraction failed, will use default timing: ${tcRes.stderr || tcRes.stdout}`);
 		}
 
 		const extractRes = await run(["ffmpeg", "-y", "-i", job.inputPath, "-map", `0:v:0`, "-c:v", "copy", "-an", "-sn", preparedVideo]);
 
 		if (extractRes.code !== 0) {
-			throw new Error(`Failed to extract video stream: ${extractRes.stderr}`);
+			throw new Error(`Failed to extract video stream: ${extractRes.stderr || extractRes.stdout}`);
 		}
 
 		setStep(S_PREPARE, { status: "done", progress: 100 });
@@ -333,7 +371,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		const videoMkv = join(tempDir, "video_only.mkv");
 		const muxVidRes = await run(["mkvmerge", "-o", videoMkv, ivfFile]);
 		if (muxVidRes.code !== 0 && muxVidRes.code !== 1) {
-			throw new Error(`mkvmerge video: ${muxVidRes.stderr}`);
+			throw new Error(`mkvmerge video: ${muxVidRes.stderr || muxVidRes.stdout}`);
 		}
 		updateJob({ encodedVideoSize: humanSize(statSync(videoMkv).size) });
 
@@ -342,11 +380,17 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		updateJob({ status: "encoding_audio" });
 
 		const allAudioStreams = probe.audioStreams || [];
-		const audioStreams = allAudioStreams.filter((s) => !s.title || !/compatibility/i.test(s.title));
-		const skippedCompat = allAudioStreams.length - audioStreams.length;
+		const filteredStreams = allAudioStreams.filter((s) => !s.title || !/compatibility/i.test(s.title));
+		const skippedCompat = allAudioStreams.length - filteredStreams.length;
 		if (skippedCompat > 0) {
 			Logger.info(`[audio] Skipped ${skippedCompat} compatibility track(s)`);
 		}
+
+		// Sort: Japanese -> English -> alphabetical (main before commentary/descriptive)
+		const audioStreams = sortAudioStreams(filteredStreams);
+
+		const sortedTypes = audioStreams.map((s) => `${s.language || "und"}:${detectAudioTrackType(s)}:${s.channels || "?"}ch`);
+		Logger.info(`[audio] Track order: ${sortedTypes.join(", ")}`);
 
 		const encodedAudioFiles: string[] = [];
 
@@ -382,20 +426,16 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 				const ffRes = await run(ffArgs);
 				if (ffRes.code !== 0) {
-					throw new Error(`FFmpeg audio extraction failed for stream ${i}: ${ffRes.stderr}`);
+					throw new Error(`FFmpeg audio extraction failed for stream ${i}: ${ffRes.stderr || ffRes.stdout}`);
 				}
 
 				const opusArgs = ["opusenc", "--bitrate", String(bitrate), "--discard-comments", "--discard-pictures"];
-
-				if (shouldKeepAudioTitle(stream, audioStreams)) {
-					opusArgs.push("--title", sanitizeAudioTitle(stream.title!));
-				}
 
 				opusArgs.push(flacFile, opusFile);
 
 				const opusRes = await run(opusArgs);
 				if (opusRes.code !== 0) {
-					throw new Error(`Audio encoding failed for stream ${i}: ${opusRes.stderr}`);
+					throw new Error(`Audio encoding failed for stream ${i}: ${opusRes.stderr || opusRes.stdout}`);
 				}
 
 				setStep(S_AUDIO, {
@@ -410,7 +450,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		setStep(S_MUX, { status: "active", progress: 0, detail: "Merging MKV" });
 		updateJob({ status: "muxing" });
 
-		const audioLabel = getAudioReplacementLabel(probe.audioLayout);
+		const firstSortedLayout = audioStreams.length > 0 ? normalizeLayout(audioStreams[0]!.channelLayout) : probe.audioLayout;
+		const audioLabel = getAudioReplacementLabel(firstSortedLayout);
 		const resTag = getResolutionTag(probe.width, probe.height);
 		const outputFilename = `${baseTitle} [${sourceTag}-${resTag}][${audioLabel}][AV1]-${config.organization}.mkv`;
 		const finalOutput = join(tempDir, "final.mkv");
@@ -439,14 +480,35 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		mkvArgs.push(videoMkv);
 
+		// Track which languages already have a default main track assigned
+		const defaultAssigned = new Set<string>();
+
 		for (let i = 0; i < audioStreams.length; i++) {
 			const stream = audioStreams[i]!;
+			const trackType = detectAudioTrackType(stream);
+			const lang = stream.language || "und";
+
+			const isDefault = trackType === "main" && !defaultAssigned.has(lang);
+			if (isDefault) defaultAssigned.add(lang);
+
 			if (stream.language) {
 				mkvArgs.push("--language", `0:${stream.language}`);
 			}
-			if (shouldKeepAudioTitle(stream, audioStreams)) {
-				mkvArgs.push("--track-name", `0:${sanitizeAudioTitle(stream.title!)}`);
+
+			mkvArgs.push("--track-name", `0:`);
+
+			mkvArgs.push("--default-track-flag", `0:${isDefault ? "1" : "0"}`);
+
+			mkvArgs.push("--forced-display-flag", "0:0");
+
+			if (trackType === "commentary") {
+				mkvArgs.push("--commentary-flag", "0:1");
 			}
+
+			if (trackType === "descriptive") {
+				mkvArgs.push("--visual-impaired-flag", "0:1");
+			}
+
 			mkvArgs.push(encodedAudioFiles[i]!);
 		}
 
@@ -454,7 +516,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		const mergeRes = await run(mkvArgs);
 		if (mergeRes.code !== 0 && mergeRes.code !== 1) {
-			throw new Error(`mkvmerge failed: ${mergeRes.stderr}`);
+			throw new Error(`mkvmerge failed: ${mergeRes.stderr || mergeRes.stdout}`);
 		}
 
 		if (probe.isHDR) {
