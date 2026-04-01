@@ -29,6 +29,16 @@ export interface AudioStreamInfo {
 	title?: string;
 }
 
+export interface SubtitleStreamInfo {
+	index: number;
+	codec: string;
+	language?: string;
+	title?: string;
+	isForced?: boolean;
+	isDefault?: boolean;
+	isHearingImpaired?: boolean;
+}
+
 export interface ProbeResult {
 	filename: string;
 	width: number;
@@ -37,6 +47,7 @@ export interface ProbeResult {
 	audioLayout: string;
 	audioChannels: number;
 	audioStreams: AudioStreamInfo[];
+	subtitleStreams: SubtitleStreamInfo[];
 	isHDR: boolean;
 	hasHDR10Plus: boolean;
 	hasDolbyVision: boolean;

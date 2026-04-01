@@ -1,4 +1,4 @@
-import type { AudioStreamInfo, AudioChannelBitrates, ProbeResult } from "./types";
+import type { AudioStreamInfo, SubtitleStreamInfo, AudioChannelBitrates, ProbeResult } from "./types";
 
 async function exec(cmd: string[]): Promise<string> {
 	const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
@@ -69,6 +69,30 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		title: s.tags?.title || undefined,
 	}));
 
+	// Probe subtitle streams
+	const subtitleInfoJson = await exec([
+		"ffprobe",
+		"-v",
+		"error",
+		"-select_streams",
+		"s",
+		"-show_entries",
+		"stream=index,codec_name:stream_tags=language,title:stream_disposition=forced,default,hearing_impaired",
+		"-of",
+		"json",
+		inputPath,
+	]);
+	const subtitleData = JSON.parse(subtitleInfoJson);
+	const subtitleStreams: SubtitleStreamInfo[] = (subtitleData.streams || []).map((s: any) => ({
+		index: s.index,
+		codec: s.codec_name || "unknown",
+		language: s.tags?.language || undefined,
+		title: s.tags?.title || undefined,
+		isForced: s.disposition?.forced === 1,
+		isDefault: s.disposition?.default === 1,
+		isHearingImpaired: s.disposition?.hearing_impaired === 1,
+	}));
+
 	const firstAudio = audioStreams[0];
 	const audioLayout = firstAudio ? normalizeLayout(firstAudio.channelLayout) : "stereo";
 	const audioChannels = firstAudio ? firstAudio.channels : 2;
@@ -95,6 +119,7 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		audioLayout,
 		audioChannels,
 		audioStreams,
+		subtitleStreams,
 		isHDR: transferCharacteristics === "PQ",
 		hasHDR10Plus,
 		hasDolbyVision,

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync } from "fs";
 import { join, parse as parsePath, dirname, extname } from "path";
-import type { Job, JobStep, AppConfig, ProbeResult, AudioStreamInfo } from "./types";
+import type { Job, JobStep, AppConfig, ProbeResult, AudioStreamInfo, SubtitleStreamInfo } from "./types";
 import { probeFile, getOpusBitrateForLayout, getAudioReplacementLabel, normalizeLayout } from "./probe";
 import { Logger } from "./logger";
 import pkg from "../package.json";
@@ -57,6 +57,110 @@ function sortAudioStreams(streams: AudioStreamInfo[]): AudioStreamInfo[] {
 		// Within same language + same type, sort by channel count ascending
 		// (stereo before 5.1 = better default for compatibility)
 		return (a.channels || 2) - (b.channels || 2);
+	});
+}
+
+type SubtitleTrackType = "full" | "forced" | "sdh" | "commentary" | "honorifics";
+
+const SUB_FORCED_PATTERN = /\b(signs?\s*[&+]\s*songs?|signs?\s*\/\s*songs?|s\s*&\s*s|forced)\b/i;
+const SUB_SDH_PATTERN = /\b(sdh|cc|closed\s*captions?|hearing\s*impaired)\b/i;
+const SUB_COMMENTARY_PATTERN = /\b(commentary|director'?s?\s+commentary)\b/i;
+const SUB_HONORIFICS_PATTERN = /\b(honorifics?|honours?)\b/i;
+
+function detectSubtitleTrackType(stream: SubtitleStreamInfo): SubtitleTrackType {
+	const title = stream.title || "";
+
+	// Check title-based patterns first (more specific than flags)
+	if (SUB_HONORIFICS_PATTERN.test(title)) return "honorifics";
+	if (SUB_COMMENTARY_PATTERN.test(title)) return "commentary";
+	if (SUB_SDH_PATTERN.test(title)) return "sdh";
+	if (SUB_FORCED_PATTERN.test(title)) return "forced";
+
+	// Fall back to stream disposition flags
+	if (stream.isHearingImpaired) return "sdh";
+	if (stream.isForced) return "forced";
+
+	return "full";
+}
+
+/**
+ * Extract fansub/release group name from a subtitle track title.
+ * Looks for text inside brackets or parentheses at the end of the title.
+ *
+ * Examples:
+ *   "English (SubsPlease)" = "SubsPlease"
+ *   "Full Subtitles [Erai-raws]" = "Erai-raws"
+ *   "Signs/Songs [MTBB]" = "MTBB"
+ *   "English" = null
+ */
+function extractGroupFromTitle(title: string | undefined): string | null {
+	if (!title) return null;
+	const match = title.match(/[\[(]([A-Za-z0-9._@-]+)[\])](?:\s*$)/);
+	return match?.[1] ?? null;
+}
+
+/**
+ * Build a clean track name for a subtitle stream.
+ * Format: "{Type Label} [{Group}]" or just "{Type Label}" if no group.
+ */
+function buildSubtitleTrackName(trackType: SubtitleTrackType, group: string | null): string {
+	const labels: Record<SubtitleTrackType, string> = {
+		full: "Full Subtitles",
+		forced: "Signs & Songs",
+		sdh: "SDH",
+		commentary: "Commentary",
+		honorifics: "Full Subtitles (Honorifics)",
+	};
+
+	const label = labels[trackType];
+	return group ? `${label} [${group}]` : label;
+}
+
+/**
+ * Sort subtitle streams:
+ *   - Japanese first, English second, others alphabetically
+ *   - Within each language: full -> forced -> honorifics -> sdh -> commentary
+ */
+function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStreamInfo[] {
+	const langPriority = (lang: string | undefined): number => {
+		const l = (lang || "und").toLowerCase();
+		if (l === "jpn" || l === "ja" || l === "japanese") return 0;
+		if (l === "eng" || l === "en" || l === "english") return 1;
+		return 2;
+	};
+
+	const typePriority = (stream: SubtitleStreamInfo): number => {
+		const type = detectSubtitleTrackType(stream);
+		switch (type) {
+			case "full":
+				return 0;
+			case "forced":
+				return 1;
+			case "honorifics":
+				return 2;
+			case "sdh":
+				return 3;
+			case "commentary":
+				return 4;
+			default:
+				return 5;
+		}
+	};
+
+	return [...streams].sort((a, b) => {
+		const langA = langPriority(a.language);
+		const langB = langPriority(b.language);
+		if (langA !== langB) return langA - langB;
+
+		// Within the "other" group, sort alphabetically by language code
+		if (langA === 2 && langB === 2) {
+			const la = (a.language || "und").toLowerCase();
+			const lb = (b.language || "und").toLowerCase();
+			if (la !== lb) return la.localeCompare(lb);
+		}
+
+		// Within same language, sort by type priority
+		return typePriority(a) - typePriority(b);
 	});
 }
 
@@ -512,7 +616,89 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			mkvArgs.push(encodedAudioFiles[i]!);
 		}
 
-		mkvArgs.push("--no-video", "--no-audio", job.inputPath);
+		const allSubtitleStreams = probe.subtitleStreams || [];
+		const subtitleStreams = sortSubtitleStreams(allSubtitleStreams);
+
+		if (subtitleStreams.length > 0) {
+			const subSortedTypes = subtitleStreams.map((s) => `${s.language || "und"}:${detectSubtitleTrackType(s)}`);
+			Logger.info(`[subtitle] Track order: ${subSortedTypes.join(", ")}`);
+
+			const subDefaultAssigned = new Set<string>();
+			const subForcedAssigned = new Set<string>();
+
+			for (const stream of subtitleStreams) {
+				const trackType = detectSubtitleTrackType(stream);
+				const lang = stream.language || "und";
+
+				const group = extractGroupFromTitle(stream.title);
+				const trackName = buildSubtitleTrackName(trackType, group);
+
+				let effectiveLang = lang;
+				if (trackType === "honorifics") {
+					effectiveLang = "enm";
+				}
+
+				const subFile = join(tempDir, `sub_${stream.index}.mkv`);
+				const extractSubRes = await run(["ffmpeg", "-y", "-i", job.inputPath, "-map", `0:${stream.index}`, "-c:s", "copy", "-vn", "-an", subFile]);
+
+				if (extractSubRes.code !== 0) {
+					Logger.warn(`[subtitle] Failed to extract track ${stream.index}, skipping: ${extractSubRes.stderr || extractSubRes.stdout}`);
+					continue;
+				}
+
+				mkvArgs.push("--language", `0:${effectiveLang}`);
+				mkvArgs.push("--track-name", `0:${trackName}`);
+
+				switch (trackType) {
+					case "full": {
+						const isDefault = !subDefaultAssigned.has(lang);
+						if (isDefault) subDefaultAssigned.add(lang);
+						mkvArgs.push("--default-track-flag", `0:${isDefault ? "1" : "0"}`);
+						mkvArgs.push("--forced-display-flag", "0:0");
+						mkvArgs.push("--hearing-impaired-flag", "0:0");
+						mkvArgs.push("--commentary-flag", "0:0");
+						break;
+					}
+					case "forced": {
+						if (subForcedAssigned.has(lang)) {
+							Logger.warn(`[subtitle] Duplicate forced track for ${lang}, skipping index ${stream.index}`);
+							continue;
+						}
+						subForcedAssigned.add(lang);
+						mkvArgs.push("--default-track-flag", "0:0");
+						mkvArgs.push("--forced-display-flag", "0:1");
+						mkvArgs.push("--hearing-impaired-flag", "0:0");
+						mkvArgs.push("--commentary-flag", "0:0");
+						break;
+					}
+					case "honorifics": {
+						mkvArgs.push("--default-track-flag", "0:1");
+						mkvArgs.push("--forced-display-flag", "0:0");
+						mkvArgs.push("--hearing-impaired-flag", "0:0");
+						mkvArgs.push("--commentary-flag", "0:0");
+						break;
+					}
+					case "sdh": {
+						mkvArgs.push("--default-track-flag", "0:0");
+						mkvArgs.push("--forced-display-flag", "0:0");
+						mkvArgs.push("--hearing-impaired-flag", "0:1");
+						mkvArgs.push("--commentary-flag", "0:0");
+						break;
+					}
+					case "commentary": {
+						mkvArgs.push("--default-track-flag", "0:0");
+						mkvArgs.push("--forced-display-flag", "0:0");
+						mkvArgs.push("--hearing-impaired-flag", "0:0");
+						mkvArgs.push("--commentary-flag", "0:1");
+						break;
+					}
+				}
+
+				mkvArgs.push(subFile);
+			}
+		} else {
+			Logger.info("[subtitle] No subtitle streams found");
+		}
 
 		const mergeRes = await run(mkvArgs);
 		if (mergeRes.code !== 0 && mergeRes.code !== 1) {
