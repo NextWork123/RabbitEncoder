@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { resolve, dirname, join, extname, relative, basename } from "path";
 import { type Job, type JobSettings, type AppConfig, MEDIA_EXTENSIONS } from "./types";
 import { encodeJob } from "./encoder";
@@ -9,9 +9,65 @@ const jobs = new Map<string, Job>();
 let processing = false;
 let orderCounter = 0;
 let appConfig: AppConfig;
+let queueFile = "";
 
 export function initStore(config: AppConfig) {
 	appConfig = config;
+	queueFile = join(config.tempDir, "queue.json");
+	loadQueue();
+	processQueue();
+}
+
+function saveQueue(): void {
+	if (!queueFile) return;
+	try {
+		const persistable = Array.from(jobs.values())
+			.filter((j) => j.status !== "done")
+			.map((j) => {
+				const isActive = j.status !== "queued" && j.status !== "error";
+				return {
+					...j,
+					status: isActive ? "queued" : j.status,
+					progress: isActive ? 0 : j.progress,
+					currentStage: isActive ? "Waiting in queue" : j.currentStage,
+					steps: isActive ? [] : j.steps,
+					startedAt: isActive ? undefined : j.startedAt,
+					finishedAt: isActive ? undefined : j.finishedAt,
+				};
+			});
+		writeFileSync(queueFile, JSON.stringify(persistable));
+	} catch (err: any) {
+		Logger.warn("[store] Failed to save queue:", { "error.message": err?.message });
+	}
+}
+
+function loadQueue(): void {
+	try {
+		if (!existsSync(queueFile)) return;
+		const data = JSON.parse(readFileSync(queueFile, "utf-8"));
+		if (!Array.isArray(data)) return;
+
+		for (const raw of data) {
+			if (!raw.id || !raw.filename || !raw.inputPath) continue;
+			try {
+				statSync(raw.inputPath);
+			} catch {
+				Logger.info(`[store] Skipping restored job ${raw.id}: input file missing`);
+				continue;
+			}
+			jobs.set(raw.id, raw as Job);
+			if (raw.queueOrder > orderCounter) {
+				orderCounter = raw.queueOrder;
+			}
+		}
+
+		const count = jobs.size;
+		if (count > 0) {
+			Logger.info(`[store] Restored ${count} job(s) from queue file`);
+		}
+	} catch (err: any) {
+		Logger.warn("[store] Failed to load queue:", { "error.message": err?.message });
+	}
 }
 
 export function getAppConfig(): AppConfig {
@@ -80,6 +136,7 @@ export function addJob(filename: string, inputPath: string, relativePath: string
 	};
 
 	jobs.set(id, job);
+	saveQueue();
 	processQueue();
 	return job;
 }
@@ -190,6 +247,7 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 		};
 	}
 
+	saveQueue();
 	return job;
 }
 
@@ -198,6 +256,7 @@ export function removeJob(id: string): boolean {
 	if (!job) return false;
 	if (job.status !== "queued" && job.status !== "done" && job.status !== "error") return false;
 	jobs.delete(id);
+	saveQueue();
 	return true;
 }
 
@@ -214,6 +273,7 @@ export function retryJob(id: string): Job | null {
 	job.startedAt = undefined;
 	job.finishedAt = undefined;
 
+	saveQueue();
 	processQueue();
 	return job;
 }
@@ -249,6 +309,7 @@ export function moveJob(id: string, direction: "up" | "down" | "top" | "bottom")
 		return false;
 	}
 
+	saveQueue();
 	return true;
 }
 
@@ -260,6 +321,7 @@ export function reorderJobs(orderedIds: string[]): boolean {
 			job.queueOrder = seq++;
 		}
 	}
+	saveQueue();
 	return true;
 }
 
@@ -273,6 +335,7 @@ async function processQueue() {
 
 	processing = true;
 	next.startedAt = Date.now();
+	saveQueue();
 
 	const updateFn = (partial: Partial<Job>) => {
 		Object.assign(next, partial);
@@ -286,6 +349,6 @@ async function processQueue() {
 	}
 
 	processing = false;
-
+	saveQueue();
 	processQueue();
 }

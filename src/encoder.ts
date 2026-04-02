@@ -582,6 +582,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			mkvArgs.push("--timestamps", `0:${timecodesFile}`);
 		}
 
+		mkvArgs.push("--language", "0:und");
+		mkvArgs.push("--track-name", `0:${config.organization}`);
 		mkvArgs.push(videoMkv);
 
 		// Track which languages already have a default main track assigned
@@ -617,6 +619,30 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		}
 
 		const allSubtitleStreams = probe.subtitleStreams || [];
+
+		// Fix mislabeled subtitles: some sources tag English subs as Japanese.
+		// If no English subs exist but Japanese ones do, relabel them as English.
+		const isEng = (l: string | undefined) => {
+			const lc = (l || "").toLowerCase();
+			return lc === "eng" || lc === "en" || lc === "english";
+		};
+		const isJpn = (l: string | undefined) => {
+			const lc = (l || "").toLowerCase();
+			return lc === "jpn" || lc === "ja" || lc === "japanese";
+		};
+
+		const hasEnglishSubs = allSubtitleStreams.some((s) => isEng(s.language));
+		const hasJapaneseSubs = allSubtitleStreams.some((s) => isJpn(s.language));
+
+		if (!hasEnglishSubs && hasJapaneseSubs) {
+			Logger.warn("[subtitle] No English tracks found but Japanese tracks exist - assuming mislabeled, relabeling Japanese to English");
+			for (const s of allSubtitleStreams) {
+				if (isJpn(s.language)) {
+					s.language = "eng";
+				}
+			}
+		}
+
 		const subtitleStreams = sortSubtitleStreams(allSubtitleStreams);
 
 		if (subtitleStreams.length > 0) {
