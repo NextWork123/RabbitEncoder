@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync } from "fs";
+import { existsSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync, readFileSync } from "fs";
 import { join, parse as parsePath, dirname, extname } from "path";
 import type { Job, JobStep, AppConfig, ProbeResult, AudioStreamInfo, SubtitleStreamInfo } from "./types";
 import { probeFile, getOpusBitrateForLayout, getAudioReplacementLabel, normalizeLayout } from "./probe";
@@ -208,6 +208,23 @@ function fmtFrames(current: number, total: number): string {
 function pct2(current: number, total: number): number {
 	if (total <= 0) return 0;
 	return Math.round((current / total) * 10000) / 100;
+}
+
+function isTimecodesVFR(timecodesPath: string, toleranceMs = 2): boolean {
+	const lines = readFileSync(timecodesPath, "utf-8")
+		.split("\n")
+		.filter((l) => l.trim() && !l.startsWith("#"));
+
+	if (lines.length < 3) return false;
+
+	const timestamps = lines.map(Number);
+	const deltas = [];
+	for (let i = 1; i < timestamps.length; i++) {
+		deltas.push(timestamps[i]! - timestamps[i - 1]!);
+	}
+
+	const median = deltas.toSorted((a, b) => a - b)[Math.floor(deltas.length / 2)];
+	return deltas.some((d) => Math.abs(d - median!) > toleranceMs);
 }
 
 const S_PROBE = 0;
@@ -578,7 +595,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		const mkvArgs = ["mkvmerge", "-o", finalOutput, "--title", baseTitle, "--global-tags", xmlPath, "--no-audio", "--no-subtitles"];
 
-		if (existsSync(timecodesFile)) {
+		if (existsSync(timecodesFile) && isTimecodesVFR(timecodesFile)) {
 			mkvArgs.push("--timestamps", `0:${timecodesFile}`);
 		}
 
