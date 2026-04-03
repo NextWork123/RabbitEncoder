@@ -62,7 +62,7 @@ function sortAudioStreams(streams: AudioStreamInfo[]): AudioStreamInfo[] {
 
 type SubtitleTrackType = "full" | "forced" | "sdh" | "commentary" | "honorifics";
 
-const SUB_FORCED_PATTERN = /\b(signs?\s*[&+]\s*songs?|signs?\s*\/\s*songs?|s\s*&\s*s|forced)\b/i;
+const SUB_FORCED_PATTERN = /\b(signs?|songs?|forced)\b/i;
 const SUB_SDH_PATTERN = /\b(sdh|cc|closed\s*captions?|hearing\s*impaired)\b/i;
 const SUB_COMMENTARY_PATTERN = /\b(commentary|director'?s?\s+commentary)\b/i;
 const SUB_HONORIFICS_PATTERN = /\b(honorifics?|honours?)\b/i;
@@ -161,6 +161,46 @@ function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStreamInfo[
 
 		// Within same language, sort by type priority
 		return typePriority(a) - typePriority(b);
+	});
+}
+
+const LOSSLESS_CODECS = new Set(["flac", "truehd", "mlp", "dts", "pcm_s16le", "pcm_s24le", "pcm_s32le"]);
+
+/**
+ * Deduplicate audio streams: keep only the best source per
+ * language + channel count + track type combination.
+ * Prefer lossless codecs, then highest bitrate.
+ */
+function deduplicateAudioStreams(streams: AudioStreamInfo[]): AudioStreamInfo[] {
+	const bestMap = new Map<string, AudioStreamInfo>();
+
+	for (const stream of streams) {
+		const lang = (stream.language || "und").toLowerCase();
+		const type = detectAudioTrackType(stream);
+		const key = `${lang}:${stream.channels}:${type}`;
+
+		const existing = bestMap.get(key);
+		if (!existing) {
+			bestMap.set(key, stream);
+			continue;
+		}
+
+		const isLossless = LOSSLESS_CODECS.has(stream.codec?.toLowerCase() || "");
+		const existingIsLossless = LOSSLESS_CODECS.has(existing.codec?.toLowerCase() || "");
+
+		if (isLossless && !existingIsLossless) {
+			bestMap.set(key, stream);
+		} else if (isLossless === existingIsLossless && (stream.bitrate || 0) > (existing.bitrate || 0)) {
+			bestMap.set(key, stream);
+		}
+	}
+
+	// Preserve original sort order
+	return streams.filter((s) => {
+		const lang = (s.language || "und").toLowerCase();
+		const type = detectAudioTrackType(s);
+		const key = `${lang}:${s.channels}:${type}`;
+		return bestMap.get(key) === s;
 	});
 }
 
@@ -507,8 +547,11 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			Logger.info(`[audio] Skipped ${skippedCompat} compatibility track(s)`);
 		}
 
-		// Sort: Japanese -> English -> alphabetical (main before commentary/descriptive)
-		const audioStreams = sortAudioStreams(filteredStreams);
+		const audioStreams = deduplicateAudioStreams(sortAudioStreams(filteredStreams));
+
+		if (filteredStreams.length !== audioStreams.length) {
+			Logger.info(`[audio] Deduplicated ${filteredStreams.length - audioStreams.length} redundant track(s)`);
+		}
 
 		const sortedTypes = audioStreams.map((s) => `${s.language || "und"}:${detectAudioTrackType(s)}:${s.channels || "?"}ch`);
 		Logger.info(`[audio] Track order: ${sortedTypes.join(", ")}`);

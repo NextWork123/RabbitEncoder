@@ -55,7 +55,7 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		"-select_streams",
 		"a",
 		"-show_entries",
-		"stream=index,channels,channel_layout:stream_tags=language,title",
+		"stream=index,channels,channel_layout,codec_name,bit_rate:stream_tags=language,title",
 		"-of",
 		"json",
 		inputPath,
@@ -67,6 +67,8 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		channelLayout: s.channel_layout || "",
 		language: s.tags?.language || undefined,
 		title: s.tags?.title || undefined,
+		codec: s.codec_name || undefined,
+		bitrate: s.bit_rate ? parseInt(s.bit_rate) : undefined,
 	}));
 
 	// Probe subtitle streams

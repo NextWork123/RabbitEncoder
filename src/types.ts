@@ -27,6 +27,8 @@ export interface AudioStreamInfo {
 	channelLayout: string;
 	language?: string;
 	title?: string;
+	codec?: string;
+	bitrate?: number;
 }
 
 export interface SubtitleStreamInfo {
