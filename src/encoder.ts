@@ -738,6 +738,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					"-an",
 					"-map_chapters",
 					"-1",
+					"-map_metadata",
+					"-1",
 					subFile,
 				]);
 
