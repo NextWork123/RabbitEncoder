@@ -725,7 +725,21 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				}
 
 				const subFile = join(tempDir, `sub_${stream.index}.mkv`);
-				const extractSubRes = await run(["ffmpeg", "-y", "-i", job.inputPath, "-map", `0:${stream.index}`, "-c:s", "copy", "-vn", "-an", subFile]);
+				const extractSubRes = await run([
+					"ffmpeg",
+					"-y",
+					"-i",
+					job.inputPath,
+					"-map",
+					`0:${stream.index}`,
+					"-c:s",
+					"copy",
+					"-vn",
+					"-an",
+					"-map_chapters",
+					"-1",
+					subFile,
+				]);
 
 				if (extractSubRes.code !== 0) {
 					Logger.warn(`[subtitle] Failed to extract track ${stream.index}, skipping: ${extractSubRes.stderr || extractSubRes.stdout}`);
@@ -784,6 +798,12 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			}
 		} else {
 			Logger.info("[subtitle] No subtitle streams found");
+		}
+
+		const sourceExt = extname(job.inputPath).toLowerCase();
+		if (sourceExt === ".mkv" || sourceExt === ".mks") {
+			mkvArgs.push("--no-video", "--no-audio", "--no-subtitles", "--no-global-tags", "--no-track-tags", job.inputPath);
+			Logger.info("[mux] Including font attachments and chapters from source");
 		}
 
 		const mergeRes = await run(mkvArgs);
