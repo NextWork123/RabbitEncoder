@@ -634,7 +634,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		const xmlPath = join(tempDir, "tags.xml");
 		await Bun.write(xmlPath, xmlTags);
 
-		setStep(S_MUX, { progress: 30, detail: "Merging MKV" });
+		setStep(S_MUX, { progress: 5, detail: "Preparing tracks" });
 
 		const mkvArgs = ["mkvmerge", "-o", finalOutput, "--title", baseTitle, "--global-tags", xmlPath, "--no-audio", "--no-subtitles"];
 
@@ -748,6 +748,10 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					continue;
 				}
 
+				const subIdx = subtitleStreams.indexOf(stream);
+				const subProgress = 5 + Math.round(((subIdx + 1) / subtitleStreams.length) * 40);
+				setStep(S_MUX, { progress: subProgress, detail: `Extracting subtitles (${subIdx + 1}/${subtitleStreams.length})` });
+
 				mkvArgs.push("--language", `0:${effectiveLang}`);
 				mkvArgs.push("--track-name", `0:${trackName}`);
 
@@ -808,17 +812,19 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			Logger.info("[mux] Including font attachments and chapters from source");
 		}
 
+		setStep(S_MUX, { progress: 50, detail: `Merging MKV (${subtitleStreams.length} subs, ${audioStreams.length} audio)` });
+
 		const mergeRes = await run(mkvArgs);
 		if (mergeRes.code !== 0 && mergeRes.code !== 1) {
 			throw new Error(`mkvmerge failed: ${mergeRes.stderr || mergeRes.stdout}`);
 		}
 
 		if (probe.isHDR) {
-			setStep(S_MUX, { progress: 60, detail: "Applying HDR metadata" });
+			setStep(S_MUX, { progress: 75, detail: "Applying HDR metadata" });
 			await applyHDRMetadata(finalOutput, probe);
 		}
 
-		setStep(S_MUX, { progress: 80, detail: "Moving to output" });
+		setStep(S_MUX, { progress: 85, detail: "Moving to output" });
 
 		let outputPath: string;
 
