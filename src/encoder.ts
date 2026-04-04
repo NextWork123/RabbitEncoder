@@ -232,6 +232,25 @@ function humanSize(bytes: number): string {
 	return `${val.toFixed(2)} ${units[i]}`;
 }
 
+function describeExitCode(code: number): string {
+	if (code < 128) return `Process exited with code ${code}`;
+
+	const signal = code - 128;
+	const signals: Record<number, string> = {
+		1: "SIGHUP (hangup)",
+		2: "SIGINT (interrupted)",
+		4: "SIGILL (illegal instruction)",
+		6: "SIGABRT (aborted)",
+		7: "SIGBUS (bus error)",
+		8: "SIGFPE (floating point exception)",
+		9: "SIGKILL (killed)",
+		11: "SIGSEGV (segmentation fault)",
+		15: "SIGTERM (terminated)",
+	};
+
+	return signals[signal] || `Signal ${signal}`;
+}
+
 function getResolutionTag(width: number, height: number) {
 	if (width >= 3200 || height >= 2100) return "2160p";
 	if (width >= 1800 || height >= 1000) return "1080p";
@@ -421,6 +440,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		};
 
 		let abeStderr = "";
+		let abeLastError = "";
 
 		const handleAbeEvent = (evt: any) => {
 			const si = abeStageToStep[evt.stage];
@@ -452,6 +472,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			}
 
 			if (evt.event === "error") {
+				abeLastError = evt.message || "Unknown error";
 				Logger.error("[ABE error]", { message: evt.message });
 			}
 		};
@@ -521,7 +542,9 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		const [abeCode] = await Promise.all([abeProc.exited, stdoutTask, stderrTask]);
 
 		if (abeCode !== 0) {
-			throw new Error(`Auto-Boost-Essential failed (exit ${abeCode}): ${abeStderr.slice(-500)}`);
+			const signal = abeCode > 128 ? describeExitCode(abeCode) : null;
+			const detail = abeLastError || abeStderr.trim().slice(-500) || signal || "No error details available";
+			throw new Error(`Auto-Boost-Essential failed (exit ${abeCode}): ${detail}`);
 		}
 
 		const ivfFile = join(tempDir, "source_video.ivf");

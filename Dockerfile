@@ -13,62 +13,57 @@ COPY public/ ./public/
 RUN bun build src/index.ts --outfile rabbit-encoder --target bun --compile --production
 
 # Runtime stage
+FROM debian:13-slim
 
-FROM archlinux:latest
-
-ENV BUN_INSTALL=/usr/local/bun
-ENV PATH="$BUN_INSTALL/bin:/usr/local/bin:$PATH"
-ENV PYTHONDONTWRITEBYTECODE=1
-
-ENV LLVM_CONFIG=/usr/bin/llvm-config-21
-
-RUN pacman -Syu --noconfirm && pacman -S --noconfirm --needed \
-    llvm21 llvm21-libs \
-    curl unzip ca-certificates \
-    ffmpeg mediainfo mkvtoolnix-cli opus-tools \
-    vapoursynth ffms2 \
-    python python-pip python-rich \
-    base-devel git sudo \
-    && pacman -Scc --noconfirm
-
-# Set up non-root user for AUR builds
-RUN useradd -m builder && \
-    echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-
-# Install yay (AUR helper)
-USER builder
-WORKDIR /tmp
-RUN git clone https://aur.archlinux.org/yay-bin.git && \
-    cd yay-bin && makepkg -si --noconfirm && \
-    cd .. && rm -rf yay-bin
-
-# Install AUR packages: VapourSynth plugins
-RUN yay -S --noconfirm --needed --answerdiff None --answerclean None \
-    vapoursynth-plugin-vsakarin-git
-
-RUN yay -S --noconfirm --needed --removemake --answerdiff None --answerclean None \
-    vapoursynth-plugin-vszip \
-    vapoursynth-plugin-vsjetpack
-
-# Switch back to root
 USER root
-WORKDIR /
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Clean up build tools to shrink image
-RUN pacman -Rns --noconfirm base-devel git sudo 2>/dev/null || true && \
-    pacman -Scc --noconfirm && \
-    rm -rf /home/builder/.cache /tmp/* /var/cache/pacman/pkg/*
+# Install packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+		ca-certificates \
+		curl \
+		gpgv \
+	&& rm -rf /var/lib/apt/lists/*
+
+# Install deb-multimedia keyring
+RUN curl -fsSLo /tmp/deb-multimedia-keyring.deb \
+    https://www.deb-multimedia.org/pool/main/d/deb-multimedia-keyring/deb-multimedia-keyring_2024.9.1_all.deb \
+ && dpkg -i /tmp/deb-multimedia-keyring.deb \
+ && rm -f /tmp/deb-multimedia-keyring.deb
+
+RUN cat >/etc/apt/sources.list.d/dmo.sources <<'EOF'
+Types: deb
+URIs: https://www.deb-multimedia.org
+Suites: trixie
+Components: main non-free
+Signed-By: /usr/share/keyrings/deb-multimedia-keyring.pgp
+Enabled: yes
+EOF
+
+# Install packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    vapoursynth \
+    python3-vapoursynth-jetpack \
+    vapoursynth-akarin \
+    vapoursynth-ffms2 \
+    ffmpeg \
+    mediainfo \
+    opus-tools \
+    mkvtoolnix \
+ && pip3 install --no-cache-dir --break-system-packages --no-deps vstools \
+ && rm -rf /var/lib/apt/lists/*
 
 # Copy SVT-AV1-Essential binary
 COPY binaries/SvtAv1EncApp /usr/local/bin/SvtAv1EncApp
 RUN chmod +x /usr/local/bin/SvtAv1EncApp
 
-# Install vsjetpack Python bindings
-RUN pip install --break-system-packages vsjetpack 2>/dev/null || true
-
 # Auto-Boost-Essential script
 RUN mkdir -p /opt/Auto-Boost-Essential
 COPY scripts/Auto-Boost-Essential.py /opt/Auto-Boost-Essential/
+
+COPY binaries/libvszip.so /usr/lib/x86_64-linux-gnu/vapoursynth/libvszip.so
 
 # Application
 WORKDIR /app
