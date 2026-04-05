@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync, readFileSync, symlinkSync } from "fs";
 import { join, parse as parsePath, dirname, extname } from "path";
 import type { Job, JobStep, AppConfig, ProbeResult, AudioStreamInfo, SubtitleStreamInfo } from "./types";
 import { probeFile, getOpusBitrateForLayout, getAudioReplacementLabel, normalizeLayout } from "./probe";
@@ -831,7 +831,12 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		const sourceExt = extname(job.inputPath).toLowerCase();
 		if (sourceExt === ".mkv" || sourceExt === ".mks") {
-			mkvArgs.push("--no-video", "--no-audio", "--no-subtitles", "--no-global-tags", "--no-track-tags", job.inputPath);
+			const safeSourceLink = join(tempDir, `source_ref${sourceExt}`);
+			try {
+				unlinkSync(safeSourceLink);
+			} catch {}
+			symlinkSync(job.inputPath, safeSourceLink);
+			mkvArgs.push("--no-video", "--no-audio", "--no-subtitles", "--no-global-tags", "--no-track-tags", safeSourceLink);
 			Logger.info("[mux] Including font attachments and chapters from source");
 		}
 
