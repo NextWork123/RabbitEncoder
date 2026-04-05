@@ -61,7 +61,11 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		inputPath,
 	]);
 	const audioData = JSON.parse(audioInfoJson);
-	const audioStreams: AudioStreamInfo[] = (audioData.streams || []).map((s: any) => ({
+
+	const delayOutput = await mediainfo(inputPath, "Audio;%Delay%\\n");
+	const delayLines = delayOutput.split("\n").map((s) => parseFloat(s.trim()) || 0);
+
+	const audioStreams: AudioStreamInfo[] = (audioData.streams || []).map((s: any, i: number) => ({
 		index: s.index,
 		channels: s.channels || 0,
 		channelLayout: s.channel_layout || "",
@@ -69,6 +73,7 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		title: s.tags?.title || undefined,
 		codec: s.codec_name || undefined,
 		bitrate: s.bit_rate ? parseInt(s.bit_rate) : undefined,
+		delayMs: delayLines[i] ?? 0,
 	}));
 
 	// Probe subtitle streams

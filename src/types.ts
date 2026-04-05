@@ -29,6 +29,7 @@ export interface AudioStreamInfo {
 	title?: string;
 	codec?: string;
 	bitrate?: number;
+	delayMs: number;
 }
 
 export interface SubtitleStreamInfo {

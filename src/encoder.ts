@@ -586,9 +586,6 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		} else {
 			setStep(S_AUDIO, { progress: 10, detail: `Encoding ${audioStreams.length} audio stream(s)` });
 
-			const delayOutput = await run(["mediainfo", "--Inform=Audio;%Delay%\\n", job.inputPath]).then((r) => r.stdout.trim());
-			const delays = delayOutput.split("\n").map((s) => parseFloat(s.trim()) || 0);
-
 			for (let i = 0; i < audioStreams.length; i++) {
 				const stream = audioStreams[i]!;
 				const flacFile = join(tempDir, `audio_${i}.flac`);
@@ -598,7 +595,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				const layout = normalizeLayout(stream.channelLayout);
 				const bitrate = getOpusBitrateForLayout(layout, job.settings.audioBitrates);
 
-				const delayMs = delays[i] ?? 0;
+				const delayMs = stream.delayMs;
 				const delaySec = delayMs / 1000;
 
 				const ffArgs = ["ffmpeg", "-y", "-i", job.inputPath, "-map", `0:${stream.index}`, "-vn", "-sn", "-dn", "-c:a", "flac"];
