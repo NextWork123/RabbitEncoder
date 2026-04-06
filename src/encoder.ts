@@ -118,14 +118,14 @@ function buildSubtitleTrackName(trackType: SubtitleTrackType, group: string | nu
 
 /**
  * Sort subtitle streams:
- *   - Japanese first, English second, others alphabetically
+ *   - English first, Japanese second, others alphabetically
  *   - Within each language: full -> forced -> honorifics -> sdh -> commentary
  */
 function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStreamInfo[] {
 	const langPriority = (lang: string | undefined): number => {
 		const l = (lang || "und").toLowerCase();
-		if (l === "jpn" || l === "ja" || l === "japanese") return 0;
-		if (l === "eng" || l === "en" || l === "english") return 1;
+		if (l === "eng" || l === "en" || l === "english") return 0;
+		if (l === "jpn" || l === "ja" || l === "japanese") return 1;
 		return 2;
 	};
 
