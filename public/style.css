@@ -322,6 +322,15 @@ code {
 	color: var(--red);
 }
 
+.status-cancelled {
+	background: var(--bg-3);
+	color: var(--text-2);
+}
+
+.btn-cancel:hover {
+	color: var(--red);
+}
+
 .steps-pipeline {
 	margin-top: 10px;
 	display: flex;

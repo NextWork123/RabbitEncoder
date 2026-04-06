@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { resolve, dirname, join, extname, relative, basename } from "path";
 import { type Job, type JobSettings, type AppConfig, MEDIA_EXTENSIONS } from "./types";
-import { encodeJob } from "./encoder";
+import { encodeJob, CancelledError } from "./encoder";
 import { isAlreadyEncoded } from "./library";
 import { Logger } from "./logger";
 
@@ -10,6 +10,8 @@ let processing = false;
 let orderCounter = 0;
 let appConfig: AppConfig;
 let queueFile = "";
+let activeAbortController: AbortController | null = null;
+let activeJobId: string | null = null;
 
 export function initStore(config: AppConfig) {
 	appConfig = config;
@@ -22,7 +24,7 @@ function saveQueue(): void {
 	if (!queueFile) return;
 	try {
 		const persistable = Array.from(jobs.values())
-			.filter((j) => j.status !== "done")
+			.filter((j) => j.status !== "done" && j.status !== "cancelled")
 			.map((j) => {
 				const isActive = j.status !== "queued" && j.status !== "error";
 				return {
@@ -97,6 +99,7 @@ export function getAllJobs(): Job[] {
 			queued: 1,
 			done: 2,
 			error: 3,
+			cancelled: 3,
 		};
 		const diff = (order[a.status] ?? 1) - (order[b.status] ?? 1);
 		if (diff !== 0) return diff;
@@ -256,7 +259,7 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 export function removeJob(id: string): boolean {
 	const job = jobs.get(id);
 	if (!job) return false;
-	if (job.status !== "queued" && job.status !== "done" && job.status !== "error") return false;
+	if (job.status !== "queued" && job.status !== "done" && job.status !== "error" && job.status !== "cancelled") return false;
 	jobs.delete(id);
 	saveQueue();
 	return true;
@@ -278,6 +281,13 @@ export function retryJob(id: string): Job | null {
 	saveQueue();
 	processQueue();
 	return job;
+}
+
+export function cancelJob(id: string): boolean {
+	if (!activeJobId || activeJobId !== id || !activeAbortController) return false;
+	Logger.info(`[store] Cancelling job ${id}`);
+	activeAbortController.abort();
+	return true;
 }
 
 export function moveJob(id: string, direction: "up" | "down" | "top" | "bottom"): boolean {
@@ -339,17 +349,28 @@ async function processQueue() {
 	next.startedAt = Date.now();
 	saveQueue();
 
+	const controller = new AbortController();
+	activeAbortController = controller;
+	activeJobId = next.id;
+
 	const updateFn = (partial: Partial<Job>) => {
 		Object.assign(next, partial);
 	};
 
 	try {
-		await encodeJob(next, appConfig, updateFn);
+		await encodeJob(next, appConfig, updateFn, controller.signal);
 	} catch (err: any) {
-		next.status = "error";
-		next.error = err?.message || String(err);
+		if (err instanceof CancelledError) {
+			jobs.delete(next.id);
+			Logger.info(`[store] Job ${next.id} cancelled and removed`);
+		} else {
+			next.status = "error";
+			next.error = err?.message || String(err);
+		}
 	}
 
+	activeAbortController = null;
+	activeJobId = null;
 	processing = false;
 	saveQueue();
 	processQueue();

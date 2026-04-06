@@ -2,7 +2,7 @@ export type EncoderQuality = "low" | "medium" | "high";
 export type EncoderSpeed = "slower" | "slow" | "medium" | "fast" | "faster";
 export type DenoiseLevel = "off" | "light" | "medium" | "heavy";
 
-export type JobStatus = "queued" | "probing" | "encoding_video" | "encoding_audio" | "muxing" | "done" | "error";
+export type JobStatus = "queued" | "probing" | "encoding_video" | "encoding_audio" | "muxing" | "done" | "error" | "cancelled";
 
 export const MEDIA_EXTENSIONS = new Set([".mp4", ".mkv", ".avi", ".webm", ".flv", ".ts", ".mov"]);
 

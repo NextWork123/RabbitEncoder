@@ -168,6 +168,10 @@ async function retryJob(id) {
 	await authFetch(`${API}/api/jobs/${id}/retry`, { method: "POST" });
 }
 
+async function cancelJob(id) {
+	await authFetch(`${API}/api/jobs/${id}/cancel`, { method: "POST" });
+}
+
 async function reorderQueue(orderedIds) {
 	await authFetch(`${API}/api/jobs/reorder`, {
 		method: "POST",
@@ -359,6 +363,7 @@ function statusLabel(status) {
 		muxing: "Muxing",
 		done: "Done",
 		error: "Error",
+		cancelled: "Cancelled",
 	};
 	return labels[status] || status;
 }
@@ -503,6 +508,11 @@ function renderJobCard(job) {
       </button>
       <button class="btn-icon" title="Remove" data-job-id="${job.id}" data-action="remove">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>`;
+	} else if (active) {
+		actions = `
+      <button class="btn-icon btn-cancel" title="Cancel" data-job-id="${job.id}" data-action="cancel">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
       </button>`;
 	} else if (err) {
 		actions = `
@@ -1336,6 +1346,8 @@ function initEventListeners() {
 			removeJob(jobId);
 		} else if (action === "retry") {
 			doRetry(jobId);
+		} else if (action === "cancel") {
+			cancelJob(jobId).then(() => update());
 		}
 	});
 

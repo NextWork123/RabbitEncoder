@@ -1,6 +1,18 @@
 import { mkdirSync } from "fs";
 import { loadConfig } from "./config";
-import { initStore, getAllJobs, getJob, updateJobSettings, removeJob, retryJob, updateDefaults, scanLibraryPath, moveJob, reorderJobs } from "./store";
+import {
+	initStore,
+	getAllJobs,
+	getJob,
+	updateJobSettings,
+	removeJob,
+	retryJob,
+	updateDefaults,
+	scanLibraryPath,
+	moveJob,
+	reorderJobs,
+	cancelJob,
+} from "./store";
 import { startWatcher } from "./watcher";
 import { browseFolder, isPathAllowed } from "./library";
 import { Web } from "@rabbit-company/web";
@@ -65,6 +77,12 @@ app.post("/api/jobs/:id/retry", (c) => {
 	const job = retryJob(c.params.id!);
 	if (!job) return c.json({ error: "Job not found or not retryable" }, 400);
 	return c.json(job);
+});
+
+app.post("/api/jobs/:id/cancel", (c) => {
+	const ok = cancelJob(c.params.id!);
+	if (!ok) return c.json({ error: "Job not found or not currently encoding" }, 400);
+	return c.json({ ok: true });
 });
 
 app.post("/api/jobs/:id/move", async (c) => {

@@ -1,290 +1,24 @@
-import { existsSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync, readFileSync, symlinkSync, renameSync } from "fs";
+import { existsSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync, symlinkSync, renameSync } from "fs";
 import { join, parse as parsePath, dirname, extname } from "path";
-import type { Job, JobStep, AppConfig, ProbeResult, AudioStreamInfo, SubtitleStreamInfo, DenoiseLevel } from "./types";
+import type { Job, JobStep, AppConfig, ProbeResult } from "./types";
 import { probeFile, getOpusBitrateForLayout, getAudioReplacementLabel, normalizeLayout } from "./probe";
 import { Logger } from "./logger";
+import { CancelledError, run, humanSize, fmtFrames, pct2, escapeXml, describeExitCode, isTimecodesVFR } from "./process";
+import {
+	detectAudioTrackType,
+	sortAudioStreams,
+	deduplicateAudioStreams,
+	detectSubtitleTrackType,
+	extractGroupFromTitle,
+	buildSubtitleTrackName,
+	sortSubtitleStreams,
+	isEnglish,
+	isJapanese,
+} from "./tracks";
+import { detectSourceTag, detectReleaseGroup, getResolutionTag, getDenoiseFilter, extractBaseTitle } from "./naming";
 import pkg from "../package.json";
 
-type AudioTrackType = "main" | "commentary" | "descriptive";
-
-const COMMENTARY_PATTERN = /\b(commentary|director'?s?\s+commentary)\b/i;
-const DESCRIPTIVE_PATTERN = /\b(descriptive|description|audio\s*desc(?:ription)?|visually\s*impaired|\bAD\b)\b/i;
-
-function detectAudioTrackType(stream: AudioStreamInfo): AudioTrackType {
-	if (!stream.title) return "main";
-	if (COMMENTARY_PATTERN.test(stream.title)) return "commentary";
-	if (DESCRIPTIVE_PATTERN.test(stream.title)) return "descriptive";
-	return "main";
-}
-
-/**
- * Sort audio streams: Japanese first, English second, then everything else
- * alphabetically by language code. Within each language group, main tracks
- * come before commentary/descriptive tracks.
- */
-function sortAudioStreams(streams: AudioStreamInfo[]): AudioStreamInfo[] {
-	const langPriority = (lang: string | undefined): number => {
-		const l = (lang || "und").toLowerCase();
-		if (l === "jpn" || l === "ja" || l === "japanese") return 0;
-		if (l === "eng" || l === "en" || l === "english") return 1;
-		return 2;
-	};
-
-	const typePriority = (stream: AudioStreamInfo): number => {
-		const type = detectAudioTrackType(stream);
-		if (type === "main") return 0;
-		if (type === "commentary") return 1;
-		return 2; // descriptive
-	};
-
-	return [...streams].sort((a, b) => {
-		const langA = langPriority(a.language);
-		const langB = langPriority(b.language);
-		if (langA !== langB) return langA - langB;
-
-		// Within the "other" group, sort alphabetically by language code
-		if (langA === 2 && langB === 2) {
-			const la = (a.language || "und").toLowerCase();
-			const lb = (b.language || "und").toLowerCase();
-			if (la !== lb) return la.localeCompare(lb);
-		}
-
-		// Within same language, main tracks first
-		const typeA = typePriority(a);
-		const typeB = typePriority(b);
-		if (typeA !== typeB) return typeA - typeB;
-
-		// Within same language + same type, sort by channel count ascending
-		// (stereo before 5.1 = better default for compatibility)
-		return (a.channels || 2) - (b.channels || 2);
-	});
-}
-
-type SubtitleTrackType = "full" | "forced" | "sdh" | "commentary" | "honorifics";
-
-const SUB_FORCED_PATTERN = /\b(signs?|songs?|forced)\b/i;
-const SUB_SDH_PATTERN = /\b(sdh|cc|closed\s*captions?|hearing\s*impaired)\b/i;
-const SUB_COMMENTARY_PATTERN = /\b(commentary|director'?s?\s+commentary)\b/i;
-const SUB_HONORIFICS_PATTERN = /\b(honorifics?|honours?)\b/i;
-
-function detectSubtitleTrackType(stream: SubtitleStreamInfo): SubtitleTrackType {
-	const title = stream.title || "";
-
-	// Check title-based patterns first (more specific than flags)
-	if (SUB_HONORIFICS_PATTERN.test(title)) return "honorifics";
-	if (SUB_COMMENTARY_PATTERN.test(title)) return "commentary";
-	if (SUB_SDH_PATTERN.test(title)) return "sdh";
-	if (SUB_FORCED_PATTERN.test(title)) return "forced";
-
-	// Fall back to stream disposition flags
-	if (stream.isHearingImpaired) return "sdh";
-	if (stream.isForced) return "forced";
-
-	return "full";
-}
-
-/**
- * Extract fansub/release group name from a subtitle track title.
- * Looks for text inside brackets or parentheses at the end of the title.
- *
- * Examples:
- *   "English (SubsPlease)" = "SubsPlease"
- *   "Full Subtitles [Erai-raws]" = "Erai-raws"
- *   "Signs/Songs [MTBB]" = "MTBB"
- *   "English" = null
- */
-function extractGroupFromTitle(title: string | undefined): string | null {
-	if (!title) return null;
-	const match = title.match(/[\[(]([A-Za-z0-9._@-]+)[\])](?:\s*$)/);
-	return match?.[1] ?? null;
-}
-
-/**
- * Build a clean track name for a subtitle stream.
- * Format: "{Type Label} [{Group}]" or just "{Type Label}" if no group.
- */
-function buildSubtitleTrackName(trackType: SubtitleTrackType, group: string | null): string {
-	const labels: Record<SubtitleTrackType, string> = {
-		full: "Full Subtitles",
-		forced: "Signs & Songs",
-		sdh: "SDH",
-		commentary: "Commentary",
-		honorifics: "Full Subtitles (Honorifics)",
-	};
-
-	const label = labels[trackType];
-	return group ? `${label} [${group}]` : label;
-}
-
-/**
- * Sort subtitle streams:
- *   - English first, Japanese second, others alphabetically
- *   - Within each language: full -> forced -> honorifics -> sdh -> commentary
- */
-function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStreamInfo[] {
-	const langPriority = (lang: string | undefined): number => {
-		const l = (lang || "und").toLowerCase();
-		if (l === "eng" || l === "en" || l === "english") return 0;
-		if (l === "jpn" || l === "ja" || l === "japanese") return 1;
-		return 2;
-	};
-
-	const typePriority = (stream: SubtitleStreamInfo): number => {
-		const type = detectSubtitleTrackType(stream);
-		switch (type) {
-			case "full":
-				return 0;
-			case "forced":
-				return 1;
-			case "honorifics":
-				return 2;
-			case "sdh":
-				return 3;
-			case "commentary":
-				return 4;
-			default:
-				return 5;
-		}
-	};
-
-	return [...streams].sort((a, b) => {
-		const langA = langPriority(a.language);
-		const langB = langPriority(b.language);
-		if (langA !== langB) return langA - langB;
-
-		// Within the "other" group, sort alphabetically by language code
-		if (langA === 2 && langB === 2) {
-			const la = (a.language || "und").toLowerCase();
-			const lb = (b.language || "und").toLowerCase();
-			if (la !== lb) return la.localeCompare(lb);
-		}
-
-		// Within same language, sort by type priority
-		return typePriority(a) - typePriority(b);
-	});
-}
-
-const LOSSLESS_CODECS = new Set(["flac", "truehd", "mlp", "dts", "pcm_s16le", "pcm_s24le", "pcm_s32le"]);
-
-/**
- * Deduplicate audio streams: keep only the best source per
- * language + channel count + track type combination.
- * Prefer lossless codecs, then highest bitrate.
- */
-function deduplicateAudioStreams(streams: AudioStreamInfo[]): AudioStreamInfo[] {
-	const bestMap = new Map<string, AudioStreamInfo>();
-
-	for (const stream of streams) {
-		const lang = (stream.language || "und").toLowerCase();
-		const type = detectAudioTrackType(stream);
-		const key = `${lang}:${stream.channels}:${type}`;
-
-		const existing = bestMap.get(key);
-		if (!existing) {
-			bestMap.set(key, stream);
-			continue;
-		}
-
-		const isLossless = LOSSLESS_CODECS.has(stream.codec?.toLowerCase() || "");
-		const existingIsLossless = LOSSLESS_CODECS.has(existing.codec?.toLowerCase() || "");
-
-		if (isLossless && !existingIsLossless) {
-			bestMap.set(key, stream);
-		} else if (isLossless === existingIsLossless && (stream.bitrate || 0) > (existing.bitrate || 0)) {
-			bestMap.set(key, stream);
-		}
-	}
-
-	// Preserve original sort order
-	return streams.filter((s) => {
-		const lang = (s.language || "und").toLowerCase();
-		const type = detectAudioTrackType(s);
-		const key = `${lang}:${s.channels}:${type}`;
-		return bestMap.get(key) === s;
-	});
-}
-
-function detectReleaseGroup(filename: string): string | null {
-	const match = filename.match(/\]-([A-Za-z0-9._-]+)$/);
-	return match?.[1] ?? null;
-}
-
-async function run(cmd: string[], opts?: { cwd?: string }): Promise<{ code: number; stdout: string; stderr: string }> {
-	const proc = Bun.spawn(cmd, {
-		stdout: "pipe",
-		stderr: "pipe",
-		cwd: opts?.cwd,
-	});
-	const stdoutText = await new Response(proc.stdout).text();
-	const stderrText = await new Response(proc.stderr).text();
-	const code = await proc.exited;
-	return { code, stdout: stdoutText.trim(), stderr: stderrText.trim() };
-}
-
-function humanSize(bytes: number): string {
-	const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-	let i = 0;
-	let val = bytes;
-	while (val >= 1024 && i < units.length - 1) {
-		val /= 1024;
-		i++;
-	}
-	return `${val.toFixed(2)} ${units[i]}`;
-}
-
-function describeExitCode(code: number): string {
-	if (code < 128) return `Process exited with code ${code}`;
-
-	const signal = code - 128;
-	const signals: Record<number, string> = {
-		1: "SIGHUP (hangup)",
-		2: "SIGINT (interrupted)",
-		4: "SIGILL (illegal instruction)",
-		6: "SIGABRT (aborted)",
-		7: "SIGBUS (bus error)",
-		8: "SIGFPE (floating point exception)",
-		9: "SIGKILL (killed)",
-		11: "SIGSEGV (segmentation fault)",
-		15: "SIGTERM (terminated)",
-	};
-
-	return signals[signal] || `Signal ${signal}`;
-}
-
-function getResolutionTag(width: number, height: number) {
-	if (width >= 3200 || height >= 2100) return "2160p";
-	if (width >= 1800 || height >= 1000) return "1080p";
-	if (width >= 1200 || height >= 700) return "720p";
-	if (width >= 1000 || height >= 560) return "576p";
-	if (width > 0 && height > 0) return "480p";
-	return "1080p";
-}
-
-function fmtFrames(current: number, total: number): string {
-	return `${current.toLocaleString()} / ${total.toLocaleString()} frames`;
-}
-
-function pct2(current: number, total: number): number {
-	if (total <= 0) return 0;
-	return Math.round((current / total) * 10000) / 100;
-}
-
-function isTimecodesVFR(timecodesPath: string, toleranceMs = 2): boolean {
-	const lines = readFileSync(timecodesPath, "utf-8")
-		.split("\n")
-		.filter((l) => l.trim() && !l.startsWith("#"));
-
-	if (lines.length < 3) return false;
-
-	const timestamps = lines.map(Number);
-	const deltas = [];
-	for (let i = 1; i < timestamps.length; i++) {
-		deltas.push(timestamps[i]! - timestamps[i - 1]!);
-	}
-
-	const median = deltas.toSorted((a, b) => a - b)[Math.floor(deltas.length / 2)];
-	return deltas.some((d) => Math.abs(d - median!) > toleranceMs);
-}
+export { CancelledError } from "./process";
 
 const S_PROBE = 0;
 const S_PREPARE = 1;
@@ -338,27 +72,25 @@ function cleanupAssociatedFiles(videoPath: string): void {
 	} catch {}
 }
 
-export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial: Partial<Job>) => void): Promise<void> {
+export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial: Partial<Job>) => void, signal?: AbortSignal): Promise<void> {
 	const tempDir = join(config.tempDir, job.id);
 	mkdirSync(tempDir, { recursive: true });
 
 	const stem = parsePath(job.filename).name;
 	const sourceTag = detectSourceTag(stem);
 	const releaseGroup = detectReleaseGroup(stem);
-	const baseTitle = stem.replace(/\s*[\-–—]*\s*\[.*/, "").trim();
+	const baseTitle = extractBaseTitle(stem);
 
 	const steps = makeSteps();
 
 	function setStep(idx: number, partial: Partial<JobStep>) {
 		const step = steps[idx]!;
 
-		// Auto-set startedAt when transitioning to active
 		if (partial.status === "active" && step.status !== "active") {
 			step.startedAt = Date.now();
 			step.finishedAt = undefined;
 		}
 
-		// Auto-set finishedAt when transitioning to done or error
 		if ((partial.status === "done" || partial.status === "error") && step.status !== "done" && step.status !== "error") {
 			step.finishedAt = Date.now();
 
@@ -378,8 +110,13 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		});
 	}
 
+	function checkCancelled() {
+		if (signal?.aborted) throw new CancelledError();
+	}
+
 	try {
 		// Probe
+		checkCancelled();
 		setStep(S_PROBE, { status: "active", progress: 0 });
 		updateJob({ status: "probing" });
 
@@ -389,17 +126,18 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		setStep(S_PROBE, { status: "done", progress: 100 });
 
 		// Prepare
+		checkCancelled();
 		setStep(S_PREPARE, { status: "active", progress: 0 });
 
 		const preparedVideo = join(tempDir, "source_video.mkv");
 		const timecodesFile = join(tempDir, "timecodes_v2.txt");
 
-		const tcRes = await run(["mkvextract", job.inputPath, "timestamps_v2", `${probe.videoStreamIndex}:${timecodesFile}`]);
+		const tcRes = await run(["mkvextract", job.inputPath, "timestamps_v2", `${probe.videoStreamIndex}:${timecodesFile}`], { signal });
 		if (tcRes.code !== 0) {
 			Logger.warn(`[prepare] Timecodes extraction failed, will use default timing: ${tcRes.stderr || tcRes.stdout}`);
 		}
 
-		const extractRes = await run(["ffmpeg", "-y", "-i", job.inputPath, "-map", `0:v:0`, "-c:v", "copy", "-an", "-sn", preparedVideo]);
+		const extractRes = await run(["ffmpeg", "-y", "-i", job.inputPath, "-map", `0:v:0`, "-c:v", "copy", "-an", "-sn", preparedVideo], { signal });
 
 		if (extractRes.code !== 0) {
 			throw new Error(`Failed to extract video stream: ${extractRes.stderr || extractRes.stdout}`);
@@ -408,6 +146,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		// Denoise pass (optional)
 		const denoiseFilter = getDenoiseFilter(job.settings.denoise);
 		if (denoiseFilter) {
+			checkCancelled();
+
 			const totalFrames = Math.round(probe.duration * probe.videoStreamFps);
 			setStep(S_PREPARE, { progress: 5, detail: `Denoising (${job.settings.denoise}) — ${fmtFrames(0, totalFrames)}` });
 			Logger.info(`[denoise] Applying ${job.settings.denoise} denoise: ${denoiseFilter} (${totalFrames} frames)`);
@@ -422,7 +162,18 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				},
 			);
 
-			// Parse FFmpeg stderr for frame= progress
+			const onAbortDenoise = () => {
+				try {
+					denoiseProc.kill("SIGTERM");
+				} catch {}
+				setTimeout(() => {
+					try {
+						denoiseProc.kill("SIGKILL");
+					} catch {}
+				}, 3000);
+			};
+			signal?.addEventListener("abort", onAbortDenoise, { once: true });
+
 			const stderrTask = (async () => {
 				if (!denoiseProc.stderr) return "";
 
@@ -437,7 +188,6 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 					buffer += decoder.decode(value, { stream: true });
 
-					// FFmpeg writes \r-delimited status lines; split on both \r and \n
 					const parts = buffer.split(/[\r\n]/);
 					buffer = parts.pop() || "";
 
@@ -447,7 +197,6 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 							const current = parseInt(frameMatch[1]!);
 							const now = Date.now();
 
-							// Throttle UI updates to at most once per second
 							if (now - lastUpdate >= 1000) {
 								lastUpdate = now;
 								setStep(S_PREPARE, {
@@ -466,6 +215,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			const stdoutTask = new Response(denoiseProc.stdout).text();
 
 			const [denoiseCode, stderrTail] = await Promise.all([denoiseProc.exited, stderrTask, stdoutTask]);
+			signal?.removeEventListener("abort", onAbortDenoise);
+			checkCancelled();
 
 			if (denoiseCode !== 0) {
 				throw new Error(`Denoise failed (exit ${denoiseCode}): ${stderrTail.trim().slice(-500)}`);
@@ -480,6 +231,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		setStep(S_PREPARE, { status: "done", progress: 100 });
 
 		// ABE (scenes + fast + metrics + zones + final)
+		checkCancelled();
 		updateJob({ status: "encoding_video" });
 
 		const abeArgs = [
@@ -502,6 +254,18 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			stderr: "pipe",
 			cwd: tempDir,
 		});
+
+		const onAbortAbe = () => {
+			try {
+				abeProc.kill("SIGTERM");
+			} catch {}
+			setTimeout(() => {
+				try {
+					abeProc.kill("SIGKILL");
+				} catch {}
+			}, 3000);
+		};
+		signal?.addEventListener("abort", onAbortAbe, { once: true });
 
 		const abeStageToStep: Record<number, number> = {
 			0: S_FAST,
@@ -549,7 +313,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			}
 		};
 
-		const stdoutTask = (async () => {
+		const abeStdoutTask = (async () => {
 			if (!abeProc.stdout) return;
 
 			const reader = abeProc.stdout.getReader();
@@ -590,7 +354,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			}
 		})();
 
-		const stderrTask = (async () => {
+		const abeStderrTask = (async () => {
 			if (!abeProc.stderr) return;
 
 			const reader = abeProc.stderr.getReader();
@@ -611,11 +375,13 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			abeStderr += decoder.decode();
 		})();
 
-		const [abeCode] = await Promise.all([abeProc.exited, stdoutTask, stderrTask]);
+		const [abeCode] = await Promise.all([abeProc.exited, abeStdoutTask, abeStderrTask]);
+		signal?.removeEventListener("abort", onAbortAbe);
+		checkCancelled();
 
 		if (abeCode !== 0) {
-			const signal = abeCode > 128 ? describeExitCode(abeCode) : null;
-			const detail = abeLastError || abeStderr.trim().slice(-500) || signal || "No error details available";
+			const exitSignal = abeCode > 128 ? describeExitCode(abeCode) : null;
+			const detail = abeLastError || abeStderr.trim().slice(-500) || exitSignal || "No error details available";
 			throw new Error(`Auto-Boost-Essential failed (exit ${abeCode}): ${detail}`);
 		}
 
@@ -625,13 +391,13 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		}
 
 		const videoMkv = join(tempDir, "video_only.mkv");
-		const muxVidRes = await run(["mkvmerge", "-o", videoMkv, ivfFile]);
+		const muxVidRes = await run(["mkvmerge", "-o", videoMkv, ivfFile], { signal });
 		if (muxVidRes.code !== 0 && muxVidRes.code !== 1) {
 			throw new Error(`mkvmerge video: ${muxVidRes.stderr || muxVidRes.stdout}`);
 		}
 		updateJob({ encodedVideoSize: humanSize(statSync(videoMkv).size) });
 
-		// Audio
+		checkCancelled();
 		setStep(S_AUDIO, { status: "active", progress: 0 });
 		updateJob({ status: "encoding_audio" });
 
@@ -659,6 +425,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			setStep(S_AUDIO, { progress: 10, detail: `Encoding ${audioStreams.length} audio stream(s)` });
 
 			for (let i = 0; i < audioStreams.length; i++) {
+				checkCancelled();
+
 				const stream = audioStreams[i]!;
 				const flacFile = join(tempDir, `audio_${i}.flac`);
 				const opusFile = join(tempDir, `audio_${i}.opus`);
@@ -680,7 +448,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 				ffArgs.push(flacFile);
 
-				const ffRes = await run(ffArgs);
+				const ffRes = await run(ffArgs, { signal });
 				if (ffRes.code !== 0) {
 					throw new Error(`FFmpeg audio extraction failed for stream ${i}: ${ffRes.stderr || ffRes.stdout}`);
 				}
@@ -689,7 +457,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 				opusArgs.push(flacFile, opusFile);
 
-				const opusRes = await run(opusArgs);
+				const opusRes = await run(opusArgs, { signal });
 				if (opusRes.code !== 0) {
 					throw new Error(`Audio encoding failed for stream ${i}: ${opusRes.stderr || opusRes.stdout}`);
 				}
@@ -702,7 +470,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			setStep(S_AUDIO, { status: "done", progress: 100 });
 		}
 
-		// Mux & Finish
+		checkCancelled();
 		setStep(S_MUX, { status: "active", progress: 0, detail: "Merging MKV" });
 		updateJob({ status: "muxing" });
 
@@ -738,7 +506,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		mkvArgs.push("--track-name", `0:${config.organization}`);
 		mkvArgs.push(videoMkv);
 
-		// Track which languages already have a default main track assigned
+		// Audio tracks
 		const defaultAssigned = new Set<string>();
 
 		for (let i = 0; i < audioStreams.length; i++) {
@@ -754,9 +522,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			}
 
 			mkvArgs.push("--track-name", `0:`);
-
 			mkvArgs.push("--default-track-flag", `0:${isDefault ? "1" : "0"}`);
-
 			mkvArgs.push("--forced-display-flag", "0:0");
 
 			if (trackType === "commentary") {
@@ -770,26 +536,16 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			mkvArgs.push(encodedAudioFiles[i]!);
 		}
 
+		// Subtitle tracks
 		const allSubtitleStreams = probe.subtitleStreams || [];
 
-		// Fix mislabeled subtitles: some sources tag English subs as Japanese.
-		// If no English subs exist but Japanese ones do, relabel them as English.
-		const isEng = (l: string | undefined) => {
-			const lc = (l || "").toLowerCase();
-			return lc === "eng" || lc === "en" || lc === "english";
-		};
-		const isJpn = (l: string | undefined) => {
-			const lc = (l || "").toLowerCase();
-			return lc === "jpn" || lc === "ja" || lc === "japanese";
-		};
-
-		const hasEnglishSubs = allSubtitleStreams.some((s) => isEng(s.language));
-		const hasJapaneseSubs = allSubtitleStreams.some((s) => isJpn(s.language));
+		const hasEnglishSubs = allSubtitleStreams.some((s) => isEnglish(s.language));
+		const hasJapaneseSubs = allSubtitleStreams.some((s) => isJapanese(s.language));
 
 		if (!hasEnglishSubs && hasJapaneseSubs) {
 			Logger.warn("[subtitle] No English tracks found but Japanese tracks exist - assuming mislabeled, relabeling Japanese to English");
 			for (const s of allSubtitleStreams) {
-				if (isJpn(s.language)) {
+				if (isJapanese(s.language)) {
 					s.language = "eng";
 				}
 			}
@@ -805,6 +561,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			const subForcedAssigned = new Set<string>();
 
 			for (const stream of subtitleStreams) {
+				checkCancelled();
+
 				const trackType = detectSubtitleTrackType(stream);
 				const lang = stream.language || "und";
 
@@ -817,23 +575,26 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				}
 
 				const subFile = join(tempDir, `sub_${stream.index}.mkv`);
-				const extractSubRes = await run([
-					"ffmpeg",
-					"-y",
-					"-i",
-					job.inputPath,
-					"-map",
-					`0:${stream.index}`,
-					"-c:s",
-					"copy",
-					"-vn",
-					"-an",
-					"-map_chapters",
-					"-1",
-					"-map_metadata",
-					"-1",
-					subFile,
-				]);
+				const extractSubRes = await run(
+					[
+						"ffmpeg",
+						"-y",
+						"-i",
+						job.inputPath,
+						"-map",
+						`0:${stream.index}`,
+						"-c:s",
+						"copy",
+						"-vn",
+						"-an",
+						"-map_chapters",
+						"-1",
+						"-map_metadata",
+						"-1",
+						subFile,
+					],
+					{ signal },
+				);
 
 				if (extractSubRes.code !== 0) {
 					Logger.warn(`[subtitle] Failed to extract track ${stream.index}, skipping: ${extractSubRes.stderr || extractSubRes.stdout}`);
@@ -911,14 +672,14 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		setStep(S_MUX, { progress: 50, detail: `Merging MKV (${subtitleStreams.length} subs, ${audioStreams.length} audio)` });
 
-		const mergeRes = await run(mkvArgs);
+		const mergeRes = await run(mkvArgs, { signal });
 		if (mergeRes.code !== 0 && mergeRes.code !== 1) {
 			throw new Error(`mkvmerge failed: ${mergeRes.stderr || mergeRes.stdout}`);
 		}
 
 		if (probe.isHDR) {
 			setStep(S_MUX, { progress: 75, detail: "Applying HDR metadata" });
-			await applyHDRMetadata(finalOutput, probe);
+			await applyHDRMetadata(finalOutput, probe, signal);
 		}
 
 		setStep(S_MUX, { progress: 85, detail: "Moving to output" });
@@ -938,9 +699,9 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				Logger.warn(`[library] Failed to remove source ${job.filename}:`, { "error.message": err?.message });
 			}
 
-			const moveRes = await run(["mv", finalOutput, outputPath]);
+			const moveRes = await run(["mv", finalOutput, outputPath], { signal });
 			if (moveRes.code !== 0) {
-				await run(["cp", finalOutput, outputPath]);
+				await run(["cp", finalOutput, outputPath], { signal });
 				unlinkSync(finalOutput);
 			}
 
@@ -950,9 +711,9 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			mkdirSync(outputSubDir, { recursive: true });
 			outputPath = join(outputSubDir, outputFilename);
 
-			const moveRes = await run(["mv", finalOutput, outputPath]);
+			const moveRes = await run(["mv", finalOutput, outputPath], { signal });
 			if (moveRes.code !== 0) {
-				await run(["cp", finalOutput, outputPath]);
+				await run(["cp", finalOutput, outputPath], { signal });
 				unlinkSync(finalOutput);
 			}
 		}
@@ -981,20 +742,30 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		const activeIdx = steps.findIndex((s) => s.status === "active");
 		if (activeIdx >= 0) steps[activeIdx]!.status = "error";
 
-		updateJob({
-			status: "error",
-			currentStage: "Failed",
-			steps: [...steps],
-			error: err?.message || String(err),
-		});
+		if (err instanceof CancelledError) {
+			updateJob({
+				status: "cancelled",
+				currentStage: "Cancelled",
+				steps: [...steps],
+			});
+		} else {
+			updateJob({
+				status: "error",
+				currentStage: "Failed",
+				steps: [...steps],
+				error: err?.message || String(err),
+			});
+		}
 
 		try {
 			rmSync(tempDir, { recursive: true, force: true });
 		} catch {}
+
+		if (err instanceof CancelledError) throw err;
 	}
 }
 
-async function applyHDRMetadata(mkvPath: string, probe: ProbeResult) {
+async function applyHDRMetadata(mkvPath: string, probe: ProbeResult, signal?: AbortSignal) {
 	const cmd: string[] = ["mkvpropedit", mkvPath, "--edit", "track:v1"];
 	cmd.push("--set", "colour-transfer-characteristics=16");
 	if (probe.colorPrimaries === "BT.2020") cmd.push("--set", "colour-primaries=9");
@@ -1037,61 +808,5 @@ async function applyHDRMetadata(mkvPath: string, probe: ProbeResult) {
 			);
 		}
 	}
-	await run(cmd);
-}
-
-function detectSourceTag(filename: string): string {
-	const upper = filename.toUpperCase();
-
-	// Remux should become Bluray after encode
-	if (/\bREMUX\b/.test(upper)) return "Bluray";
-
-	const sources = ["WEBDL", "WEBRIP", "BLURAY", "HDTV", "DVD", "SDTV", "CAM"] as const;
-
-	for (const source of sources) {
-		if (new RegExp(`\\b${source}\\b`).test(upper)) {
-			switch (source) {
-				case "BLURAY":
-					return "Bluray";
-				case "WEBRIP":
-					return "WEBRip";
-				case "WEBDL":
-					return "WEBDL";
-				case "HDTV":
-					return "HDTV";
-				case "DVD":
-					return "DVD";
-				case "SDTV":
-					return "SDTV";
-				case "CAM":
-					return "CAM";
-			}
-		}
-	}
-
-	return "Bluray";
-}
-
-/**
- * Return an FFmpeg video filter string for the given denoise level, or null if off.
- * Uses the nlmeans filter which is excellent for film grain and anime.
- *   s = denoise strength
- *   p = patch size (comparison area)
- *   r = research window (search radius)
- */
-function getDenoiseFilter(level: DenoiseLevel): string | null {
-	switch (level) {
-		case "light":
-			return "nlmeans=s=1:p=3:r=7";
-		case "medium":
-			return "nlmeans=s=2:p=5:r=9";
-		case "heavy":
-			return "nlmeans=s=3:p=7:r=11";
-		default:
-			return null;
-	}
-}
-
-function escapeXml(s: string): string {
-	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+	await run(cmd, { signal });
 }
