@@ -27,6 +27,8 @@ services:
       - ENCODER_QUALITY=medium
       # Encoder speed: slower, slow, medium, fast, faster
       - ENCODER_SPEED=slow
+      # Denoise level: off, light, medium, heavy
+      - ENCODER_DENOISE=off
 
       # Audio bitrates (kbps per channel layout)
       - AUDIO_BITRATE_MONO=64

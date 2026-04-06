@@ -1,4 +1,4 @@
-import type { AppConfig, AudioChannelBitrates, EncoderQuality, EncoderSpeed } from "./types";
+import type { AppConfig, AudioChannelBitrates, DenoiseLevel, EncoderQuality, EncoderSpeed } from "./types";
 
 const DEFAULT_BITRATES: AudioChannelBitrates = {
 	mono: 64,
@@ -13,6 +13,7 @@ const DEFAULT_BITRATES: AudioChannelBitrates = {
 export function loadConfig(): AppConfig {
 	const quality = (process.env.ENCODER_QUALITY || "medium") as EncoderQuality;
 	const finalSpeed = (process.env.ENCODER_SPEED || "slow") as EncoderSpeed;
+	const denoise = (process.env.ENCODER_DENOISE || "off") as DenoiseLevel;
 
 	const bitrates: AudioChannelBitrates = {
 		mono: parseInt(process.env.AUDIO_BITRATE_MONO || "") || DEFAULT_BITRATES.mono,
@@ -40,6 +41,7 @@ export function loadConfig(): AppConfig {
 			quality,
 			finalSpeed,
 			audioBitrates: bitrates,
+			denoise,
 		},
 	};
 }

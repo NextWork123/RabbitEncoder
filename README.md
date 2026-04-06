@@ -41,6 +41,7 @@ All settings are configurable via environment variables in `docker-compose.yml`:
 | `FILE_COOLDOWN`        | `30`            | Seconds the file size must stay unchanged before encoding starts    |
 | `ENCODER_QUALITY`      | `medium`        | Default video quality (`low`, `medium`, `high`)                     |
 | `ENCODER_SPEED`        | `slow`          | Default encode speed (`slower`, `slow`, `medium`, `fast`, `faster`) |
+| `ENCODER_DENOISE`      | `off`           | Default denoise level (`off`, `light`, `medium`, `heavy`)           |
 | `AUDIO_BITRATE_MONO`   | `64`            | Opus bitrate for mono audio (kbps)                                  |
 | `AUDIO_BITRATE_STEREO` | `128`           | Opus bitrate for stereo audio (kbps)                                |
 | `AUDIO_BITRATE_2_1`    | `160`           | Opus bitrate for 2.1 audio (kbps)                                   |

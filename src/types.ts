@@ -1,5 +1,6 @@
 export type EncoderQuality = "low" | "medium" | "high";
 export type EncoderSpeed = "slower" | "slow" | "medium" | "fast" | "faster";
+export type DenoiseLevel = "off" | "light" | "medium" | "heavy";
 
 export type JobStatus = "queued" | "probing" | "encoding_video" | "encoding_audio" | "muxing" | "done" | "error";
 
@@ -19,6 +20,7 @@ export interface JobSettings {
 	quality: EncoderQuality;
 	finalSpeed: EncoderSpeed;
 	audioBitrates: AudioChannelBitrates;
+	denoise: DenoiseLevel;
 }
 
 export interface AudioStreamInfo {

@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync, readFileSync, symlinkSync } from "fs";
+import { existsSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync, readFileSync, symlinkSync, renameSync } from "fs";
 import { join, parse as parsePath, dirname, extname } from "path";
-import type { Job, JobStep, AppConfig, ProbeResult, AudioStreamInfo, SubtitleStreamInfo } from "./types";
+import type { Job, JobStep, AppConfig, ProbeResult, AudioStreamInfo, SubtitleStreamInfo, DenoiseLevel } from "./types";
 import { probeFile, getOpusBitrateForLayout, getAudioReplacementLabel, normalizeLayout } from "./probe";
 import { Logger } from "./logger";
 import pkg from "../package.json";
@@ -403,6 +403,78 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		if (extractRes.code !== 0) {
 			throw new Error(`Failed to extract video stream: ${extractRes.stderr || extractRes.stdout}`);
+		}
+
+		// Denoise pass (optional)
+		const denoiseFilter = getDenoiseFilter(job.settings.denoise);
+		if (denoiseFilter) {
+			const totalFrames = Math.round(probe.duration * probe.videoStreamFps);
+			setStep(S_PREPARE, { progress: 5, detail: `Denoising (${job.settings.denoise}) — ${fmtFrames(0, totalFrames)}` });
+			Logger.info(`[denoise] Applying ${job.settings.denoise} denoise: ${denoiseFilter} (${totalFrames} frames)`);
+
+			const denoisedVideo = join(tempDir, "source_video_denoised.mkv");
+
+			const denoiseProc = Bun.spawn(
+				["ffmpeg", "-y", "-i", preparedVideo, "-vf", denoiseFilter, "-c:v", "ffv1", "-level", "3", "-threads", "0", "-an", "-sn", denoisedVideo],
+				{
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+
+			// Parse FFmpeg stderr for frame= progress
+			const stderrTask = (async () => {
+				if (!denoiseProc.stderr) return "";
+
+				const reader = denoiseProc.stderr.getReader();
+				const decoder = new TextDecoder();
+				let buffer = "";
+				let lastUpdate = 0;
+
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					buffer += decoder.decode(value, { stream: true });
+
+					// FFmpeg writes \r-delimited status lines; split on both \r and \n
+					const parts = buffer.split(/[\r\n]/);
+					buffer = parts.pop() || "";
+
+					for (const part of parts) {
+						const frameMatch = part.match(/frame=\s*(\d+)/);
+						if (frameMatch && totalFrames > 0) {
+							const current = parseInt(frameMatch[1]!);
+							const now = Date.now();
+
+							// Throttle UI updates to at most once per second
+							if (now - lastUpdate >= 1000) {
+								lastUpdate = now;
+								setStep(S_PREPARE, {
+									progress: 5 + pct2(current, totalFrames) * 0.95,
+									detail: `Denoising (${job.settings.denoise}) — ${fmtFrames(current, totalFrames)}`,
+								});
+							}
+						}
+					}
+				}
+
+				buffer += decoder.decode();
+				return buffer;
+			})();
+
+			const stdoutTask = new Response(denoiseProc.stdout).text();
+
+			const [denoiseCode, stderrTail] = await Promise.all([denoiseProc.exited, stderrTask, stdoutTask]);
+
+			if (denoiseCode !== 0) {
+				throw new Error(`Denoise failed (exit ${denoiseCode}): ${stderrTail.trim().slice(-500)}`);
+			}
+
+			unlinkSync(preparedVideo);
+			renameSync(denoisedVideo, preparedVideo);
+
+			Logger.info(`[denoise] Denoise complete`);
 		}
 
 		setStep(S_PREPARE, { status: "done", progress: 100 });
@@ -998,6 +1070,26 @@ function detectSourceTag(filename: string): string {
 	}
 
 	return "Bluray";
+}
+
+/**
+ * Return an FFmpeg video filter string for the given denoise level, or null if off.
+ * Uses the nlmeans filter which is excellent for film grain and anime.
+ *   s = denoise strength
+ *   p = patch size (comparison area)
+ *   r = research window (search radius)
+ */
+function getDenoiseFilter(level: DenoiseLevel): string | null {
+	switch (level) {
+		case "light":
+			return "nlmeans=s=1:p=3:r=7";
+		case "medium":
+			return "nlmeans=s=2:p=5:r=9";
+		case "heavy":
+			return "nlmeans=s=3:p=7:r=11";
+		default:
+			return null;
+	}
 }
 
 function escapeXml(s: string): string {
