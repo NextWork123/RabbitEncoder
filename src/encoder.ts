@@ -486,7 +486,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			"<Targets><TargetTypeValue>50</TargetTypeValue></Targets>",
 			`<Simple><Name>Title</Name><String>${escapeXml(baseTitle)}</String></Simple>`,
 			`<Simple><Name>Encoder</Name><String>RabbitEncoder v${pkg.version}</String></Simple>`,
-			`<Simple><Name>Encoder Settings</Name><String>Quality ${job.settings.quality}, Speed ${job.settings.finalSpeed}</String></Simple>`,
+			`<Simple><Name>Encoder Settings</Name><String>Quality ${job.settings.quality}, Speed ${job.settings.finalSpeed}${job.settings.denoise !== "off" ? ", Denoise " + job.settings.denoise : ""}</String></Simple>`,
 			...(releaseGroup ? [`<Simple><Name>Source</Name><String>${escapeXml(releaseGroup)}</String></Simple>`] : []),
 			"</Tag></Tags>",
 		].join("\n");
