@@ -56,21 +56,39 @@ export function getResolutionTag(width: number, height: number): string {
 	return "1080p";
 }
 
+/** CPU nlmeans filter parameters for each denoise level. */
+const NLMEANS_PARAMS: Record<string, string> = {
+	light: "s=1:p=3:r=7",
+	medium: "s=2:p=5:r=9",
+	heavy: "s=3:p=7:r=11",
+};
+
 /**
  * Return an FFmpeg video filter string for the given denoise level, or null if off.
  * Uses the nlmeans filter which is excellent for film grain and anime.
  */
 export function getDenoiseFilter(level: DenoiseLevel): string | null {
-	switch (level) {
-		case "light":
-			return "nlmeans=s=1:p=3:r=7";
-		case "medium":
-			return "nlmeans=s=2:p=5:r=9";
-		case "heavy":
-			return "nlmeans=s=3:p=7:r=11";
-		default:
-			return null;
-	}
+	const params = NLMEANS_PARAMS[level];
+	if (!params) return null;
+	return `nlmeans=${params}`;
+}
+
+/**
+ * Return an FFmpeg video filter string using the OpenCL GPU-accelerated nlmeans.
+ * The filter graph uploads frames to the GPU, runs nlmeans_opencl, then downloads back.
+ */
+export function getDenoiseFilterGpu(level: DenoiseLevel): string | null {
+	const params = NLMEANS_PARAMS[level];
+	if (!params) return null;
+	return `hwupload,nlmeans_opencl=${params},hwdownload,format=yuv420p`;
+}
+
+/**
+ * Build the full FFmpeg argument array for GPU-accelerated denoising.
+ * Prepends the OpenCL hardware device init flags before the input.
+ */
+export function getDenoiseGpuInitArgs(): string[] {
+	return ["-init_hw_device", "opencl=gpu", "-filter_hw_device", "gpu"];
 }
 
 /**

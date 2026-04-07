@@ -21,6 +21,7 @@ export interface JobSettings {
 	finalSpeed: EncoderSpeed;
 	audioBitrates: AudioChannelBitrates;
 	denoise: DenoiseLevel;
+	denoiseGpu: boolean;
 }
 
 export interface AudioStreamInfo {

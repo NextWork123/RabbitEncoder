@@ -3,6 +3,8 @@ services:
     image: rabbitcompany/rabbit-encoder:latest
     container_name: rabbit-encoder
     restart: unless-stopped
+    devices:
+      - /dev/dri:/dev/dri
     ports:
       - "3000:3000"
     volumes:
@@ -29,6 +31,9 @@ services:
       - ENCODER_SPEED=slow
       # Denoise level: off, light, medium, heavy
       - ENCODER_DENOISE=off
+      # GPU-accelerated denoising via OpenCL (true/false)
+      # Falls back to CPU automatically if no OpenCL device is found
+      - ENCODER_DENOISE_GPU=true
 
       # Audio bitrates (kbps per channel layout)
       - AUDIO_BITRATE_MONO=64

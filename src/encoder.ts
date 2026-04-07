@@ -17,6 +17,7 @@ import {
 } from "./tracks";
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, getDenoiseFilter, extractBaseTitle } from "./naming";
 import pkg from "../package.json";
+import { buildDenoiseConfig } from "./denoise";
 
 export { CancelledError } from "./process";
 
@@ -144,18 +145,36 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		}
 
 		// Denoise pass (optional)
-		const denoiseFilter = getDenoiseFilter(job.settings.denoise);
-		if (denoiseFilter) {
+		const denoiseConfig = await buildDenoiseConfig(job.settings.denoise, job.settings.denoiseGpu);
+		if (denoiseConfig) {
 			checkCancelled();
 
 			const totalFrames = Math.round(probe.duration * probe.videoStreamFps);
-			setStep(S_PREPARE, { progress: 5, detail: `Denoising (${job.settings.denoise}) — ${fmtFrames(0, totalFrames)}` });
-			Logger.info(`[denoise] Applying ${job.settings.denoise} denoise: ${denoiseFilter} (${totalFrames} frames)`);
+			const gpuLabel = denoiseConfig.isGpu ? " [GPU]" : " [CPU]";
+			setStep(S_PREPARE, { progress: 5, detail: `Denoising (${job.settings.denoise}${gpuLabel}) — ${fmtFrames(0, totalFrames)}` });
+			Logger.info(`[denoise] Applying ${job.settings.denoise} denoise${gpuLabel}: ${denoiseConfig.filter} (${totalFrames} frames)`);
 
 			const denoisedVideo = join(tempDir, "source_video_denoised.mkv");
 
 			const denoiseProc = Bun.spawn(
-				["ffmpeg", "-y", "-i", preparedVideo, "-vf", denoiseFilter, "-c:v", "ffv1", "-level", "3", "-threads", "0", "-an", "-sn", denoisedVideo],
+				[
+					"ffmpeg",
+					"-y",
+					...denoiseConfig.preInputArgs,
+					"-i",
+					preparedVideo,
+					"-vf",
+					denoiseConfig.filter,
+					"-c:v",
+					"ffv1",
+					"-level",
+					"3",
+					"-threads",
+					"0",
+					"-an",
+					"-sn",
+					denoisedVideo,
+				],
 				{
 					stdout: "pipe",
 					stderr: "pipe",

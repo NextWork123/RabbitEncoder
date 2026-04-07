@@ -80,6 +80,7 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 	if (settings.quality) appConfig.defaults.quality = settings.quality;
 	if (settings.finalSpeed) appConfig.defaults.finalSpeed = settings.finalSpeed;
 	if (settings.denoise) appConfig.defaults.denoise = settings.denoise;
+	if (typeof settings.denoiseGpu === "boolean") appConfig.defaults.denoiseGpu = settings.denoiseGpu;
 	if (settings.audioBitrates) {
 		appConfig.defaults.audioBitrates = {
 			...appConfig.defaults.audioBitrates,

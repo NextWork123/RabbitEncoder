@@ -17,6 +17,7 @@ FROM debian:13-slim
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
+ENV RUSTICL_ENABLE=radeonsi,iris
 
 # Install packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -52,7 +53,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mediainfo \
     opus-tools \
     mkvtoolnix \
+		ocl-icd-libopencl1 \
+		mesa-opencl-icd \
  && pip3 install --no-cache-dir --break-system-packages --no-deps vstools \
+ && rm -f /etc/OpenCL/vendors/mesa.icd \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy SVT-AV1-Essential binary
