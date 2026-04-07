@@ -3,7 +3,7 @@ import { join, parse as parsePath, dirname, extname } from "path";
 import type { Job, JobStep, AppConfig, ProbeResult } from "./types";
 import { probeFile, getOpusBitrateForLayout, getAudioReplacementLabel, normalizeLayout } from "./probe";
 import { Logger } from "./logger";
-import { CancelledError, run, humanSize, fmtFrames, pct2, escapeXml, describeExitCode, isTimecodesVFR } from "./process";
+import { CancelledError, run, humanSize, fmtFrames, pct2, escapeXml, describeExitCode, isTimecodesVFR, computeFps } from "./process";
 import {
 	detectAudioTrackType,
 	sortAudioStreams,
@@ -71,6 +71,12 @@ function cleanupAssociatedFiles(videoPath: string): void {
 			}
 		}
 	} catch {}
+}
+
+function fmtFramesWithFps(current: number, total: number, startedAt: number | undefined): string {
+	const base = fmtFrames(current, total);
+	const fps = computeFps(current, startedAt);
+	return fps ? `${base} (${fps} fps)` : base;
 }
 
 export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial: Partial<Job>) => void, signal?: AbortSignal): Promise<void> {
@@ -155,6 +161,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			Logger.info(`[denoise] Applying ${job.settings.denoise} denoise${gpuLabel}: ${denoiseConfig.filter} (${totalFrames} frames)`);
 
 			const denoisedVideo = join(tempDir, "source_video_denoised.mkv");
+			const denoiseStartedAt = Date.now();
 
 			const denoiseProc = Bun.spawn(
 				[
@@ -218,9 +225,11 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 							if (now - lastUpdate >= 1000) {
 								lastUpdate = now;
+								const fps = computeFps(current, denoiseStartedAt);
+								const fpsStr = fps ? ` (${fps} fps)` : "";
 								setStep(S_PREPARE, {
 									progress: 5 + pct2(current, totalFrames) * 0.95,
-									detail: `Denoising (${job.settings.denoise}) — ${fmtFrames(current, totalFrames)}`,
+									detail: `Denoising (${job.settings.denoise}) — ${fmtFrames(current, totalFrames)}${fpsStr}`,
 								});
 							}
 						}
@@ -312,7 +321,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			if (evt.event === "progress" && si !== undefined) {
 				setStep(si, {
 					progress: pct2(evt.current, evt.total),
-					detail: evt.total ? fmtFrames(evt.current, evt.total) : undefined,
+					detail: evt.total ? fmtFramesWithFps(evt.current, evt.total, steps[si]!.startedAt) : undefined,
 				});
 				return;
 			}
@@ -321,7 +330,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				setStep(si, {
 					status: "done",
 					progress: 100,
-					detail: evt.total_frames ? fmtFrames(evt.total_frames, evt.total_frames) : steps[si]!.detail,
+					detail: evt.total_frames ? fmtFramesWithFps(evt.total_frames, evt.total_frames, steps[si]!.startedAt) : steps[si]!.detail,
 				});
 				return;
 			}

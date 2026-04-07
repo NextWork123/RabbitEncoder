@@ -59,6 +59,14 @@ export function fmtFrames(current: number, total: number): string {
 	return `${current.toLocaleString()} / ${total.toLocaleString()} frames`;
 }
 
+export function computeFps(currentFrames: number, startedAt: number | undefined): string | null {
+	if (!startedAt || currentFrames <= 0) return null;
+	const elapsedSec = (Date.now() - startedAt) / 1000;
+	if (elapsedSec < 1) return null;
+	const fps = currentFrames / elapsedSec;
+	return fps.toFixed(2);
+}
+
 export function pct2(current: number, total: number): number {
 	if (total <= 0) return 0;
 	return Math.round((current / total) * 10000) / 100;
