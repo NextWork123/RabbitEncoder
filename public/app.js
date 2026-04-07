@@ -1234,7 +1234,7 @@ function renderGpuToggle(container, checked, onChange) {
 	input.onchange = () => onChange(input.checked);
 
 	const span = document.createElement("span");
-	span.textContent = "Use GPU acceleration (OpenCL)";
+	span.textContent = "\u00A0Use GPU acceleration (OpenCL)";
 
 	label.appendChild(input);
 	label.appendChild(span);
