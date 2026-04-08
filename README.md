@@ -42,6 +42,7 @@ All settings are configurable via environment variables in `docker-compose.yml`:
 | `ENCODER_QUALITY`      | `medium`        | Default video quality (`low`, `medium`, `high`)                     |
 | `ENCODER_SPEED`        | `slow`          | Default encode speed (`slower`, `slow`, `medium`, `fast`, `faster`) |
 | `ENCODER_DENOISE`      | `off`           | Default denoise level (`off`, `light`, `medium`, `heavy`)           |
+| `ENCODER_DOWNSCALE`    | `false`         | Downscale 4K sources to 1080p before encoding (`true`/`false`)      |
 | `AUDIO_BITRATE_MONO`   | `64`            | Opus bitrate for mono audio (kbps)                                  |
 | `AUDIO_BITRATE_STEREO` | `128`           | Opus bitrate for stereo audio (kbps)                                |
 | `AUDIO_BITRATE_2_1`    | `160`           | Opus bitrate for 2.1 audio (kbps)                                   |

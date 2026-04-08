@@ -17,7 +17,7 @@ import {
 } from "./tracks";
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, getDenoiseFilter, extractBaseTitle } from "./naming";
 import pkg from "../package.json";
-import { buildDenoiseConfig } from "./denoise";
+import { buildDenoiseConfig, buildPrepareFilterConfig } from "./denoise";
 
 export { CancelledError } from "./process";
 
@@ -150,28 +150,27 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			throw new Error(`Failed to extract video stream: ${extractRes.stderr || extractRes.stdout}`);
 		}
 
-		// Denoise pass (optional)
-		const denoiseConfig = await buildDenoiseConfig(job.settings.denoise, job.settings.denoiseGpu);
-		if (denoiseConfig) {
+		// Prepare filter pass (downscale + denoise)
+		const prepareFilter = await buildPrepareFilterConfig(job.settings.downscale, probe.height, job.settings.denoise, job.settings.denoiseGpu);
+		if (prepareFilter) {
 			checkCancelled();
 
 			const totalFrames = Math.round(probe.duration * probe.videoStreamFps);
-			const gpuLabel = denoiseConfig.isGpu ? " [GPU]" : " [CPU]";
-			setStep(S_PREPARE, { progress: 5, detail: `Denoising (${job.settings.denoise}${gpuLabel}) — ${fmtFrames(0, totalFrames)}` });
-			Logger.info(`[denoise] Applying ${job.settings.denoise} denoise${gpuLabel}: ${denoiseConfig.filter} (${totalFrames} frames)`);
+			setStep(S_PREPARE, { progress: 5, detail: `${prepareFilter.label} — ${fmtFrames(0, totalFrames)}` });
+			Logger.info(`[prepare] Applying filters: ${prepareFilter.filter} (${totalFrames} frames)`);
 
-			const denoisedVideo = join(tempDir, "source_video_denoised.mkv");
-			const denoiseStartedAt = Date.now();
+			const filteredVideo = join(tempDir, "source_video_filtered.mkv");
+			const filterStartedAt = Date.now();
 
-			const denoiseProc = Bun.spawn(
+			const filterProc = Bun.spawn(
 				[
 					"ffmpeg",
 					"-y",
-					...denoiseConfig.preInputArgs,
+					...prepareFilter.preInputArgs,
 					"-i",
 					preparedVideo,
 					"-vf",
-					denoiseConfig.filter,
+					prepareFilter.filter,
 					"-c:v",
 					"ffv1",
 					"-level",
@@ -180,7 +179,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					"0",
 					"-an",
 					"-sn",
-					denoisedVideo,
+					filteredVideo,
 				],
 				{
 					stdout: "pipe",
@@ -188,22 +187,22 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				},
 			);
 
-			const onAbortDenoise = () => {
+			const onAbortFilter = () => {
 				try {
-					denoiseProc.kill("SIGTERM");
+					filterProc.kill("SIGTERM");
 				} catch {}
 				setTimeout(() => {
 					try {
-						denoiseProc.kill("SIGKILL");
+						filterProc.kill("SIGKILL");
 					} catch {}
 				}, 3000);
 			};
-			signal?.addEventListener("abort", onAbortDenoise, { once: true });
+			signal?.addEventListener("abort", onAbortFilter, { once: true });
 
 			const stderrTask = (async () => {
-				if (!denoiseProc.stderr) return "";
+				if (!filterProc.stderr) return "";
 
-				const reader = denoiseProc.stderr.getReader();
+				const reader = filterProc.stderr.getReader();
 				const decoder = new TextDecoder();
 				let buffer = "";
 				let lastUpdate = 0;
@@ -225,11 +224,11 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 							if (now - lastUpdate >= 1000) {
 								lastUpdate = now;
-								const fps = computeFps(current, denoiseStartedAt);
+								const fps = computeFps(current, filterStartedAt);
 								const fpsStr = fps ? ` (${fps} fps)` : "";
 								setStep(S_PREPARE, {
 									progress: 5 + pct2(current, totalFrames) * 0.95,
-									detail: `Denoising (${job.settings.denoise}) — ${fmtFrames(current, totalFrames)}${fpsStr}`,
+									detail: `${prepareFilter.label} — ${fmtFrames(current, totalFrames)}${fpsStr}`,
 								});
 							}
 						}
@@ -240,20 +239,20 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				return buffer;
 			})();
 
-			const stdoutTask = new Response(denoiseProc.stdout).text();
+			const stdoutTask = new Response(filterProc.stdout).text();
 
-			const [denoiseCode, stderrTail] = await Promise.all([denoiseProc.exited, stderrTask, stdoutTask]);
-			signal?.removeEventListener("abort", onAbortDenoise);
+			const [filterCode, stderrTail] = await Promise.all([filterProc.exited, stderrTask, stdoutTask]);
+			signal?.removeEventListener("abort", onAbortFilter);
 			checkCancelled();
 
-			if (denoiseCode !== 0) {
-				throw new Error(`Denoise failed (exit ${denoiseCode}): ${stderrTail.trim().slice(-500)}`);
+			if (filterCode !== 0) {
+				throw new Error(`Prepare filter failed (exit ${filterCode}): ${stderrTail.trim().slice(-500)}`);
 			}
 
 			unlinkSync(preparedVideo);
-			renameSync(denoisedVideo, preparedVideo);
+			renameSync(filteredVideo, preparedVideo);
 
-			Logger.info(`[denoise] Denoise complete`);
+			Logger.info(`[prepare] Filter pass complete`);
 		}
 
 		setStep(S_PREPARE, { status: "done", progress: 100 });
@@ -504,7 +503,10 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		const firstSortedLayout = audioStreams.length > 0 ? normalizeLayout(audioStreams[0]!.channelLayout) : probe.audioLayout;
 		const audioLabel = getAudioReplacementLabel(firstSortedLayout);
-		const resTag = getResolutionTag(probe.width, probe.height);
+		const shouldDownscale = job.settings.downscale && probe.height > 1080;
+		const outputHeight = shouldDownscale ? 1080 : probe.height;
+		const outputWidth = shouldDownscale ? Math.round((probe.width * 1080) / probe.height / 2) * 2 : probe.width;
+		const resTag = getResolutionTag(outputWidth, outputHeight);
 		const outputFilename = `${baseTitle} [${sourceTag}-${resTag}][${audioLabel}][AV1]-${config.organization}.mkv`;
 		const finalOutput = join(tempDir, "final.mkv");
 
@@ -514,7 +516,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			"<Targets><TargetTypeValue>50</TargetTypeValue></Targets>",
 			`<Simple><Name>Title</Name><String>${escapeXml(baseTitle)}</String></Simple>`,
 			`<Simple><Name>Encoder</Name><String>RabbitEncoder v${pkg.version}</String></Simple>`,
-			`<Simple><Name>Encoder Settings</Name><String>Quality ${job.settings.quality}, Speed ${job.settings.finalSpeed}${job.settings.denoise !== "off" ? ", Denoise " + job.settings.denoise : ""}</String></Simple>`,
+			`<Simple><Name>Encoder Settings</Name><String>Quality ${job.settings.quality}, Speed ${job.settings.finalSpeed}${job.settings.downscale && probe.height > 1080 ? ", Downscale 1080p" : ""}${job.settings.denoise !== "off" ? ", Denoise " + job.settings.denoise : ""}</String></Simple>`,
 			...(releaseGroup ? [`<Simple><Name>Source</Name><String>${escapeXml(releaseGroup)}</String></Simple>`] : []),
 			"</Tag></Tags>",
 		].join("\n");
@@ -568,10 +570,12 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		const allSubtitleStreams = probe.subtitleStreams || [];
 
 		const hasEnglishSubs = allSubtitleStreams.some((s) => isEnglish(s.language));
+		const hasFullEnglishSubs = allSubtitleStreams.some((s) => isEnglish(s.language) && detectSubtitleTrackType(s) === "full");
 		const hasJapaneseSubs = allSubtitleStreams.some((s) => isJapanese(s.language));
 
-		if (!hasEnglishSubs && hasJapaneseSubs) {
-			Logger.warn("[subtitle] No English tracks found but Japanese tracks exist - assuming mislabeled, relabeling Japanese to English");
+		if (!hasFullEnglishSubs && hasJapaneseSubs) {
+			const reason = hasEnglishSubs ? "Only Signs & Songs English tracks found" : "No English tracks found";
+			Logger.warn(`[subtitle] ${reason} but Japanese tracks exist - assuming mislabeled, relabeling Japanese to English`);
 			for (const s of allSubtitleStreams) {
 				if (isJapanese(s.language)) {
 					s.language = "eng";

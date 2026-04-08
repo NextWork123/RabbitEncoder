@@ -34,6 +34,8 @@ services:
       # GPU-accelerated denoising via OpenCL (true/false)
       # Falls back to CPU automatically if no OpenCL device is found
       - ENCODER_DENOISE_GPU=true
+      # Downscale 4K sources to 1080p before encoding
+      - ENCODER_DOWNSCALE=false
 
       # Audio bitrates (kbps per channel layout)
       - AUDIO_BITRATE_MONO=64

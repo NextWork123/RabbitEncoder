@@ -17,6 +17,15 @@ export interface DenoiseConfig {
 	isGpu: boolean;
 }
 
+export interface PrepareFilterConfig {
+	/** The combined -vf filter string (scale + denoise). */
+	filter: string;
+	/** Extra args to insert before -i (e.g. OpenCL hw device init). */
+	preInputArgs: string[];
+	/** Human-readable label for the step detail. */
+	label: string;
+}
+
 /**
  * Probe whether FFmpeg can initialize an OpenCL device.
  * Runs `ffmpeg -init_hw_device opencl=gpu -f lavfi -i nullsrc -frames:v 1 -f null -`
@@ -62,5 +71,46 @@ export async function buildDenoiseConfig(level: DenoiseLevel, useGpu: boolean): 
 		filter: `nlmeans=${params}`,
 		preInputArgs: [],
 		isGpu: false,
+	};
+}
+
+/**
+ * Build a combined prepare filter config (downscale + denoise).
+ * Returns null if no filtering is needed (no downscale, no denoise).
+ */
+export async function buildPrepareFilterConfig(
+	downscale: boolean,
+	sourceHeight: number,
+	denoise: DenoiseLevel,
+	useGpuDenoise: boolean,
+): Promise<PrepareFilterConfig | null> {
+	const needsScale = downscale && sourceHeight > 1080;
+	const scaleFilter = "scale=-2:1080:flags=lanczos";
+
+	const denoiseConfig = await buildDenoiseConfig(denoise, useGpuDenoise);
+
+	if (!needsScale && !denoiseConfig) return null;
+
+	const parts: string[] = [];
+	const preInputArgs: string[] = [];
+	const labelParts: string[] = [];
+
+	if (needsScale) {
+		// Scale must come before GPU upload
+		parts.push(scaleFilter);
+		labelParts.push("Downscaling");
+	}
+
+	if (denoiseConfig) {
+		parts.push(denoiseConfig.filter);
+		preInputArgs.push(...denoiseConfig.preInputArgs);
+		const gpuLabel = denoiseConfig.isGpu ? " [GPU]" : " [CPU]";
+		labelParts.push(`Denoising (${denoise}${gpuLabel})`);
+	}
+
+	return {
+		filter: parts.join(","),
+		preInputArgs,
+		label: labelParts.join(" + "),
 	};
 }

@@ -81,6 +81,7 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 	if (settings.finalSpeed) appConfig.defaults.finalSpeed = settings.finalSpeed;
 	if (settings.denoise) appConfig.defaults.denoise = settings.denoise;
 	if (typeof settings.denoiseGpu === "boolean") appConfig.defaults.denoiseGpu = settings.denoiseGpu;
+	if (typeof settings.downscale === "boolean") appConfig.defaults.downscale = settings.downscale;
 	if (settings.audioBitrates) {
 		appConfig.defaults.audioBitrates = {
 			...appConfig.defaults.audioBitrates,
@@ -246,6 +247,8 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 	if (settings.quality) job.settings.quality = settings.quality;
 	if (settings.finalSpeed) job.settings.finalSpeed = settings.finalSpeed;
 	if (settings.denoise) job.settings.denoise = settings.denoise;
+	if (typeof settings.denoiseGpu === "boolean") job.settings.denoiseGpu = settings.denoiseGpu;
+	if (typeof settings.downscale === "boolean") job.settings.downscale = settings.downscale;
 	if (settings.audioBitrates) {
 		job.settings.audioBitrates = {
 			...job.settings.audioBitrates,

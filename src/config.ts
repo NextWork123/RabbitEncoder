@@ -15,6 +15,7 @@ export function loadConfig(): AppConfig {
 	const finalSpeed = (process.env.ENCODER_SPEED || "slow") as EncoderSpeed;
 	const denoise = (process.env.ENCODER_DENOISE || "off") as DenoiseLevel;
 	const denoiseGpu = ["true", "1", "yes"].includes((process.env.ENCODER_DENOISE_GPU || "").toLowerCase());
+	const downscale = ["true", "1", "yes"].includes((process.env.ENCODER_DOWNSCALE || "").toLowerCase());
 
 	const bitrates: AudioChannelBitrates = {
 		mono: parseInt(process.env.AUDIO_BITRATE_MONO || "") || DEFAULT_BITRATES.mono,
@@ -44,6 +45,7 @@ export function loadConfig(): AppConfig {
 			audioBitrates: bitrates,
 			denoise,
 			denoiseGpu,
+			downscale,
 		},
 	};
 }

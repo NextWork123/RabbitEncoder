@@ -22,6 +22,7 @@ export interface JobSettings {
 	audioBitrates: AudioChannelBitrates;
 	denoise: DenoiseLevel;
 	denoiseGpu: boolean;
+	downscale: boolean;
 }
 
 export interface AudioStreamInfo {

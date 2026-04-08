@@ -472,7 +472,7 @@ function renderJobCard(job) {
 		if (job.probe.isHDR) meta += `<span>HDR</span>`;
 		if (job.probe.duration) meta += `<span>${formatDuration(job.probe.duration * 1000)}</span>`;
 	}
-	meta += `<span>${job.settings.quality} · ${job.settings.finalSpeed}</span>`;
+	meta += `<span>${job.settings.quality} · ${job.settings.finalSpeed}${job.settings.downscale ? " · ↓1080p" : ""}</span>`;
 
 	const stepsHtml = active || done || err ? renderSteps(job.steps) : "";
 
@@ -876,6 +876,7 @@ async function openSettings() {
 	renderRadioPills(document.getElementById("default-speed"), SPEEDS, tempDefaults.finalSpeed, (v) => (tempDefaults.finalSpeed = v));
 	renderRadioPills(document.getElementById("default-denoise"), DENOISE_LEVELS, tempDefaults.denoise || "off", (v) => (tempDefaults.denoise = v));
 	renderGpuToggle(document.getElementById("default-denoise-gpu"), tempDefaults.denoiseGpu || false, (v) => (tempDefaults.denoiseGpu = v));
+	renderDownscaleToggle(document.getElementById("default-downscale"), tempDefaults.downscale || false, (v) => (tempDefaults.downscale = v));
 	renderBitrateInputs(document.getElementById("default-bitrates"), tempDefaults.audioBitrates, (ch, val) => (tempDefaults.audioBitrates[ch] = val));
 
 	window._tempDefaults = tempDefaults;
@@ -914,6 +915,7 @@ async function openJobSettings(jobId) {
 	renderRadioPills(document.getElementById("job-speed"), SPEEDS, tempSettings.finalSpeed, (v) => (tempSettings.finalSpeed = v));
 	renderRadioPills(document.getElementById("job-denoise"), DENOISE_LEVELS, tempSettings.denoise || "off", (v) => (tempSettings.denoise = v));
 	renderGpuToggle(document.getElementById("job-denoise-gpu"), tempSettings.denoiseGpu || false, (v) => (tempSettings.denoiseGpu = v));
+	renderDownscaleToggle(document.getElementById("job-downscale"), tempSettings.downscale || false, (v) => (tempSettings.downscale = v));
 	renderBitrateInputs(document.getElementById("job-bitrates"), tempSettings.audioBitrates, (ch, val) => (tempSettings.audioBitrates[ch] = val));
 
 	document.getElementById("job-modal").style.display = "";
@@ -1235,6 +1237,24 @@ function renderGpuToggle(container, checked, onChange) {
 
 	const span = document.createElement("span");
 	span.textContent = "\u00A0Use GPU acceleration (OpenCL)";
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}
+
+function renderDownscaleToggle(container, checked, onChange) {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Downscale 4K to 1080p";
 
 	label.appendChild(input);
 	label.appendChild(span);
