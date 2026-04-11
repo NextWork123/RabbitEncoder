@@ -9,7 +9,6 @@ import {
 	sortAudioStreams,
 	deduplicateAudioStreams,
 	detectSubtitleTrackType,
-	extractGroupFromTitle,
 	buildSubtitleTrackName,
 	sortSubtitleStreams,
 	analyzeSubtitleStreams,
@@ -697,8 +696,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				const trackType = detectSubtitleTrackType(stream);
 				const lang = stream.language || "und";
 
-				const group = extractGroupFromTitle(stream.title);
-				const trackName = buildSubtitleTrackName(trackType, group);
+				const trackName = buildSubtitleTrackName(trackType, stream.title);
 
 				let effectiveLang = lang;
 				if (trackType === "honorifics") {

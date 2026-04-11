@@ -94,12 +94,13 @@ export function deduplicateAudioStreams(streams: AudioStreamInfo[]): AudioStream
 	});
 }
 
-export type SubtitleTrackType = "full" | "forced" | "sdh" | "commentary" | "honorifics";
+export type SubtitleTrackType = "full" | "forced" | "sdh" | "commentary" | "honorifics" | "storyboard";
 
 const SUB_FORCED_PATTERN = /\b(signs?[\s/&]*songs?|songs?[\s/&]*signs?|forced|typesett?ing|TS\b|OP\/?ED|karaoke|kara)\b/i;
 const SUB_SDH_PATTERN = /\b(sdh|cc|closed\s*captions?|hearing\s*impaired|descriptive)\b/i;
 const SUB_COMMENTARY_PATTERN = /\b(commentary|director'?s?\s+commentary|staff\s+commentary|cast\s+commentary|audio\s+commentary)\b/i;
 const SUB_HONORIFICS_PATTERN = /\b(honorifics?|honours?|honourifics?|\bhon\b)\b/i;
+const SUB_STORYBOARD_PATTERN = /\bstoryboard/i;
 
 export function detectSubtitleTrackType(stream: SubtitleStreamInfo): SubtitleTrackType {
 	const title = stream.title || "";
@@ -108,6 +109,7 @@ export function detectSubtitleTrackType(stream: SubtitleStreamInfo): SubtitleTra
 	if (SUB_COMMENTARY_PATTERN.test(title)) return "commentary";
 	if (SUB_SDH_PATTERN.test(title)) return "sdh";
 	if (SUB_FORCED_PATTERN.test(title)) return "forced";
+	if (SUB_STORYBOARD_PATTERN.test(title)) return "storyboard";
 
 	if (stream.isHearingImpaired) return "sdh";
 	if (stream.isForced) return "forced";
@@ -256,6 +258,32 @@ export function isUndefined(lang: string | undefined): boolean {
 	return !l || l === "und" || l === "undetermined";
 }
 
+const SOURCE_TAG_PATTERN = /\b([A-Z]{2}(?:BD|UHD)|Netflix|Crunchyroll|Funimation|HiDive|Amazon|Disney\+?|Hulu|VRV|ADN|Wakanim|B-Global|Bilibili)\b/i;
+
+export function extractSourceTag(title: string | undefined): string | null {
+	if (!title) return null;
+	const match = title.match(SOURCE_TAG_PATTERN);
+	if (!match) return null;
+	// Normalize BD tags to uppercase, streaming names to canonical form
+	const raw = match[1]!;
+	if (/^[A-Z]{2}(?:BD|UHD)$/i.test(raw)) return raw.toUpperCase();
+	// Canonical casing for known services
+	const canonical: Record<string, string> = {
+		netflix: "NF",
+		crunchyroll: "CR",
+		funimation: "Funi",
+		hidive: "HiDive",
+		amazon: "AMZN",
+		hulu: "Hulu",
+		vrv: "VRV",
+		adn: "ADN",
+		wakanim: "Wakanim",
+		"b-global": "B-Global",
+		bilibili: "Bilibili",
+	};
+	return canonical[raw.toLowerCase()] ?? raw;
+}
+
 /**
  * Build a clean track name for a subtitle stream.
  *
@@ -267,23 +295,34 @@ export function isUndefined(lang: string | undefined): boolean {
  *   "Signs & Songs"
  *   "Full Subtitles [MTBB]"
  */
-export function buildSubtitleTrackName(trackType: SubtitleTrackType, group: string | null): string {
+export function buildSubtitleTrackName(trackType: SubtitleTrackType, sourceTitle?: string): string {
+	const title = sourceTitle || "";
+	const isDubtitle = /dubtitle/i.test(title);
+
 	const labels: Record<SubtitleTrackType, string> = {
-		full: "Full Subtitles",
+		full: isDubtitle ? "Full Dubtitles" : "Full Subtitles",
+		honorifics: "Full Subtitles (Honorifics)",
 		forced: "Signs & Songs",
 		sdh: "SDH",
 		commentary: "Commentary",
-		honorifics: "Full Subtitles (Honorifics)",
+		storyboard: "Storyboards",
 	};
 
 	let label = labels[trackType];
-	return group ? `${label} [${group}]` : label;
+
+	const source = extractSourceTag(title);
+	if (source) return `${label} [${source}]`;
+
+	const group = extractGroupFromTitle(title);
+	if (group) return `${label} [${group}]`;
+
+	return label;
 }
 
 /**
  * Sort subtitle streams:
  *   - English first, Japanese second, others alphabetically
- *   - Within each language: full → forced → honorifics → sdh → commentary
+ *   - Within each language: full > honorifics > forced > sdh > commentary > storyboard
  */
 export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStreamInfo[] {
 	const langPriority = (lang: string | undefined): number => {
@@ -298,16 +337,18 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStre
 		switch (type) {
 			case "full":
 				return 0;
-			case "forced":
-				return 1;
 			case "honorifics":
+				return 1;
+			case "forced":
 				return 2;
 			case "sdh":
 				return 3;
 			case "commentary":
 				return 4;
-			default:
+			case "storyboard":
 				return 5;
+			default:
+				return 6;
 		}
 	};
 
