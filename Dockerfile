@@ -69,6 +69,10 @@ COPY scripts/Auto-Boost-Essential.py /opt/Auto-Boost-Essential/
 
 COPY binaries/libvszip.so /usr/lib/x86_64-linux-gnu/vapoursynth/libvszip.so
 
+# Copy language-detector binary
+COPY binaries/language-detector /usr/local/bin/language-detector
+RUN chmod +x /usr/local/bin/language-detector
+
 # Application
 WORKDIR /app
 

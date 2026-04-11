@@ -1,3 +1,5 @@
+import { Logger } from "./logger";
+import { run } from "./process";
 import type { AppConfig, AudioChannelBitrates, DenoiseLevel, EncoderQuality, EncoderSpeed } from "./types";
 
 const DEFAULT_BITRATES: AudioChannelBitrates = {
@@ -10,7 +12,18 @@ const DEFAULT_BITRATES: AudioChannelBitrates = {
 	"7.1.4": 512,
 };
 
-export function loadConfig(): AppConfig {
+export async function getLanguageDetectorVersion(): Promise<string | null> {
+	const res = await run(["language-detector", "--version"]);
+
+	if (res.code !== 0) {
+		Logger.error(`[subtitle] language-detector error: ${res.stderr || res.stdout}`);
+		return null;
+	}
+
+	return res.stdout.replace("Language Detector", "").trim();
+}
+
+export async function loadConfig(): Promise<AppConfig> {
 	const quality = (process.env.ENCODER_QUALITY || "medium") as EncoderQuality;
 	const finalSpeed = (process.env.ENCODER_SPEED || "slow") as EncoderSpeed;
 	const denoise = (process.env.ENCODER_DENOISE || "off") as DenoiseLevel;
@@ -32,6 +45,8 @@ export function loadConfig(): AppConfig {
 		.map((d) => d.trim())
 		.filter((d) => d.length > 0);
 
+	const languageDetectorVersion = await getLanguageDetectorVersion();
+
 	return {
 		inputDir: process.env.INPUT_DIR || "/data/input",
 		outputDir: process.env.OUTPUT_DIR || "/data/output",
@@ -39,6 +54,9 @@ export function loadConfig(): AppConfig {
 		port: parseInt(process.env.PORT || "3000"),
 		organization: process.env.ORGANIZATION || "RabbitCompany",
 		libraryDirs,
+		languageDetector: {
+			version: languageDetectorVersion,
+		},
 		defaults: {
 			quality,
 			finalSpeed,

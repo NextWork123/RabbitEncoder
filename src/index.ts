@@ -23,7 +23,7 @@ import { logger } from "@rabbit-company/web-middleware/logger";
 import indexHtml from "../public/index.html";
 import { bearerAuth } from "@rabbit-company/web-middleware/bearer-auth";
 
-export const config = loadConfig();
+export const config = await loadConfig();
 
 const hashedPassword = new Bun.CryptoHasher("blake2b512").update(`rabbitencoder-${process.env.PASSWORD || "rabbitencoder"}`).digest("hex");
 

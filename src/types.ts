@@ -39,6 +39,7 @@ export interface AudioStreamInfo {
 export interface SubtitleStreamInfo {
 	index: number;
 	codec: string;
+	/** BCP47 or ISO 639-2 */
 	language?: string;
 	title?: string;
 	isForced?: boolean;
@@ -103,6 +104,10 @@ export interface Job {
 	replaceSource: boolean;
 }
 
+export interface LanguageDetector {
+	version: string | null;
+}
+
 export interface AppConfig {
 	inputDir: string;
 	outputDir: string;
@@ -111,4 +116,5 @@ export interface AppConfig {
 	defaults: JobSettings;
 	organization: string;
 	libraryDirs: string[];
+	languageDetector: LanguageDetector;
 }

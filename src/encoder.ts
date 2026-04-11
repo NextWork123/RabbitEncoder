@@ -12,12 +12,11 @@ import {
 	extractGroupFromTitle,
 	buildSubtitleTrackName,
 	sortSubtitleStreams,
-	isEnglish,
-	isJapanese,
+	analyzeSubtitleStreams,
 } from "./tracks";
-import { detectSourceTag, detectReleaseGroup, getResolutionTag, getDenoiseFilter, extractBaseTitle } from "./naming";
+import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle } from "./naming";
 import pkg from "../package.json";
-import { buildDenoiseConfig, buildPrepareFilterConfig } from "./denoise";
+import { buildPrepareFilterConfig } from "./denoise";
 
 export { CancelledError } from "./process";
 
@@ -514,10 +513,25 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			'<?xml version="1.0" encoding="UTF-8"?>',
 			"<Tags><Tag>",
 			"<Targets><TargetTypeValue>50</TargetTypeValue></Targets>",
-			`<Simple><Name>Title</Name><String>${escapeXml(baseTitle)}</String></Simple>`,
-			`<Simple><Name>Encoder</Name><String>RabbitEncoder v${pkg.version}</String></Simple>`,
-			`<Simple><Name>Encoder Settings</Name><String>Quality ${job.settings.quality}, Speed ${job.settings.finalSpeed}${job.settings.downscale && probe.height > 1080 ? ", Downscale 1080p" : ""}${job.settings.denoise !== "off" ? ", Denoise " + job.settings.denoise : ""}</String></Simple>`,
-			...(releaseGroup ? [`<Simple><Name>Source</Name><String>${escapeXml(releaseGroup)}</String></Simple>`] : []),
+			`<Simple><Name>TITLE</Name><String>${escapeXml(baseTitle)}</String></Simple>`,
+			`<Simple><Name>ENCODED_BY</Name><String>${escapeXml(config.organization)}</String></Simple>`,
+
+			"<Simple>",
+			"<Name>RABBIT_ENCODER</Name>",
+			`<Simple><Name>VERSION</Name><String>v${escapeXml(pkg.version)}</String></Simple>`,
+			`<Simple><Name>SETTINGS</Name><String>${escapeXml(
+				`Quality ${job.settings.quality}, Speed ${job.settings.finalSpeed}` +
+					`${job.settings.downscale && probe.height > 1080 ? ", Downscale 1080p" : ""}` +
+					`${job.settings.denoise !== "off" ? ", Denoise " + job.settings.denoise : ""}`,
+			)}</String></Simple>`,
+			"</Simple>",
+
+			"<Simple>",
+			"<Name>LANGUAGE_DETECTOR</Name>",
+			`<Simple><Name>VERSION</Name><String>${escapeXml(config.languageDetector.version || "unknown")}</String></Simple>`,
+			"</Simple>",
+
+			...(releaseGroup ? [`<Simple><Name>SOURCE</Name><String>${escapeXml(releaseGroup)}</String></Simple>`] : []),
 			"</Tag></Tags>",
 		].join("\n");
 
@@ -568,21 +582,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		// Subtitle tracks
 		const allSubtitleStreams = probe.subtitleStreams || [];
-
-		const hasEnglishSubs = allSubtitleStreams.some((s) => isEnglish(s.language));
-		const hasFullEnglishSubs = allSubtitleStreams.some((s) => isEnglish(s.language) && detectSubtitleTrackType(s) === "full");
-		const hasJapaneseSubs = allSubtitleStreams.some((s) => isJapanese(s.language));
-
-		if (!hasFullEnglishSubs && hasJapaneseSubs) {
-			const reason = hasEnglishSubs ? "Only Signs & Songs English tracks found" : "No English tracks found";
-			Logger.warn(`[subtitle] ${reason} but Japanese tracks exist - assuming mislabeled, relabeling Japanese to English`);
-			for (const s of allSubtitleStreams) {
-				if (isJapanese(s.language)) {
-					s.language = "eng";
-				}
-			}
-		}
-
+		await analyzeSubtitleStreams(allSubtitleStreams, job.inputPath, tempDir, signal);
 		const subtitleStreams = sortSubtitleStreams(allSubtitleStreams);
 
 		if (subtitleStreams.length > 0) {

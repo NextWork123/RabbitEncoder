@@ -1,4 +1,8 @@
 import type { AudioStreamInfo, SubtitleStreamInfo } from "./types";
+import { run } from "./process";
+import { Logger } from "./logger";
+import { join } from "path";
+import { readFileSync, unlinkSync, existsSync } from "fs";
 
 export type AudioTrackType = "main" | "commentary" | "descriptive";
 
@@ -92,10 +96,10 @@ export function deduplicateAudioStreams(streams: AudioStreamInfo[]): AudioStream
 
 export type SubtitleTrackType = "full" | "forced" | "sdh" | "commentary" | "honorifics";
 
-const SUB_FORCED_PATTERN = /\b(signs?|songs?|forced)\b/i;
-const SUB_SDH_PATTERN = /\b(sdh|cc|closed\s*captions?|hearing\s*impaired)\b/i;
-const SUB_COMMENTARY_PATTERN = /\b(commentary|director'?s?\s+commentary)\b/i;
-const SUB_HONORIFICS_PATTERN = /\b(honorifics?|honours?)\b/i;
+const SUB_FORCED_PATTERN = /\b(signs?[\s/&]*songs?|songs?[\s/&]*signs?|forced|typesett?ing|TS\b|OP\/?ED|karaoke|kara)\b/i;
+const SUB_SDH_PATTERN = /\b(sdh|cc|closed\s*captions?|hearing\s*impaired|descriptive)\b/i;
+const SUB_COMMENTARY_PATTERN = /\b(commentary|director'?s?\s+commentary|staff\s+commentary|cast\s+commentary|audio\s+commentary)\b/i;
+const SUB_HONORIFICS_PATTERN = /\b(honorifics?|honours?|honourifics?|\bhon\b)\b/i;
 
 export function detectSubtitleTrackType(stream: SubtitleStreamInfo): SubtitleTrackType {
 	const title = stream.title || "";
@@ -111,6 +115,62 @@ export function detectSubtitleTrackType(stream: SubtitleStreamInfo): SubtitleTra
 	return "full";
 }
 
+/** Keywords that appear in brackets but are not group names */
+const GROUP_BLOCKLIST = new Set([
+	"cc",
+	"sdh",
+	"forced",
+	"full",
+	"signs",
+	"songs",
+	"commentary",
+	"honorifics",
+	"honours",
+	"hon",
+	"default",
+	"descriptive",
+	"hearing_impaired",
+	"hi",
+	"ad",
+	"eng",
+	"jpn",
+	"spa",
+	"fre",
+	"ger",
+	"ita",
+	"por",
+	"rus",
+	"chi",
+	"kor",
+	"ara",
+	"dut",
+	"pol",
+	"english",
+	"japanese",
+	"spanish",
+	"french",
+	"german",
+	"italian",
+	"portuguese",
+	"russian",
+	"chinese",
+	"korean",
+	"arabic",
+	"simplified",
+	"traditional",
+	"latin_america",
+	"brazilian",
+	"british",
+	"dialogue",
+	"dialog",
+	"karaoke",
+	"kara",
+	"ts",
+	"op",
+	"ed",
+	"oped",
+]);
+
 /**
  * Extract fansub/release group name from a subtitle track title.
  * Examples: "English (SubsPlease)" → "SubsPlease", "Signs/Songs [MTBB]" → "MTBB"
@@ -118,12 +178,36 @@ export function detectSubtitleTrackType(stream: SubtitleStreamInfo): SubtitleTra
 export function extractGroupFromTitle(title: string | undefined): string | null {
 	if (!title) return null;
 	const match = title.match(/[\[(]([A-Za-z0-9._@-]+)[\])](?:\s*$)/);
-	return match?.[1] ?? null;
+	if (!match?.[1]) return null;
+	if (GROUP_BLOCKLIST.has(match[1].toLowerCase())) return null;
+	return match[1];
+}
+
+export function isEnglish(lang: string | undefined): boolean {
+	const l = (lang || "").toLowerCase();
+	return l === "eng" || l === "en" || l === "english" || l.startsWith("en-");
+}
+
+export function isJapanese(lang: string | undefined): boolean {
+	const l = (lang || "").toLowerCase();
+	return l === "jpn" || l === "ja" || l === "japanese" || l.startsWith("ja-");
+}
+
+export function isUndefined(lang: string | undefined): boolean {
+	const l = (lang || "").toLowerCase();
+	return !l || l === "und" || l === "undetermined";
 }
 
 /**
  * Build a clean track name for a subtitle stream.
- * Format: "{Type Label} [{Group}]" or just "{Type Label}" if no group.
+ *
+ * Examples:
+ *   "Full Subtitles [SubsPlease]"
+ *   "Full Subtitles"
+ *   "Full Subtitles (Honorifics) [MTBB]"
+ *   "SDH [Group]"
+ *   "Signs & Songs"
+ *   "Full Subtitles [MTBB]"
  */
 export function buildSubtitleTrackName(trackType: SubtitleTrackType, group: string | null): string {
 	const labels: Record<SubtitleTrackType, string> = {
@@ -134,7 +218,7 @@ export function buildSubtitleTrackName(trackType: SubtitleTrackType, group: stri
 		honorifics: "Full Subtitles (Honorifics)",
 	};
 
-	const label = labels[trackType];
+	let label = labels[trackType];
 	return group ? `${label} [${group}]` : label;
 }
 
@@ -145,9 +229,9 @@ export function buildSubtitleTrackName(trackType: SubtitleTrackType, group: stri
  */
 export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStreamInfo[] {
 	const langPriority = (lang: string | undefined): number => {
-		const l = (lang || "und").toLowerCase();
-		if (l === "eng" || l === "en" || l === "english") return 0;
-		if (l === "jpn" || l === "ja" || l === "japanese") return 1;
+		if (isEnglish(lang)) return 0;
+		if (isJapanese(lang)) return 1;
+		if (isUndefined(lang)) return 3;
 		return 2;
 	};
 
@@ -184,12 +268,433 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStre
 	});
 }
 
-export function isEnglish(lang: string | undefined): boolean {
-	const l = (lang || "").toLowerCase();
-	return l === "eng" || l === "en" || l === "english";
+interface LanguageDetectorResult {
+	file: string;
+	total_words: number;
+	detected: {
+		language: string;
+		iso_639_1: string;
+		iso_639_2: string;
+		bcp47: string | null;
+		matched_words: number;
+		confidence: number;
+	};
 }
 
-export function isJapanese(lang: string | undefined): boolean {
-	const l = (lang || "").toLowerCase();
-	return l === "jpn" || l === "ja" || l === "japanese";
+/**
+ * Run language-detector on a subtitle file and return the parsed result.
+ */
+async function detectLanguage(filePath: string, signal?: AbortSignal): Promise<LanguageDetectorResult | null> {
+	const res = await run(["language-detector", "-f", "json", filePath], { signal });
+
+	if (res.code !== 0) {
+		if (res.code !== 127) {
+			Logger.warn(`[subtitle] language-detector failed for ${filePath}: ${res.stderr || res.stdout}`);
+		}
+		return null;
+	}
+
+	try {
+		const result = JSON.parse(res.stdout) as LanguageDetectorResult;
+		if (!result.detected || result.total_words === 0) return null;
+		return result;
+	} catch {
+		Logger.warn(`[subtitle] Failed to parse language-detector output for ${filePath}`);
+		return null;
+	}
+}
+
+// Subtitle codec helpers & extraction
+
+const TEXT_SUB_CODECS = new Set(["subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text", "subviewer", "microdvd"]);
+
+const ASS_CODECS = new Set(["ass", "ssa"]);
+
+export function isTextSubtitleCodec(codec: string): boolean {
+	return TEXT_SUB_CODECS.has(codec.toLowerCase());
+}
+
+interface SubtitleExtraction {
+	text: string;
+	format: "ass" | "srt";
+	filePath: string;
+}
+
+async function extractSubtitleForAnalysis(
+	inputPath: string,
+	stream: SubtitleStreamInfo,
+	tempDir: string,
+	signal?: AbortSignal,
+): Promise<SubtitleExtraction | null> {
+	const isAss = ASS_CODECS.has(stream.codec.toLowerCase());
+	const ext = isAss ? "ass" : "srt";
+	const outPath = join(tempDir, `sub_analyze_${stream.index}.${ext}`);
+	const codecArgs = isAss ? ["-c:s", "copy"] : ["-c:s", "srt"];
+
+	const res = await run(["ffmpeg", "-y", "-i", inputPath, "-map", `0:${stream.index}`, ...codecArgs, "-vn", "-an", outPath], { signal });
+
+	if (res.code !== 0) {
+		Logger.warn(`[subtitle] Failed to extract track ${stream.index} for analysis: ${res.stderr || res.stdout}`);
+		return null;
+	}
+
+	try {
+		const text = readFileSync(outPath, "utf-8");
+		return { text, format: isAss ? "ass" : "srt", filePath: outPath };
+	} catch {
+		return null;
+	}
+}
+
+function cleanupExtraction(extraction: SubtitleExtraction): void {
+	try {
+		if (existsSync(extraction.filePath)) unlinkSync(extraction.filePath);
+	} catch {}
+}
+
+// ASS parsing
+interface AssDialogueLine {
+	style: string;
+	text: string;
+}
+
+function parseAssDialogueLines(assContent: string): AssDialogueLine[] {
+	const lines = assContent.split("\n");
+	let inEvents = false;
+	let styleIndex = 3;
+	let textIndex = 9;
+	let fieldCount = 10;
+	const result: AssDialogueLine[] = [];
+
+	for (const rawLine of lines) {
+		const line = rawLine.trim();
+
+		if (line.startsWith("[") && line.endsWith("]")) {
+			inEvents = line.toLowerCase() === "[events]";
+			continue;
+		}
+
+		if (!inEvents) continue;
+
+		if (line.toLowerCase().startsWith("format:")) {
+			const fields = line
+				.substring(7)
+				.split(",")
+				.map((f) => f.trim().toLowerCase());
+			fieldCount = fields.length;
+			const si = fields.indexOf("style");
+			const ti = fields.indexOf("text");
+			if (si >= 0) styleIndex = si;
+			if (ti >= 0) textIndex = ti;
+			continue;
+		}
+
+		if (!line.startsWith("Dialogue:")) continue;
+
+		const afterPrefix = line.substring(line.indexOf(":") + 1);
+		const parts = afterPrefix.split(",");
+		if (parts.length < fieldCount) continue;
+
+		const style = parts[styleIndex]?.trim() || "";
+		const text = parts.slice(textIndex).join(",").trim();
+		result.push({ style, text });
+	}
+
+	return result;
+}
+
+// Content analysis
+
+const SIGN_STYLE_PATTERN =
+	/^(sign|song|op|ed|title|typeset|insert|karaoke|kara|logo|preview|eyecatch|next[-_ ]?ep|opening|ending|credit|note|screen|border|italics?[-_ ]?top|top[-_ ]?title|ep[-_ ]?title|chapter|mask|flash|blur|overlap[-_ ]?sign)/i;
+
+const HONORIFIC_PATTERN = /\b\w+[-–](?:san|kun|chan|sama|sensei|senpai|k[oō]hai|dono|tan|n[ei]e|n[ei]i|b[oō]|shi|jo)\b/gi;
+
+const SDH_SPEAKER_PATTERN = /^[A-Z][A-Z\s.'-]{1,30}:/;
+const SDH_BRACKET_PATTERN = /\[[^\]]{2,60}\]/;
+const SDH_PAREN_PATTERN = /\([^)]{2,60}\)/;
+const SDH_MUSIC_PATTERN = /[♪♫♬]/;
+
+const SRT_TIMESTAMP_PATTERN = /^\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}/;
+
+function stripSubtitleTags(text: string): string {
+	return text
+		.replace(/<[^>]+>/g, "")
+		.replace(/\{[^}]*\}/g, "")
+		.replace(/\\N/g, "\n")
+		.trim();
+}
+
+interface SubtitleContentAnalysis {
+	dialogueLineCount: number;
+	assStyles: {
+		signStyleLines: number;
+		dialogueStyleLines: number;
+		otherStyleLines: number;
+		totalLines: number;
+	} | null;
+	sdhRatio: number;
+	honorificCount: number;
+}
+
+function analyzeSrtContent(srtText: string): SubtitleContentAnalysis {
+	const lines = srtText.split("\n");
+	let dialogueLineCount = 0;
+	let sdhLineCount = 0;
+	let totalTextLines = 0;
+	let honorificCount = 0;
+
+	for (const rawLine of lines) {
+		const line = rawLine.trim();
+		if (SRT_TIMESTAMP_PATTERN.test(line)) {
+			dialogueLineCount++;
+			continue;
+		}
+		if (!line || /^\d+$/.test(line)) continue;
+
+		const cleaned = stripSubtitleTags(line);
+		if (!cleaned) continue;
+		totalTextLines++;
+
+		if (SDH_SPEAKER_PATTERN.test(cleaned) || SDH_BRACKET_PATTERN.test(cleaned) || SDH_PAREN_PATTERN.test(cleaned) || SDH_MUSIC_PATTERN.test(cleaned)) {
+			sdhLineCount++;
+		}
+
+		const honMatches = cleaned.match(HONORIFIC_PATTERN);
+		if (honMatches) honorificCount += honMatches.length;
+	}
+
+	return {
+		dialogueLineCount,
+		assStyles: null,
+		sdhRatio: totalTextLines > 0 ? sdhLineCount / totalTextLines : 0,
+		honorificCount,
+	};
+}
+
+function analyzeAssContent(assText: string): SubtitleContentAnalysis {
+	const dialogueLines = parseAssDialogueLines(assText);
+	let signStyleLines = 0;
+	let dialogueStyleLines = 0;
+	let otherStyleLines = 0;
+	let sdhLineCount = 0;
+	let honorificCount = 0;
+	let totalTextLines = 0;
+
+	for (const { style, text } of dialogueLines) {
+		if (SIGN_STYLE_PATTERN.test(style)) signStyleLines++;
+		else if (/^(default|main|dialogue|dialog|narrat|italic|flashback|thought|internal|alt(?:ernate)?|overlap(?![-_ ]?sign)|top(?![-_ ]?title))/i.test(style))
+			dialogueStyleLines++;
+		else otherStyleLines++;
+
+		const cleaned = stripSubtitleTags(text);
+		if (!cleaned) continue;
+		totalTextLines++;
+
+		if (SDH_SPEAKER_PATTERN.test(cleaned) || SDH_BRACKET_PATTERN.test(cleaned) || SDH_PAREN_PATTERN.test(cleaned) || SDH_MUSIC_PATTERN.test(cleaned)) {
+			sdhLineCount++;
+		}
+
+		const honMatches = cleaned.match(HONORIFIC_PATTERN);
+		if (honMatches) honorificCount += honMatches.length;
+	}
+
+	return {
+		dialogueLineCount: dialogueLines.length,
+		assStyles: { signStyleLines, dialogueStyleLines, otherStyleLines, totalLines: dialogueLines.length },
+		sdhRatio: totalTextLines > 0 ? sdhLineCount / totalTextLines : 0,
+		honorificCount,
+	};
+}
+
+function analyzeContent(extraction: SubtitleExtraction): SubtitleContentAnalysis {
+	return extraction.format === "ass" ? analyzeAssContent(extraction.text) : analyzeSrtContent(extraction.text);
+}
+
+/**
+ * Comprehensive subtitle analysis. Mutates streams in place.
+ *
+ * Each text-based stream is extracted once; the file is reused for
+ * both language-detector and content analysis before cleanup.
+ *
+ * Steps:
+ *   1. Extract all text-based streams & run content analysis
+ *   2. Language detection via language-detector (sets language to BCP47 or ISO 639-2)
+ *   3. Bitmap fallback (PGS/VOBSUB when no English found)
+ *   4. ASS style-based Signs & Songs detection
+ *   5. Line-count-based Signs & Songs detection
+ *   6. SDH content detection
+ *   7. Honorifics detection (pair comparison)
+ */
+export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inputPath: string, tempDir: string, signal?: AbortSignal): Promise<void> {
+	if (streams.length === 0) return;
+
+	// Step 1: Extract & content-analyze
+	const contentCache = new Map<number, SubtitleContentAnalysis>();
+	const extractions = new Map<number, SubtitleExtraction>();
+
+	const textStreams = streams.filter((s) => isTextSubtitleCodec(s.codec));
+	if (textStreams.length > 0) {
+		Logger.info(`[subtitle] Analyzing ${textStreams.length} text-based subtitle track(s)`);
+	}
+
+	for (const stream of textStreams) {
+		const extraction = await extractSubtitleForAnalysis(inputPath, stream, tempDir, signal);
+		if (!extraction) continue;
+
+		extractions.set(stream.index, extraction);
+		const analysis = analyzeContent(extraction);
+		contentCache.set(stream.index, analysis);
+
+		const styleSummary =
+			analysis.assStyles != null
+				? `, styles: ${analysis.assStyles.dialogueStyleLines}d/${analysis.assStyles.signStyleLines}s/${analysis.assStyles.otherStyleLines}o`
+				: "";
+
+		Logger.info(
+			`[subtitle] Track ${stream.index} (${stream.language || "und"}, ${stream.codec}): ` +
+				`${analysis.dialogueLineCount} lines, ` +
+				`SDH ${(analysis.sdhRatio * 100).toFixed(0)}%, ` +
+				`honorifics ${analysis.honorificCount}` +
+				styleSummary,
+		);
+	}
+
+	// Step 2: Language detection via language-detector
+	for (const stream of textStreams) {
+		const extraction = extractions.get(stream.index);
+		if (!extraction) continue;
+
+		const result = await detectLanguage(extraction.filePath, signal);
+
+		if (result === null) {
+			continue;
+		}
+
+		const langCode = result.detected.bcp47 || result.detected.iso_639_2;
+		const confidence = result.detected.confidence;
+		const origLang = stream.language || "und";
+
+		if (confidence < 0.05) {
+			Logger.info(`[subtitle] Track ${stream.index}: language-detector confidence too low ` + `(${(confidence * 100).toFixed(1)}%) — keeping "${origLang}"`);
+			continue;
+		}
+
+		const changed = origLang.toLowerCase() !== langCode.toLowerCase();
+
+		Logger[changed ? "warn" : "info"](
+			`[subtitle] Track ${stream.index}: language-detector → ${result.detected.language} ` +
+				`[${langCode}], ${(confidence * 100).toFixed(1)}% confidence — ` +
+				`${changed ? "relabeling" : "confirmed"} from "${origLang}"`,
+		);
+
+		stream.language = langCode;
+	}
+
+	// Clean up all extracted temp files
+	for (const extraction of extractions.values()) {
+		cleanupExtraction(extraction);
+	}
+	extractions.clear();
+
+	// Step 3: Bitmap fallback
+	const hasFullEnglishSubs = streams.some((s) => isEnglish(s.language) && detectSubtitleTrackType(s) === "full");
+	const hasJapaneseSubs = streams.some((s) => isJapanese(s.language));
+
+	if (!hasFullEnglishSubs && hasJapaneseSubs) {
+		const hasAnyEnglish = streams.some((s) => isEnglish(s.language));
+		const reason = hasAnyEnglish ? "Only Signs & Songs English tracks found" : "No English tracks found (including after language detection)";
+		Logger.warn(`[subtitle] ${reason} but Japanese tracks exist — assuming mislabeled, relabeling Japanese to English`);
+		for (const s of streams) {
+			if (isJapanese(s.language)) {
+				s.language = "en";
+			}
+		}
+	}
+
+	// Step 4: ASS style-based Signs & Songs
+	for (const stream of streams) {
+		if (detectSubtitleTrackType(stream) !== "full") continue;
+
+		const analysis = contentCache.get(stream.index);
+		if (!analysis?.assStyles) continue;
+
+		const { signStyleLines, totalLines } = analysis.assStyles;
+		if (totalLines >= 5 && signStyleLines / totalLines >= 0.8) {
+			Logger.warn(`[subtitle] Track ${stream.index}: ${signStyleLines}/${totalLines} lines use sign/typeset ` + `ASS styles — reclassifying as Signs & Songs`);
+			stream.isForced = true;
+		}
+	}
+
+	// Step 5: Line-count-based Signs & Songs
+	const fullStreams = streams.filter((s) => detectSubtitleTrackType(s) === "full" && contentCache.has(s.index));
+
+	if (fullStreams.length >= 2) {
+		const lineCounts = new Map<number, number>();
+		for (const s of fullStreams) {
+			lineCounts.set(s.index, contentCache.get(s.index)!.dialogueLineCount);
+		}
+
+		const maxLines = Math.max(...lineCounts.values());
+		for (const [streamIndex, lineCount] of lineCounts) {
+			if (maxLines > 0 && lineCount > 0 && lineCount * 10 <= maxLines) {
+				const stream = streams.find((s) => s.index === streamIndex);
+				if (stream) {
+					Logger.warn(`[subtitle] Track ${streamIndex}: only ${lineCount} lines vs ${maxLines} ` + `in largest full track — reclassifying as Signs & Songs`);
+					stream.isForced = true;
+				}
+			}
+		}
+	}
+
+	// Step 6: SDH content detection
+	for (const stream of streams) {
+		const currentType = detectSubtitleTrackType(stream);
+		if (currentType === "sdh" || currentType === "forced") continue;
+
+		const analysis = contentCache.get(stream.index);
+		if (!analysis) continue;
+
+		if (analysis.sdhRatio >= 0.15 && analysis.dialogueLineCount >= 10) {
+			Logger.warn(`[subtitle] Track ${stream.index}: ${(analysis.sdhRatio * 100).toFixed(0)}% SDH markers — reclassifying as SDH`);
+			stream.isHearingImpaired = true;
+		}
+	}
+
+	// Step 7: Honorifics detection
+	const englishFullStreams = streams.filter((s) => isEnglish(s.language) && detectSubtitleTrackType(s) === "full" && contentCache.has(s.index));
+	const hasExistingHonorifics = streams.some((s) => isEnglish(s.language) && detectSubtitleTrackType(s) === "honorifics");
+
+	if (englishFullStreams.length >= 2 && !hasExistingHonorifics) {
+		let maxHonStream: SubtitleStreamInfo | null = null;
+		let maxHon = 0;
+		let minHon = Infinity;
+
+		for (const stream of englishFullStreams) {
+			const count = contentCache.get(stream.index)!.honorificCount;
+			if (count > maxHon) {
+				maxHon = count;
+				maxHonStream = stream;
+			}
+			if (count < minHon) {
+				minHon = count;
+			}
+		}
+
+		if (maxHonStream && maxHon >= 5 && (minHon === 0 || maxHon >= minHon * 3)) {
+			Logger.warn(`[subtitle] Track ${maxHonStream.index}: ${maxHon} honorific suffixes ` + `(vs ${minHon} in others) — reclassifying as Honorifics`);
+			const existingTitle = maxHonStream.title || "";
+			if (!SUB_HONORIFICS_PATTERN.test(existingTitle)) {
+				maxHonStream.title = existingTitle ? `${existingTitle} [Honorifics]` : "Honorifics";
+			}
+		}
+	}
+
+	// Summary
+	const summary = streams.map((s) => {
+		const lang = s.language || "und";
+		const type = detectSubtitleTrackType(s);
+		return `${lang}:${type}`;
+	});
+	Logger.info(`[subtitle] Final classification: ${summary.join(", ")}`);
 }
