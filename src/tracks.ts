@@ -115,7 +115,6 @@ export function detectSubtitleTrackType(stream: SubtitleStreamInfo): SubtitleTra
 	return "full";
 }
 
-/** Keywords that appear in brackets but are not group names */
 const GROUP_BLOCKLIST = new Set([
 	"cc",
 	"sdh",
@@ -152,6 +151,8 @@ const GROUP_BLOCKLIST = new Set([
 	"german",
 	"italian",
 	"portuguese",
+	"parisian",
+	"castilian",
 	"russian",
 	"chinese",
 	"korean",
@@ -171,16 +172,73 @@ const GROUP_BLOCKLIST = new Set([
 	"oped",
 ]);
 
+function normalizeToken(s: string): string {
+	return s
+		.trim()
+		.toLowerCase()
+		.replace(/[\s-]+/g, "_");
+}
+
+function isBlockedToken(s: string): boolean {
+	return GROUP_BLOCKLIST.has(normalizeToken(s));
+}
+
+function looksLikeGroupName(s: string): boolean {
+	const trimmed = s.trim();
+
+	// Reject empty / too short / too long
+	if (!trimmed || trimmed.length < 2 || trimmed.length > 40) return false;
+
+	// Allow common group-name chars, including spaces
+	if (!/^[A-Za-z0-9._@+\- ]+$/.test(trimmed)) return false;
+
+	// Reject pure language/tag words
+	if (isBlockedToken(trimmed)) return false;
+
+	// Reject tokens that are just numbers
+	if (/^\d+$/.test(trimmed)) return false;
+
+	return true;
+}
+
+function scoreGroupCandidate(s: string): number {
+	let score = 0;
+	const trimmed = s.trim();
+
+	// Acronym-ish groups like MTBB, DB, ASW score higher
+	if (/[A-Z]{2,}/.test(trimmed)) score += 3;
+
+	// Mixed chars are often more group-like than plain words
+	if (/[._@+\-]/.test(trimmed)) score += 2;
+
+	// Single plain English-looking word is weaker
+	if (/^[A-Za-z]+$/.test(trimmed)) score -= 1;
+
+	// Longer but reasonable names can be valid
+	if (trimmed.length >= 4 && trimmed.length <= 15) score += 1;
+
+	return score;
+}
+
 /**
- * Extract fansub/release group name from a subtitle track title.
- * Examples: "English (SubsPlease)" → "SubsPlease", "Signs/Songs [MTBB]" → "MTBB"
+ * Extract likely fansub/release group name from subtitle title.
+ *
+ * Examples:
+ *   "English (SubsPlease)" => "SubsPlease"
+ *   "Signs/Songs [MTBB]" => "MTBB"
+ *   "English (CC) [SubsPlease]" => "SubsPlease"
+ *   "English [Styled] (MTBB)" => "MTBB"
  */
 export function extractGroupFromTitle(title: string | undefined): string | null {
 	if (!title) return null;
-	const match = title.match(/[\[(]([A-Za-z0-9._@-]+)[\])](?:\s*$)/);
-	if (!match?.[1]) return null;
-	if (GROUP_BLOCKLIST.has(match[1].toLowerCase())) return null;
-	return match[1];
+
+	const matches = [...title.matchAll(/[\[(]([^[\]()]*)[\])]/g)].map((m) => m[1]?.trim()).filter((s): s is string => Boolean(s));
+
+	const candidates = matches.filter(looksLikeGroupName);
+	if (candidates.length === 0) return null;
+
+	candidates.sort((a, b) => scoreGroupCandidate(b) - scoreGroupCandidate(a));
+	return candidates[0] ?? null;
 }
 
 export function isEnglish(lang: string | undefined): boolean {
