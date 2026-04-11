@@ -36,6 +36,8 @@ services:
       - ENCODER_DENOISE_GPU=true
       # Downscale 4K sources to 1080p before encoding
       - ENCODER_DOWNSCALE=false
+      # Skip boosting (bypass per-scene CRF zone analysis, encode directly)
+      - ENCODER_SKIP_BOOSTING=false
 
       # Audio bitrates (kbps per channel layout)
       - AUDIO_BITRATE_MONO=64

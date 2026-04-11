@@ -256,164 +256,263 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		setStep(S_PREPARE, { status: "done", progress: 100 });
 
-		// ABE (scenes + fast + metrics + zones + final)
+		// ABE or direct encode
 		checkCancelled();
 		updateJob({ status: "encoding_video" });
 
-		const abeArgs = [
-			"python3",
-			"-u",
-			"/opt/Auto-Boost-Essential/Auto-Boost-Essential.py",
-			"-i",
-			preparedVideo,
-			"-t",
-			join(tempDir, "abe_temp"),
-			"--quality",
-			job.settings.quality,
-			"--final-speed",
-			job.settings.finalSpeed,
-			"--json-stream",
-		];
+		const ivfFile = join(tempDir, "source_video.ivf");
 
-		const abeProc = Bun.spawn(abeArgs, {
-			stdout: "pipe",
-			stderr: "pipe",
-			cwd: tempDir,
-		});
+		if (job.settings.skipBoosting) {
+			// Skip boosting: mark ABE-only steps as done (skipped)
+			for (const si of [S_FAST, S_METRICS, S_SCENES, S_ZONES]) {
+				setStep(si, { status: "done", progress: 100, detail: "Skipped" });
+			}
 
-		const onAbortAbe = () => {
-			try {
-				abeProc.kill("SIGTERM");
-			} catch {}
-			setTimeout(() => {
+			// Direct encode: ffmpeg y4m pipe -> SvtAv1EncApp
+			setStep(S_FINAL, { status: "active", progress: 0, detail: "Starting direct encode" });
+
+			const totalFrames = probe.duration > 0 ? Math.round(probe.duration * probe.videoStreamFps) : 0;
+
+			const ffmpegArgs = ["ffmpeg", "-hide_banner", "-i", preparedVideo, "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", "-"];
+
+			const svtArgs = ["SvtAv1EncApp", "-i", "-", "--progress", "0", "--speed", job.settings.finalSpeed, "--quality", job.settings.quality, "-b", ivfFile];
+
+			Logger.info(`[direct-encode] ffmpeg: ${ffmpegArgs.join(" ")}`);
+			Logger.info(`[direct-encode] svt: ${svtArgs.join(" ")}`);
+
+			const ffmpegProc = Bun.spawn(ffmpegArgs, {
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+
+			const svtProc = Bun.spawn(svtArgs, {
+				stdin: ffmpegProc.stdout,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+
+			const onAbortDirect = () => {
 				try {
-					abeProc.kill("SIGKILL");
+					ffmpegProc.kill("SIGTERM");
 				} catch {}
-			}, 3000);
-		};
-		signal?.addEventListener("abort", onAbortAbe, { once: true });
-
-		const abeStageToStep: Record<number, number> = {
-			0: S_FAST,
-			1: S_METRICS,
-			2: S_SCENES,
-			3: S_ZONES,
-			4: S_FINAL,
-		};
-
-		let abeStderr = "";
-		let abeLastError = "";
-
-		const handleAbeEvent = (evt: any) => {
-			const si = abeStageToStep[evt.stage];
-
-			if (evt.event === "stage" && si !== undefined) {
-				setStep(si, {
-					status: "active",
-					progress: 0,
-					detail: evt.total_frames ? fmtFrames(0, evt.total_frames) : undefined,
-				});
-				return;
-			}
-
-			if (evt.event === "progress" && si !== undefined) {
-				setStep(si, {
-					progress: pct2(evt.current, evt.total),
-					detail: evt.total ? fmtFramesWithFps(evt.current, evt.total, steps[si]!.startedAt) : undefined,
-				});
-				return;
-			}
-
-			if (evt.event === "stage_complete" && si !== undefined) {
-				setStep(si, {
-					status: "done",
-					progress: 100,
-					detail: evt.total_frames ? fmtFramesWithFps(evt.total_frames, evt.total_frames, steps[si]!.startedAt) : steps[si]!.detail,
-				});
-				return;
-			}
-
-			if (evt.event === "error") {
-				abeLastError = evt.message || "Unknown error";
-				Logger.error("[ABE error]", { message: evt.message });
-			}
-		};
-
-		const abeStdoutTask = (async () => {
-			if (!abeProc.stdout) return;
-
-			const reader = abeProc.stdout.getReader();
-			const decoder = new TextDecoder();
-			let buffer = "";
-
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				buffer += decoder.decode(value, { stream: true });
-				const lines = buffer.split("\n");
-				buffer = lines.pop() || "";
-
-				for (const rawLine of lines) {
-					const line = rawLine.trim();
-					if (!line) continue;
-
+				try {
+					svtProc.kill("SIGTERM");
+				} catch {}
+				setTimeout(() => {
 					try {
-						const evt = JSON.parse(line);
-						handleAbeEvent(evt);
-					} catch {
-						Logger.warn(`[ABE stdout non-json]`, { output: rawLine });
+						ffmpegProc.kill("SIGKILL");
+					} catch {}
+					try {
+						svtProc.kill("SIGKILL");
+					} catch {}
+				}, 3000);
+			};
+			signal?.addEventListener("abort", onAbortDirect, { once: true });
+
+			// Parse ffmpeg stderr for frame progress
+			const ffmpegStderrTask = (async () => {
+				if (!ffmpegProc.stderr) return;
+				const reader = ffmpegProc.stderr.getReader();
+				const decoder = new TextDecoder();
+				let buffer = "";
+				let lastProgressUpdate = 0;
+
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					buffer += decoder.decode(value, { stream: true });
+
+					const lines = buffer.split(/[\r\n]/);
+					buffer = lines.pop() || "";
+
+					for (const line of lines) {
+						const frameMatch = line.match(/frame=\s*(\d+)/);
+						if (frameMatch && totalFrames > 0) {
+							const current = parseInt(frameMatch[1]!);
+							const now = Date.now();
+							if (now - lastProgressUpdate >= 1000) {
+								lastProgressUpdate = now;
+								setStep(S_FINAL, {
+									progress: pct2(current, totalFrames),
+									detail: fmtFramesWithFps(current, totalFrames, steps[S_FINAL]!.startedAt),
+								});
+							}
+						}
 					}
 				}
+			})();
+
+			const svtStdoutTask = new Response(svtProc.stdout).text();
+			const svtStderrTask = new Response(svtProc.stderr).text();
+
+			const [svtCode] = await Promise.all([svtProc.exited, ffmpegProc.exited, ffmpegStderrTask, svtStdoutTask, svtStderrTask]);
+			signal?.removeEventListener("abort", onAbortDirect);
+			checkCancelled();
+
+			if (svtCode !== 0) {
+				const stderrText = await svtStderrTask;
+				const exitSignal = svtCode > 128 ? describeExitCode(svtCode) : null;
+				const detail = stderrText.trim().slice(-500) || exitSignal || "No error details available";
+				throw new Error(`SvtAv1EncApp failed (exit ${svtCode}): ${detail}`);
 			}
 
-			buffer += decoder.decode();
+			setStep(S_FINAL, { status: "done", progress: 100 });
+		} else {
+			// Auto-Boost-Essential (scenes + fast + metrics + zones + final)
+			const abeArgs = [
+				"python3",
+				"-u",
+				"/opt/Auto-Boost-Essential/Auto-Boost-Essential.py",
+				"-i",
+				preparedVideo,
+				"-t",
+				join(tempDir, "abe_temp"),
+				"--quality",
+				job.settings.quality,
+				"--final-speed",
+				job.settings.finalSpeed,
+				"--json-stream",
+			];
 
-			const trailing = buffer.trim();
-			if (trailing) {
+			const abeProc = Bun.spawn(abeArgs, {
+				stdout: "pipe",
+				stderr: "pipe",
+				cwd: tempDir,
+			});
+
+			const onAbortAbe = () => {
 				try {
-					const evt = JSON.parse(trailing);
-					handleAbeEvent(evt);
-				} catch {
-					Logger.warn(`[ABE stdout trailing non-json]`, { output: trailing });
+					abeProc.kill("SIGTERM");
+				} catch {}
+				setTimeout(() => {
+					try {
+						abeProc.kill("SIGKILL");
+					} catch {}
+				}, 3000);
+			};
+			signal?.addEventListener("abort", onAbortAbe, { once: true });
+
+			const abeStageToStep: Record<number, number> = {
+				0: S_FAST,
+				1: S_METRICS,
+				2: S_SCENES,
+				3: S_ZONES,
+				4: S_FINAL,
+			};
+
+			let abeStderr = "";
+			let abeLastError = "";
+
+			const handleAbeEvent = (evt: any) => {
+				const si = abeStageToStep[evt.stage];
+
+				if (evt.event === "stage" && si !== undefined) {
+					setStep(si, {
+						status: "active",
+						progress: 0,
+						detail: evt.total_frames ? fmtFrames(0, evt.total_frames) : undefined,
+					});
+					return;
 				}
-			}
-		})();
 
-		const abeStderrTask = (async () => {
-			if (!abeProc.stderr) return;
-
-			const reader = abeProc.stderr.getReader();
-			const decoder = new TextDecoder();
-
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				const chunk = decoder.decode(value, { stream: true });
-				abeStderr += chunk;
-
-				if (chunk.trim()) {
-					Logger.error("[ABE stderr]", { error: chunk.trimEnd() });
+				if (evt.event === "progress" && si !== undefined) {
+					setStep(si, {
+						progress: pct2(evt.current, evt.total),
+						detail: evt.total ? fmtFramesWithFps(evt.current, evt.total, steps[si]!.startedAt) : undefined,
+					});
+					return;
 				}
+
+				if (evt.event === "stage_complete" && si !== undefined) {
+					setStep(si, {
+						status: "done",
+						progress: 100,
+						detail: evt.total_frames ? fmtFramesWithFps(evt.total_frames, evt.total_frames, steps[si]!.startedAt) : steps[si]!.detail,
+					});
+					return;
+				}
+
+				if (evt.event === "error") {
+					abeLastError = evt.message || "Unknown error";
+					Logger.error("[ABE error]", { message: evt.message });
+				}
+			};
+
+			const abeStdoutTask = (async () => {
+				if (!abeProc.stdout) return;
+
+				const reader = abeProc.stdout.getReader();
+				const decoder = new TextDecoder();
+				let buffer = "";
+
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					buffer += decoder.decode(value, { stream: true });
+					const lines = buffer.split("\n");
+					buffer = lines.pop() || "";
+
+					for (const rawLine of lines) {
+						const line = rawLine.trim();
+						if (!line) continue;
+
+						try {
+							const evt = JSON.parse(line);
+							handleAbeEvent(evt);
+						} catch {
+							Logger.warn(`[ABE stdout non-json]`, { output: rawLine });
+						}
+					}
+				}
+
+				buffer += decoder.decode();
+
+				const trailing = buffer.trim();
+				if (trailing) {
+					try {
+						const evt = JSON.parse(trailing);
+						handleAbeEvent(evt);
+					} catch {
+						Logger.warn(`[ABE stdout trailing non-json]`, { output: trailing });
+					}
+				}
+			})();
+
+			const abeStderrTask = (async () => {
+				if (!abeProc.stderr) return;
+
+				const reader = abeProc.stderr.getReader();
+				const decoder = new TextDecoder();
+
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					const chunk = decoder.decode(value, { stream: true });
+					abeStderr += chunk;
+
+					if (chunk.trim()) {
+						Logger.error("[ABE stderr]", { error: chunk.trimEnd() });
+					}
+				}
+
+				abeStderr += decoder.decode();
+			})();
+
+			const [abeCode] = await Promise.all([abeProc.exited, abeStdoutTask, abeStderrTask]);
+			signal?.removeEventListener("abort", onAbortAbe);
+			checkCancelled();
+
+			if (abeCode !== 0) {
+				const exitSignal = abeCode > 128 ? describeExitCode(abeCode) : null;
+				const detail = abeLastError || abeStderr.trim().slice(-500) || exitSignal || "No error details available";
+				throw new Error(`Auto-Boost-Essential failed (exit ${abeCode}): ${detail}`);
 			}
-
-			abeStderr += decoder.decode();
-		})();
-
-		const [abeCode] = await Promise.all([abeProc.exited, abeStdoutTask, abeStderrTask]);
-		signal?.removeEventListener("abort", onAbortAbe);
-		checkCancelled();
-
-		if (abeCode !== 0) {
-			const exitSignal = abeCode > 128 ? describeExitCode(abeCode) : null;
-			const detail = abeLastError || abeStderr.trim().slice(-500) || exitSignal || "No error details available";
-			throw new Error(`Auto-Boost-Essential failed (exit ${abeCode}): ${detail}`);
 		}
 
-		const ivfFile = join(tempDir, "source_video.ivf");
 		if (!existsSync(ivfFile)) {
-			throw new Error("ABE did not produce output .ivf file");
+			throw new Error("Encoder did not produce output .ivf file");
 		}
 
 		const videoMkv = join(tempDir, "video_only.mkv");

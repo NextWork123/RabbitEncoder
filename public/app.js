@@ -473,6 +473,7 @@ function renderJobCard(job) {
 		if (job.probe.duration) meta += `<span>${formatDuration(job.probe.duration * 1000)}</span>`;
 	}
 	meta += `<span>${job.settings.quality} · ${job.settings.finalSpeed}${job.settings.downscale ? " · ↓1080p" : ""}</span>`;
+	if (job.settings.skipBoosting) meta += `<span>No Boost</span>`;
 
 	const stepsHtml = active || done || err ? renderSteps(job.steps) : "";
 
@@ -877,6 +878,7 @@ async function openSettings() {
 	renderRadioPills(document.getElementById("default-denoise"), DENOISE_LEVELS, tempDefaults.denoise || "off", (v) => (tempDefaults.denoise = v));
 	renderGpuToggle(document.getElementById("default-denoise-gpu"), tempDefaults.denoiseGpu || false, (v) => (tempDefaults.denoiseGpu = v));
 	renderDownscaleToggle(document.getElementById("default-downscale"), tempDefaults.downscale || false, (v) => (tempDefaults.downscale = v));
+	renderSkipBoostingToggle(document.getElementById("default-skip-boosting"), tempDefaults.skipBoosting || false, (v) => (tempDefaults.skipBoosting = v));
 	renderBitrateInputs(document.getElementById("default-bitrates"), tempDefaults.audioBitrates, (ch, val) => (tempDefaults.audioBitrates[ch] = val));
 
 	window._tempDefaults = tempDefaults;
@@ -916,6 +918,7 @@ async function openJobSettings(jobId) {
 	renderRadioPills(document.getElementById("job-denoise"), DENOISE_LEVELS, tempSettings.denoise || "off", (v) => (tempSettings.denoise = v));
 	renderGpuToggle(document.getElementById("job-denoise-gpu"), tempSettings.denoiseGpu || false, (v) => (tempSettings.denoiseGpu = v));
 	renderDownscaleToggle(document.getElementById("job-downscale"), tempSettings.downscale || false, (v) => (tempSettings.downscale = v));
+	renderSkipBoostingToggle(document.getElementById("job-skip-boosting"), tempSettings.skipBoosting || false, (v) => (tempSettings.skipBoosting = v));
 	renderBitrateInputs(document.getElementById("job-bitrates"), tempSettings.audioBitrates, (ch, val) => (tempSettings.audioBitrates[ch] = val));
 
 	document.getElementById("job-modal").style.display = "";
@@ -1255,6 +1258,24 @@ function renderDownscaleToggle(container, checked, onChange) {
 
 	const span = document.createElement("span");
 	span.textContent = "\u00A0Downscale 4K to 1080p";
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}
+
+function renderSkipBoostingToggle(container, checked, onChange) {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Skip boosting";
 
 	label.appendChild(input);
 	label.appendChild(span);
