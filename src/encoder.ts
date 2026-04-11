@@ -266,156 +266,10 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			for (const si of [S_FAST, S_METRICS, S_SCENES, S_ZONES]) {
 				setStep(si, { status: "done", progress: 100, detail: "Skipped" });
 			}
+		}
 
-			// Step 1: Convert to y4m on disk
-			setStep(S_FINAL, { status: "active", progress: 0, detail: "Converting to y4m" });
-
-			const totalFrames = probe.duration > 0 ? Math.round(probe.duration * probe.videoStreamFps) : 0;
-			const y4mFile = join(tempDir, "source_video.y4m");
-
-			const ffmpegArgs = ["ffmpeg", "-hide_banner", "-y", "-i", preparedVideo, "-pix_fmt", "yuv420p10le", "-strict", "-1", "-f", "yuv4mpegpipe", y4mFile];
-
-			Logger.info(`[direct-encode] ffmpeg: ${ffmpegArgs.join(" ")}`);
-
-			const ffmpegProc = Bun.spawn(ffmpegArgs, {
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-
-			const onAbortFfmpeg = () => {
-				try {
-					ffmpegProc.kill("SIGTERM");
-				} catch {}
-				setTimeout(() => {
-					try {
-						ffmpegProc.kill("SIGKILL");
-					} catch {}
-				}, 3000);
-			};
-			signal?.addEventListener("abort", onAbortFfmpeg, { once: true });
-
-			const ffmpegStderrTask = (async () => {
-				if (!ffmpegProc.stderr) return;
-				const reader = ffmpegProc.stderr.getReader();
-				const decoder = new TextDecoder();
-				let buffer = "";
-				let lastProgressUpdate = 0;
-
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					buffer += decoder.decode(value, { stream: true });
-
-					const lines = buffer.split(/[\r\n]/);
-					buffer = lines.pop() || "";
-
-					for (const line of lines) {
-						const frameMatch = line.match(/frame=\s*(\d+)/);
-						if (frameMatch && totalFrames > 0) {
-							const current = parseInt(frameMatch[1]!);
-							const now = Date.now();
-							if (now - lastProgressUpdate >= 1000) {
-								lastProgressUpdate = now;
-								setStep(S_FINAL, {
-									progress: pct2(current, totalFrames) * 0.1,
-									detail: `Converting to y4m — ${fmtFramesWithFps(current, totalFrames, steps[S_FINAL]!.startedAt)}`,
-								});
-							}
-						}
-					}
-				}
-			})();
-
-			const [ffmpegCode] = await Promise.all([ffmpegProc.exited, ffmpegStderrTask]);
-			signal?.removeEventListener("abort", onAbortFfmpeg);
-			checkCancelled();
-
-			if (ffmpegCode !== 0) {
-				throw new Error(`FFmpeg y4m conversion failed (exit ${ffmpegCode})`);
-			}
-
-			// Step 2: Encode y4m file directly with SvtAv1EncApp
-			setStep(S_FINAL, { progress: 10, detail: "Starting encode" });
-
-			const svtArgs = ["SvtAv1EncApp", "-i", y4mFile, "--progress", "2", "--speed", job.settings.finalSpeed, "--quality", job.settings.quality, "-b", ivfFile];
-
-			Logger.info(`[direct-encode] svt: ${svtArgs.join(" ")}`);
-
-			const svtProc = Bun.spawn(svtArgs, {
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-
-			const onAbortSvt = () => {
-				try {
-					svtProc.kill("SIGTERM");
-				} catch {}
-				setTimeout(() => {
-					try {
-						svtProc.kill("SIGKILL");
-					} catch {}
-				}, 3000);
-			};
-			signal?.addEventListener("abort", onAbortSvt, { once: true });
-
-			// Parse SVT-AV1 stderr for progress (--progress 2 outputs "Encoding frame N/M")
-			const svtStderrTask = (async () => {
-				if (!svtProc.stderr) return "";
-				const reader = svtProc.stderr.getReader();
-				const decoder = new TextDecoder();
-				let buffer = "";
-				let lastProgressUpdate = 0;
-				const encodeStartedAt = Date.now();
-
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					buffer += decoder.decode(value, { stream: true });
-
-					const lines = buffer.split(/[\r\n]/);
-					buffer = lines.pop() || "";
-
-					for (const line of lines) {
-						const match = line.match(/Encoding\s+frame\s+(\d+)\s*\/\s*(\d+)/i);
-						if (match) {
-							const current = parseInt(match[1]!);
-							const total = parseInt(match[2]!);
-							const now = Date.now();
-							if (now - lastProgressUpdate >= 1000) {
-								lastProgressUpdate = now;
-								setStep(S_FINAL, {
-									progress: 10 + pct2(current, total) * 0.9,
-									detail: fmtFramesWithFps(current, total, encodeStartedAt),
-								});
-							}
-						}
-					}
-				}
-
-				buffer += decoder.decode();
-				return buffer;
-			})();
-
-			const svtStdoutTask = new Response(svtProc.stdout).text();
-
-			const [svtCode, svtStderr] = await Promise.all([svtProc.exited, svtStderrTask, svtStdoutTask]);
-			signal?.removeEventListener("abort", onAbortSvt);
-			checkCancelled();
-
-			// Clean up y4m file
-			try {
-				unlinkSync(y4mFile);
-			} catch {}
-
-			if (svtCode !== 0) {
-				const exitSignal = svtCode > 128 ? describeExitCode(svtCode) : null;
-				const detail = svtStderr.trim().slice(-500) || exitSignal || "No error details available";
-				throw new Error(`SvtAv1EncApp failed (exit ${svtCode}): ${detail}`);
-			}
-
-			setStep(S_FINAL, { status: "done", progress: 100 });
-		} else {
-			// Auto-Boost-Essential (scenes + fast + metrics + zones + final)
+		// Auto-Boost-Essential (with -nb when skipBoosting to run final pass only)
+		{
 			const abeArgs = [
 				"python3",
 				"-u",
@@ -430,6 +284,10 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				job.settings.finalSpeed,
 				"--json-stream",
 			];
+
+			if (job.settings.skipBoosting) {
+				abeArgs.push("-nb");
+			}
 
 			const abeProc = Bun.spawn(abeArgs, {
 				stdout: "pipe",
