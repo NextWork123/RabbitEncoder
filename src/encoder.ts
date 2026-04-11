@@ -868,6 +868,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			} catch {}
 		}
 	} catch (err: any) {
+		Logger.error(err?.message);
 		const activeIdx = steps.findIndex((s) => s.status === "active");
 		if (activeIdx >= 0) steps[activeIdx]!.status = "error";
 
