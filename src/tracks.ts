@@ -258,22 +258,32 @@ export function isUndefined(lang: string | undefined): boolean {
 	return !l || l === "und" || l === "undetermined";
 }
 
-const SOURCE_TAG_PATTERN = /\b([A-Z]{2}(?:BD|UHD)|Netflix|Crunchyroll|Funimation|HiDive|Amazon|Disney\+?|Hulu|VRV|ADN|Wakanim|B-Global|Bilibili)\b/i;
+const SOURCE_TAG_PATTERN =
+	/\b([A-Z]{2}(?:BD|UHD|DVD)|Netflix|Crunchyroll|Funimation|HiDive|HIDIVE|Amazon|Disney\+?|DSNP|AppleTV\+?|ATV|Hulu|VRV|ADN|Wakanim|B-Global|Bilibili|NF|CR|AMZN)\b/i;
 
 export function extractSourceTag(title: string | undefined): string | null {
 	if (!title) return null;
 	const match = title.match(SOURCE_TAG_PATTERN);
 	if (!match) return null;
-	// Normalize BD tags to uppercase, streaming names to canonical form
 	const raw = match[1]!;
-	if (/^[A-Z]{2}(?:BD|UHD)$/i.test(raw)) return raw.toUpperCase();
+	// Normalize BD/DVD/UHD tags to uppercase
+	if (/^[A-Z]{2}(?:BD|UHD|DVD)$/i.test(raw)) return raw.toUpperCase();
 	// Canonical casing for known services
 	const canonical: Record<string, string> = {
 		netflix: "NF",
+		nf: "NF",
 		crunchyroll: "CR",
+		cr: "CR",
 		funimation: "Funi",
-		hidive: "HiDive",
+		hidive: "HIDIVE",
 		amazon: "AMZN",
+		amzn: "AMZN",
+		"disney+": "DSNP",
+		disney: "DSNP",
+		dsnp: "DSNP",
+		"appletv+": "ATV",
+		appletv: "ATV",
+		atv: "ATV",
 		hulu: "Hulu",
 		vrv: "VRV",
 		adn: "ADN",
@@ -320,9 +330,66 @@ export function buildSubtitleTrackName(trackType: SubtitleTrackType, sourceTitle
 }
 
 /**
+ * Determine the source/group priority for a subtitle stream.
+ *
+ * Priority tiers:
+ *   0: BD/DVD sources (JPBD=0, USBD=1, ITBD=2, other BD/DVD=3)
+ *   1: Streaming sources (NF=0, CR=1, AMZN=2, DSNP=3, ATV=4, HIDIVE=5, ADN=6, other=7)
+ *   2: Release groups (alphabetically)
+ *   3: Unknown (no source or group detected)
+ */
+function sourceGroupPriority(stream: SubtitleStreamInfo): { tier: number; rank: number; name: string } {
+	const title = stream.title || "";
+
+	// Check for a recognized source tag first
+	const source = extractSourceTag(title);
+	if (source) {
+		// BD/DVD/UHD sources
+		if (/^[A-Z]{2}(BD|UHD|DVD)$/i.test(source)) {
+			const prefix = source.slice(0, 2).toUpperCase();
+			const bdOrder: Record<string, number> = { JP: 0, US: 1, IT: 2 };
+			return { tier: 0, rank: bdOrder[prefix] ?? 3, name: source };
+		}
+
+		// Streaming sources
+		const streamingOrder: Record<string, number> = {
+			NF: 0,
+			CR: 1,
+			AMZN: 2,
+			DSNP: 3,
+			ATV: 4,
+			HIDIVE: 5,
+			ADN: 6,
+		};
+		const streamingRank = streamingOrder[source.toUpperCase()];
+		if (streamingRank !== undefined) {
+			return { tier: 1, rank: streamingRank, name: source };
+		}
+
+		// Known service but not in the priority list - treat as other streaming
+		return { tier: 1, rank: 7, name: source };
+	}
+
+	// Check for a release group
+	const group = extractGroupFromTitle(title);
+	if (group) {
+		return { tier: 2, rank: 0, name: group };
+	}
+
+	// No source or group detected
+	return { tier: 3, rank: 0, name: "" };
+}
+
+/**
  * Sort subtitle streams:
- *   - English first, Japanese second, others alphabetically
- *   - Within each language: full > honorifics > forced > sdh > commentary > storyboard
+ *   1. Language: English first, Japanese second, others alphabetically, undefined last
+ *   2. Type: full > honorifics > forced > sdh > commentary > storyboard
+ *   3. Format: text-based before picture-based (PGS, VOBSUB...)
+ *   4. Source/group:
+ *      - BD/DVD: JPBD > USBD > ITBD > other BD/DVD
+ *      - Streaming: NF > CR > AMZN > DSNP > ATV > HIDIVE > ADN > other
+ *      - Release groups (alphabetically)
+ *      - Unknown (no source or group) last
  */
 export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStreamInfo[] {
 	const langPriority = (lang: string | undefined): number => {
@@ -352,7 +419,12 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStre
 		}
 	};
 
+	const formatPriority = (stream: SubtitleStreamInfo): number => {
+		return isTextSubtitleCodec(stream.codec) ? 0 : 1;
+	};
+
 	return [...streams].sort((a, b) => {
+		// 1. Language
 		const langA = langPriority(a.language);
 		const langB = langPriority(b.language);
 		if (langA !== langB) return langA - langB;
@@ -363,7 +435,29 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStre
 			if (la !== lb) return la.localeCompare(lb);
 		}
 
-		return typePriority(a) - typePriority(b);
+		// 2. Type
+		const typeA = typePriority(a);
+		const typeB = typePriority(b);
+		if (typeA !== typeB) return typeA - typeB;
+
+		// 3. Format (text before bitmap)
+		const fmtA = formatPriority(a);
+		const fmtB = formatPriority(b);
+		if (fmtA !== fmtB) return fmtA - fmtB;
+
+		// 4. Source/group
+		const sgA = sourceGroupPriority(a);
+		const sgB = sourceGroupPriority(b);
+
+		if (sgA.tier !== sgB.tier) return sgA.tier - sgB.tier;
+		if (sgA.rank !== sgB.rank) return sgA.rank - sgB.rank;
+
+		// Within release groups (tier 2), sort alphabetically
+		if (sgA.tier === 2) {
+			return sgA.name.toLowerCase().localeCompare(sgB.name.toLowerCase());
+		}
+
+		return 0;
 	});
 }
 
