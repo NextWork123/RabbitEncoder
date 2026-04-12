@@ -12,6 +12,7 @@ import {
 	buildSubtitleTrackName,
 	sortSubtitleStreams,
 	analyzeSubtitleStreams,
+	normalizeLanguageGroup,
 } from "./tracks";
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle } from "./naming";
 import pkg from "../package.json";
@@ -571,9 +572,10 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			const stream = audioStreams[i]!;
 			const trackType = detectAudioTrackType(stream);
 			const lang = stream.language || "und";
+			const langGroup = normalizeLanguageGroup(lang);
 
-			const isDefault = trackType === "main" && !defaultAssigned.has(lang);
-			if (isDefault) defaultAssigned.add(lang);
+			const isDefault = trackType === "main" && !defaultAssigned.has(langGroup);
+			if (isDefault) defaultAssigned.add(langGroup);
 
 			if (stream.language) {
 				mkvArgs.push("--language", `0:${stream.language}`);
@@ -611,6 +613,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 				const trackType = detectSubtitleTrackType(stream);
 				const lang = stream.language || "und";
+				const langGroup = normalizeLanguageGroup(lang);
 
 				const trackName = buildSubtitleTrackName(trackType, stream.title);
 
@@ -655,8 +658,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 				switch (trackType) {
 					case "full": {
-						const isDefault = !subDefaultAssigned.has(lang);
-						if (isDefault) subDefaultAssigned.add(lang);
+						const isDefault = !subDefaultAssigned.has(langGroup);
+						if (isDefault) subDefaultAssigned.add(langGroup);
 						mkvArgs.push("--default-track-flag", `0:${isDefault ? "1" : "0"}`);
 						mkvArgs.push("--forced-display-flag", "0:0");
 						mkvArgs.push("--hearing-impaired-flag", "0:0");
@@ -664,11 +667,11 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 						break;
 					}
 					case "forced": {
-						if (subForcedAssigned.has(lang)) {
+						if (subForcedAssigned.has(langGroup)) {
 							Logger.warn(`[subtitle] Duplicate forced track for ${lang}, skipping index ${stream.index}`);
 							continue;
 						}
-						subForcedAssigned.add(lang);
+						subForcedAssigned.add(langGroup);
 						mkvArgs.push("--default-track-flag", "0:0");
 						mkvArgs.push("--forced-display-flag", "0:1");
 						mkvArgs.push("--hearing-impaired-flag", "0:0");

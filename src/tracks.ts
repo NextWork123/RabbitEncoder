@@ -222,6 +222,13 @@ function scoreGroupCandidate(s: string): number {
 	return score;
 }
 
+export function normalizeLanguageGroup(lang: string | undefined): string {
+	if (isEnglish(lang)) return "en";
+	if (isJapanese(lang)) return "ja";
+	if (isUndefined(lang)) return "und";
+	return (lang || "und").toLowerCase();
+}
+
 /**
  * Extract likely fansub/release group name from subtitle title.
  *
@@ -430,8 +437,8 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStre
 		if (langA !== langB) return langA - langB;
 
 		if (langA === 2 && langB === 2) {
-			const la = (a.language || "und").toLowerCase();
-			const lb = (b.language || "und").toLowerCase();
+			const la = normalizeLanguageGroup(a.language);
+			const lb = normalizeLanguageGroup(b.language);
 			if (la !== lb) return la.localeCompare(lb);
 		}
 
