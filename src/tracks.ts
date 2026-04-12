@@ -837,7 +837,7 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 
 		const maxLines = Math.max(...lineCounts.values());
 		for (const [streamIndex, lineCount] of lineCounts) {
-			if (maxLines > 0 && lineCount > 0 && lineCount * 10 <= maxLines) {
+			if (maxLines > 0 && lineCount > 0 && lineCount * 10 <= maxLines && lineCount < 100) {
 				const stream = streams.find((s) => s.index === streamIndex);
 				if (stream) {
 					Logger.warn(`[subtitle] Track ${streamIndex}: only ${lineCount} lines vs ${maxLines} ` + `in largest full track — reclassifying as Signs & Songs`);
