@@ -819,8 +819,8 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 		const analysis = contentCache.get(stream.index);
 		if (!analysis?.assStyles) continue;
 
-		const { signStyleLines, totalLines } = analysis.assStyles;
-		if (totalLines >= 5 && signStyleLines / totalLines >= 0.8) {
+		const { signStyleLines, dialogueStyleLines, totalLines } = analysis.assStyles;
+		if (totalLines >= 5 && signStyleLines / totalLines >= 0.8 && dialogueStyleLines < 50) {
 			Logger.warn(`[subtitle] Track ${stream.index}: ${signStyleLines}/${totalLines} lines use sign/typeset ` + `ASS styles — reclassifying as Signs & Songs`);
 			stream.isForced = true;
 		}
