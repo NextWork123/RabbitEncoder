@@ -35,6 +35,7 @@ export interface AudioStreamInfo {
 	codec?: string;
 	bitrate?: number;
 	delayMs: number;
+	isOriginal?: boolean;
 }
 
 export interface SubtitleStreamInfo {
@@ -46,12 +47,15 @@ export interface SubtitleStreamInfo {
 	isForced?: boolean;
 	isDefault?: boolean;
 	isHearingImpaired?: boolean;
+	isOriginal?: boolean;
 }
 
 export interface ProbeResult {
 	filename: string;
 	width: number;
 	height: number;
+	videoCodec: string;
+	displayAspectRatio: string;
 	duration: number;
 	audioLayout: string;
 	audioChannels: number;
@@ -73,6 +77,7 @@ export interface ProbeResult {
 	videoStreamFps: number;
 	videoDisplayFps: number;
 	isFrameRateMismatch: boolean;
+	videoOriginalFlag: boolean;
 }
 
 export interface JobStep {

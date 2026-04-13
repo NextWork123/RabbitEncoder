@@ -14,7 +14,7 @@ import {
 	analyzeSubtitleStreams,
 	normalizeLanguageGroup,
 } from "./tracks";
-import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle } from "./naming";
+import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
 import { buildPrepareFilterConfig } from "./denoise";
 
@@ -83,7 +83,6 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 	mkdirSync(tempDir, { recursive: true });
 
 	const stem = parsePath(job.filename).name;
-	const sourceTag = detectSourceTag(stem);
 	const releaseGroup = detectReleaseGroup(stem);
 	const baseTitle = extractBaseTitle(stem);
 
@@ -128,6 +127,15 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		const probe = await probeFile(job.inputPath);
 		updateJob({ probe });
+
+		let sourceTag = detectSourceTag(stem);
+		if (sourceTag === "Bluray") {
+			const inferred = inferSourceFromStream(probe.videoCodec, probe.width, probe.height);
+			if (inferred) {
+				sourceTag = inferred;
+				Logger.info(`[probe] Inferred source from stream: ${inferred} (${probe.videoCodec}, ${probe.width}x${probe.height})`);
+			}
+		}
 
 		setStep(S_PROBE, { status: "done", progress: 100 });
 
@@ -494,7 +502,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					throw new Error(`FFmpeg audio extraction failed for stream ${i}: ${ffRes.stderr || ffRes.stdout}`);
 				}
 
-				const opusArgs = ["opusenc", "--bitrate", String(bitrate), "--discard-comments", "--discard-pictures"];
+				const opusArgs = ["opusenc", "--bitrate", String(bitrate), "--no-phase-inv", "--discard-comments", "--discard-pictures"];
 
 				opusArgs.push(flacFile, opusFile);
 
@@ -528,7 +536,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			'<?xml version="1.0" encoding="UTF-8"?>',
 			"<Tags><Tag>",
 			"<Targets><TargetTypeValue>50</TargetTypeValue></Targets>",
-			`<Simple><Name>TITLE</Name><String>${escapeXml(baseTitle)}</String></Simple>`,
+			//`<Simple><Name>TITLE</Name><String>${escapeXml(baseTitle)}</String></Simple>`,
 			`<Simple><Name>ENCODED_BY</Name><String>${escapeXml(config.organization)}</String></Simple>`,
 
 			"<Simple>",
@@ -563,6 +571,14 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		mkvArgs.push("--language", "0:und");
 		mkvArgs.push("--track-name", `0:${config.organization}`);
+		mkvArgs.push("--original-flag", `0:${probe.videoOriginalFlag ? "1" : "0"}`);
+
+		if (probe.displayAspectRatio && probe.displayAspectRatio !== "0:1" && probe.displayAspectRatio !== "N/A") {
+			const dar = probe.displayAspectRatio.replace(":", "/");
+			mkvArgs.push("--aspect-ratio", `0:${dar}`);
+			Logger.info(`[mux] Preserving display aspect ratio: ${probe.displayAspectRatio}`);
+		}
+
 		mkvArgs.push(videoMkv);
 
 		// Audio tracks
@@ -584,6 +600,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			mkvArgs.push("--track-name", `0:`);
 			mkvArgs.push("--default-track-flag", `0:${isDefault ? "1" : "0"}`);
 			mkvArgs.push("--forced-display-flag", "0:0");
+			mkvArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
 
 			if (trackType === "commentary") {
 				mkvArgs.push("--commentary-flag", "0:1");
@@ -664,6 +681,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 						mkvArgs.push("--forced-display-flag", "0:0");
 						mkvArgs.push("--hearing-impaired-flag", "0:0");
 						mkvArgs.push("--commentary-flag", "0:0");
+						mkvArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
 						break;
 					}
 					case "forced": {
@@ -676,6 +694,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 						mkvArgs.push("--forced-display-flag", "0:1");
 						mkvArgs.push("--hearing-impaired-flag", "0:0");
 						mkvArgs.push("--commentary-flag", "0:0");
+						mkvArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
 						break;
 					}
 					case "honorifics": {
@@ -683,6 +702,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 						mkvArgs.push("--forced-display-flag", "0:0");
 						mkvArgs.push("--hearing-impaired-flag", "0:0");
 						mkvArgs.push("--commentary-flag", "0:0");
+						mkvArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
 						break;
 					}
 					case "sdh": {
@@ -690,6 +710,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 						mkvArgs.push("--forced-display-flag", "0:0");
 						mkvArgs.push("--hearing-impaired-flag", "0:1");
 						mkvArgs.push("--commentary-flag", "0:0");
+						mkvArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
 						break;
 					}
 					case "commentary": {
@@ -697,6 +718,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 						mkvArgs.push("--forced-display-flag", "0:0");
 						mkvArgs.push("--hearing-impaired-flag", "0:0");
 						mkvArgs.push("--commentary-flag", "0:1");
+						mkvArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
 						break;
 					}
 				}

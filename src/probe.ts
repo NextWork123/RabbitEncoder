@@ -14,20 +14,32 @@ async function mediainfo(file: string, inform: string): Promise<string> {
 export async function probeFile(inputPath: string): Promise<ProbeResult> {
 	const filename = inputPath.split("/").pop() || "";
 
-	const streamsRaw = await exec(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries", "stream=index,width,height", "-of", "csv=p=0", inputPath]);
+	const streamsRaw = await exec([
+		"ffprobe",
+		"-v",
+		"error",
+		"-select_streams",
+		"v",
+		"-show_entries",
+		"stream=index,width,height,codec_name",
+		"-of",
+		"csv=p=0",
+		inputPath,
+	]);
 	const streams = streamsRaw
 		.split("\n")
 		.filter(Boolean)
 		.map((line) => {
-			const [index, w, h] = line.split(",");
+			const [index, w, h, codec] = line.split(",");
 			return {
 				index: parseInt(index!),
 				width: parseInt(w!),
 				height: parseInt(h!),
+				codec: codec || "",
 			};
 		});
 	streams.sort((a, b) => b.width - a.width);
-	const best = streams[0] || { index: 0, width: 1920, height: 1080 };
+	const best = streams[0] || { index: 0, width: 1920, height: 1080, codec: "" };
 
 	const durationStr = await exec(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", inputPath]);
 	const duration = parseFloat(durationStr) || 0;
@@ -47,6 +59,9 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 	const videoDisplayFps = parseFloat(containerFpsStr) || 23.976;
 	const videoFrameRate = containerFpsNum && containerFpsDen ? `${containerFpsNum}/${containerFpsDen}` : "24000/1001";
 	const isFrameRateMismatch = Math.abs(videoStreamFps - videoDisplayFps) > 0.5;
+
+	const darRaw = await exec(["ffprobe", "-v", "error", "-select_streams", `v:0`, "-show_entries", "stream=display_aspect_ratio", "-of", "csv=p=0", inputPath]);
+	const displayAspectRatio = darRaw.trim() || "";
 
 	const audioInfoJson = await exec([
 		"ffprobe",
@@ -100,6 +115,27 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		isHearingImpaired: s.disposition?.hearing_impaired === 1,
 	}));
 
+	// Probe original language flags
+	let videoOriginalFlag = false;
+	const sourceExt = (inputPath.split(".").pop() || "").toLowerCase();
+	if (sourceExt === "mkv" || sourceExt === "mks") {
+		try {
+			const mkvIdJson = await exec(["mkvmerge", "-J", inputPath]);
+			const mkvId = JSON.parse(mkvIdJson);
+			const originalFlags = new Map<number, boolean>();
+			for (const track of mkvId.tracks || []) {
+				originalFlags.set(track.id as number, track.properties?.original_flag === true);
+			}
+			videoOriginalFlag = originalFlags.get(best.index) ?? false;
+			for (const stream of audioStreams) {
+				stream.isOriginal = originalFlags.get(stream.index) ?? false;
+			}
+			for (const stream of subtitleStreams) {
+				stream.isOriginal = originalFlags.get(stream.index) ?? false;
+			}
+		} catch {}
+	}
+
 	const firstAudio = audioStreams[0];
 	const audioLayout = firstAudio ? normalizeLayout(firstAudio.channelLayout) : "stereo";
 	const audioChannels = firstAudio ? firstAudio.channels : 2;
@@ -122,6 +158,8 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		filename,
 		width: best.width,
 		height: best.height,
+		videoCodec: best.codec,
+		displayAspectRatio,
 		duration,
 		audioLayout,
 		audioChannels,
@@ -143,6 +181,7 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		videoStreamFps,
 		videoDisplayFps,
 		isFrameRateMismatch,
+		videoOriginalFlag,
 	};
 }
 

@@ -1,6 +1,26 @@
 import type { DenoiseLevel } from "./types";
 
 /**
+ * Infer an optical-disc source tag from the video stream's codec and resolution.
+ * Returns null when the stream doesn't match any known disc format.
+ *
+ *   VCD:  MPEG-1, 352×240 (NTSC) / 352×288 (PAL)
+ *   SVCD: MPEG-2, ≤480 wide, SD height
+ *   DVD:  MPEG-2, >480 wide (720/704), SD height
+ */
+export function inferSourceFromStream(codec: string, width: number, height: number): string | null {
+	if (height > 576) return null;
+
+	const c = codec.toLowerCase();
+	if (c === "mpeg1video") return "VCD";
+	if (c === "mpeg2video") {
+		if (width <= 480) return "SVCD";
+		return "DVD";
+	}
+	return null;
+}
+
+/**
  * Detect the source tag from a filename (Bluray, WEBDL, WEBRip, etc.).
  * REMUX files are tagged as Bluray after re-encoding.
  */
