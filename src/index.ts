@@ -211,7 +211,7 @@ if (config.libraryDirs.length > 0) {
 Bun.serve({
 	hostname: "0.0.0.0",
 	port: config.port,
-	idleTimeout: 300,
+	idleTimeout: 255,
 	routes: {
 		"/": indexHtml,
 	},
