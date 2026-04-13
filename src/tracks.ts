@@ -1,4 +1,4 @@
-import type { AudioStreamInfo, SubtitleStreamInfo } from "./types";
+import type { AudioStreamInfo, SubtitlePreviewResult, SubtitlePreviewTrack, SubtitleStreamInfo } from "./types";
 import { run } from "./process";
 import { Logger } from "./logger";
 import { join } from "path";
@@ -897,4 +897,204 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 		return `${lang}:${type}`;
 	});
 	Logger.info(`[subtitle] Final classification: ${summary.join(", ")}`);
+}
+
+/**
+ * Map a language code (BCP47, ISO 639-1, ISO 639-2/3) to a flag emoji.
+ */
+export function languageToFlag(lang: string | undefined): string {
+	const LANG_TO_COUNTRY: Record<string, string> = {
+		en: "US",
+		ja: "JP",
+		de: "DE",
+		fr: "FR",
+		es: "ES",
+		it: "IT",
+		pt: "BR",
+		ru: "RU",
+		zh: "CN",
+		ko: "KR",
+		ar: "SA",
+		hi: "IN",
+		th: "TH",
+		vi: "VN",
+		pl: "PL",
+		nl: "NL",
+		sv: "SE",
+		da: "DK",
+		fi: "FI",
+		nb: "NO",
+		no: "NO",
+		cs: "CZ",
+		sk: "SK",
+		hu: "HU",
+		ro: "RO",
+		bg: "BG",
+		hr: "HR",
+		sr: "RS",
+		sl: "SI",
+		uk: "UA",
+		el: "GR",
+		tr: "TR",
+		he: "IL",
+		id: "ID",
+		ms: "MY",
+		tl: "PH",
+		// ISO 639-2/3
+		eng: "US",
+		jpn: "JP",
+		deu: "DE",
+		ger: "DE",
+		fra: "FR",
+		fre: "FR",
+		spa: "ES",
+		ita: "IT",
+		por: "BR",
+		rus: "RU",
+		zho: "CN",
+		chi: "CN",
+		kor: "KR",
+		ara: "SA",
+		hin: "IN",
+		tha: "TH",
+		vie: "VN",
+		pol: "PL",
+		nld: "NL",
+		dut: "NL",
+		swe: "SE",
+		dan: "DK",
+		fin: "FI",
+		nob: "NO",
+		nor: "NO",
+		ces: "CZ",
+		cze: "CZ",
+		slk: "SK",
+		slo: "SK",
+		hun: "HU",
+		ron: "RO",
+		rum: "RO",
+		bul: "BG",
+		hrv: "HR",
+		srp: "RS",
+		slv: "SI",
+		ukr: "UA",
+		ell: "GR",
+		gre: "GR",
+		tur: "TR",
+		heb: "IL",
+		ind: "ID",
+		msa: "MY",
+		may: "MY",
+		tgl: "PH",
+		fil: "PH",
+		enm: "US", // Middle English (honorifics)
+	};
+
+	const GLOBE = "\u{1F310}";
+
+	if (!lang || lang === "und" || lang === "undetermined") return GLOBE;
+
+	const base = lang.split("-")[0]!.toLowerCase();
+	const country = LANG_TO_COUNTRY[base];
+	if (!country) return GLOBE;
+
+	return String.fromCodePoint(...[...country].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+}
+
+/**
+ * Compute MKV flags for a subtitle track exactly as the encoder would.
+ */
+function computeOutputFlags(
+	trackType: SubtitleTrackType,
+	langGroup: string,
+	defaultAssigned: Set<string>,
+	forcedAssigned: Set<string>,
+): { isDefault: boolean; isForced: boolean; isHearingImpaired: boolean; isCommentary: boolean } {
+	switch (trackType) {
+		case "full": {
+			const isDefault = !defaultAssigned.has(langGroup);
+			if (isDefault) defaultAssigned.add(langGroup);
+			return { isDefault, isForced: false, isHearingImpaired: false, isCommentary: false };
+		}
+		case "honorifics":
+			return { isDefault: true, isForced: false, isHearingImpaired: false, isCommentary: false };
+		case "forced": {
+			const alreadyForced = forcedAssigned.has(langGroup);
+			if (!alreadyForced) forcedAssigned.add(langGroup);
+			return { isDefault: false, isForced: !alreadyForced, isHearingImpaired: false, isCommentary: false };
+		}
+		case "sdh":
+			return { isDefault: false, isForced: false, isHearingImpaired: true, isCommentary: false };
+		case "commentary":
+			return { isDefault: false, isForced: false, isHearingImpaired: false, isCommentary: true };
+		default:
+			return { isDefault: false, isForced: false, isHearingImpaired: false, isCommentary: false };
+	}
+}
+
+/**
+ * Run the full subtitle analysis pipeline without encoding and return
+ * a before/after comparison.
+ */
+export async function previewSubtitles(inputPath: string, sourceStreams: SubtitleStreamInfo[], tempDir: string): Promise<SubtitlePreviewResult> {
+	const source: SubtitlePreviewTrack[] = sourceStreams.map((s) => {
+		const trackType = detectSubtitleTrackType(s);
+		return {
+			index: s.index,
+			codec: s.codec,
+			language: s.language || "und",
+			flag: languageToFlag(s.language),
+			title: s.title || "",
+			trackName: s.title || "",
+			trackType,
+			isDefault: s.isDefault || false,
+			isForced: s.isForced || false,
+			isHearingImpaired: s.isHearingImpaired || false,
+			isCommentary: false,
+			isText: isTextSubtitleCodec(s.codec),
+		};
+	});
+
+	const cloned: SubtitleStreamInfo[] = sourceStreams.map((s) => ({
+		index: s.index,
+		codec: s.codec,
+		language: s.language,
+		title: s.title,
+		isForced: s.isForced,
+		isDefault: s.isDefault,
+		isHearingImpaired: s.isHearingImpaired,
+	}));
+
+	await analyzeSubtitleStreams(cloned, inputPath, tempDir);
+
+	const sorted = sortSubtitleStreams(cloned);
+
+	const defaultAssigned = new Set<string>();
+	const forcedAssigned = new Set<string>();
+
+	const output: SubtitlePreviewTrack[] = sorted.map((s) => {
+		const trackType = detectSubtitleTrackType(s);
+		const lang = s.language || "und";
+		const langGroup = normalizeLanguageGroup(lang);
+		const trackName = buildSubtitleTrackName(trackType, s.title);
+
+		let effectiveLang = lang;
+		if (trackType === "honorifics") effectiveLang = "enm";
+
+		const flags = computeOutputFlags(trackType, langGroup, defaultAssigned, forcedAssigned);
+
+		return {
+			index: s.index,
+			codec: s.codec,
+			language: effectiveLang,
+			flag: languageToFlag(effectiveLang),
+			title: s.title || "",
+			trackName,
+			trackType,
+			...flags,
+			isText: isTextSubtitleCodec(s.codec),
+		};
+	});
+
+	return { source, output };
 }

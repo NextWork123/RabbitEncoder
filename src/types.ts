@@ -119,3 +119,24 @@ export interface AppConfig {
 	libraryDirs: string[];
 	languageDetector: LanguageDetector;
 }
+
+export interface SubtitlePreviewTrack {
+	index: number;
+	codec: string;
+	language: string;
+	/** Country flag emoji derived from language */
+	flag: string;
+	title: string;
+	trackName: string;
+	trackType: string;
+	isDefault: boolean;
+	isForced: boolean;
+	isHearingImpaired: boolean;
+	isCommentary: boolean;
+	isText: boolean;
+}
+
+export interface SubtitlePreviewResult {
+	source: SubtitlePreviewTrack[];
+	output: SubtitlePreviewTrack[];
+}

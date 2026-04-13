@@ -1,4 +1,4 @@
-import { mkdirSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "fs";
 import { loadConfig } from "./config";
 import {
 	initStore,
@@ -22,6 +22,8 @@ import { Logger } from "./logger";
 import { logger } from "@rabbit-company/web-middleware/logger";
 import indexHtml from "../public/index.html";
 import { bearerAuth } from "@rabbit-company/web-middleware/bearer-auth";
+import { previewSubtitles } from "./tracks";
+import { join } from "path";
 
 export const config = await loadConfig();
 
@@ -83,6 +85,38 @@ app.post("/api/jobs/:id/cancel", (c) => {
 	const ok = cancelJob(c.params.id!);
 	if (!ok) return c.json({ error: "Job not found or not currently encoding" }, 400);
 	return c.json({ ok: true });
+});
+
+app.get("/api/jobs/:id/subtitle-preview", async (c) => {
+	const job = getJob(c.params.id!);
+	if (!job) return c.json({ error: "Job not found" }, 404);
+
+	if (!job.probe) {
+		return c.json({ error: "Job has not been probed yet" }, 400);
+	}
+
+	const subtitleStreams = job.probe.subtitleStreams || [];
+	if (subtitleStreams.length === 0) {
+		return c.json({ source: [], output: [] });
+	}
+
+	if (!existsSync(job.inputPath)) {
+		return c.json({ error: "Source file no longer accessible" }, 400);
+	}
+
+	try {
+		const tempDir = mkdtempSync(join(config.tempDir, "sub-preview-"));
+
+		const result = await previewSubtitles(job.inputPath, subtitleStreams, tempDir);
+
+		try {
+			rmSync(tempDir, { recursive: true, force: true });
+		} catch {}
+
+		return c.json(result);
+	} catch (err: any) {
+		return c.json({ error: `Preview failed: ${err.message || err}` }, 500);
+	}
 });
 
 app.post("/api/jobs/:id/move", async (c) => {
@@ -177,6 +211,7 @@ if (config.libraryDirs.length > 0) {
 Bun.serve({
 	hostname: "0.0.0.0",
 	port: config.port,
+	idleTimeout: 300,
 	routes: {
 		"/": indexHtml,
 	},

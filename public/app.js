@@ -424,6 +424,84 @@ function renderStepTime(step) {
 	return "";
 }
 
+async function openSubtitlePreview(jobId) {
+	const jobs = await fetchJobs();
+	const job = jobs.find((j) => j.id === jobId);
+	if (!job) return;
+
+	document.getElementById("sub-preview-title").textContent = `Subtitles — ${job.filename}`;
+	document.getElementById("sub-preview-loading").style.display = "";
+	document.getElementById("sub-preview-error").style.display = "none";
+	document.getElementById("sub-preview-content").style.display = "none";
+	document.getElementById("sub-preview-modal").style.display = "";
+
+	try {
+		const res = await authFetch(`${API}/api/jobs/${jobId}/subtitle-preview`);
+		const data = await res.json();
+
+		if (data.error) {
+			document.getElementById("sub-preview-loading").style.display = "none";
+			document.getElementById("sub-preview-error").textContent = data.error;
+			document.getElementById("sub-preview-error").style.display = "";
+			return;
+		}
+
+		renderSubtitlePreview(data);
+	} catch (err) {
+		document.getElementById("sub-preview-loading").style.display = "none";
+		document.getElementById("sub-preview-error").textContent = `Failed: ${err.message || err}`;
+		document.getElementById("sub-preview-error").style.display = "";
+	}
+}
+
+function renderSubtitlePreview(data) {
+	document.getElementById("sub-preview-loading").style.display = "none";
+	document.getElementById("sub-preview-content").style.display = "";
+
+	document.getElementById("sub-preview-source").innerHTML =
+		data.source.length > 0 ? data.source.map((t) => renderSubTrack(t, false)).join("") : '<div class="sub-track"><em>No subtitle tracks</em></div>';
+
+	document.getElementById("sub-preview-output").innerHTML =
+		data.output.length > 0
+			? data.output
+					.map((t, i) => {
+						// Highlight changes
+						const src = data.source.find((s) => s.index === t.index);
+						const changed = src && (src.language !== t.language || src.trackName !== t.trackName || data.source.indexOf(src) !== i);
+						return renderSubTrack(t, changed);
+					})
+					.join("")
+			: '<div class="sub-track"><em>No subtitle tracks</em></div>';
+}
+
+function renderSubTrack(track, highlight) {
+	const badges = [];
+	if (track.isDefault) badges.push('<span class="sub-badge sub-badge-default">Default</span>');
+	if (track.isForced) badges.push('<span class="sub-badge sub-badge-forced">Forced</span>');
+	if (track.isHearingImpaired) badges.push('<span class="sub-badge sub-badge-hi">HI</span>');
+	if (track.isCommentary) badges.push('<span class="sub-badge sub-badge-commentary">Commentary</span>');
+	badges.push(`<span class="sub-badge sub-badge-type">${escapeHtml(track.trackType)}</span>`);
+
+	return `
+    <div class="sub-track${highlight ? " sub-track-changed" : ""}">
+      <div class="sub-track-top">
+        <span class="sub-track-flag">${track.flag}</span>
+        <span class="sub-track-name" title="${escapeHtml(track.trackName)}">${escapeHtml(track.trackName)}</span>
+        <span class="sub-track-lang">${escapeHtml(track.language)}</span>
+        <span class="sub-track-codec">${escapeHtml(track.codec)}</span>
+      </div>
+      <div class="sub-track-badges">${badges.join("")}</div>
+    </div>`;
+}
+
+function closeSubPreview() {
+	document.getElementById("sub-preview-modal").style.display = "none";
+}
+
+function closeSubPreviewIfOutside(e) {
+	if (e.target === e.currentTarget) closeSubPreview();
+}
+
 function renderSteps(steps) {
 	if (!steps || steps.length === 0) return "";
 
@@ -493,6 +571,16 @@ function renderJobCard(job) {
 		error = `<div class="job-error">${escapeHtml(job.error)}</div>`;
 	}
 
+	const hasSubs = job.probe?.subtitleStreams?.length > 0;
+	const subBtn = hasSubs
+		? `
+  <button class="btn-icon" title="Preview Subtitles" data-job-id="${job.id}" data-action="sub-preview">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+    </svg>
+  </button>`
+		: "";
+
 	let actions = "";
 	if (job.status === "queued") {
 		actions = `
@@ -504,6 +592,7 @@ function renderJobCard(job) {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
       </div>
+			${subBtn}
       <button class="btn-icon" title="Settings" data-job-id="${job.id}" data-action="edit">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
       </button>
@@ -512,11 +601,13 @@ function renderJobCard(job) {
       </button>`;
 	} else if (active) {
 		actions = `
+			${subBtn}
       <button class="btn-icon btn-cancel" title="Cancel" data-job-id="${job.id}" data-action="cancel">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
       </button>`;
 	} else if (err) {
 		actions = `
+			${subBtn}
       <button class="btn-icon" title="Retry" data-job-id="${job.id}" data-action="retry">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
       </button>
@@ -1356,6 +1447,7 @@ function initEventListeners() {
 	document.getElementById("close-job-modal-btn").addEventListener("click", closeJobModal);
 	document.getElementById("job-modal").addEventListener("click", closeJobModalIfOutside);
 	document.getElementById("save-job-settings-btn").addEventListener("click", saveJobSettings);
+	document.getElementById("sub-preview-modal").addEventListener("click", closeSubPreviewIfOutside);
 	document.getElementById("logout-btn").addEventListener("click", logout);
 
 	document.getElementById("login-submit-btn").addEventListener("click", handleLogin);
@@ -1409,11 +1501,14 @@ function initEventListeners() {
 			doRetry(jobId);
 		} else if (action === "cancel") {
 			cancelJob(jobId).then(() => update());
+		} else if (action === "sub-preview") {
+			openSubtitlePreview(jobId);
 		}
 	});
 
 	document.getElementById("open-library-btn").addEventListener("click", openLibrary);
 	document.getElementById("close-library-btn").addEventListener("click", closeLibrary);
+	document.getElementById("close-subtitle-preview-btn").addEventListener("click", closeSubPreview);
 	document.getElementById("library-modal").addEventListener("click", closeLibraryIfOutside);
 	document.getElementById("library-encode-btn").addEventListener("click", handleLibraryEncode);
 

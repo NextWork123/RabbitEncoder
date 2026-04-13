@@ -149,19 +149,20 @@ Source tags are detected from the input filename: `Bluray`, `WEBDL`, `WEBRip`, `
 
 ## API Endpoints
 
-| Method   | Endpoint               | Description                                            |
-| -------- | ---------------------- | ------------------------------------------------------ |
-| `GET`    | `/api/jobs`            | List all jobs                                          |
-| `GET`    | `/api/jobs/:id`        | Get job details                                        |
-| `PATCH`  | `/api/jobs/:id`        | Update job settings (queued only)                      |
-| `DELETE` | `/api/jobs/:id`        | Remove a job                                           |
-| `POST`   | `/api/jobs/:id/retry`  | Retry a failed job                                     |
-| `POST`   | `/api/jobs/:id/cancel` | Cancel an actively encoding job                        |
-| `GET`    | `/api/config`          | Get default settings                                   |
-| `PATCH`  | `/api/config`          | Update default settings                                |
-| `GET`    | `/api/library`         | List configured library root directories               |
-| `GET`    | `/api/library/browse`  | Browse a library folder (`?path=/data/library/Animes`) |
-| `POST`   | `/api/library/encode`  | Queue all videos in a folder for in-place encoding     |
+| Method   | Endpoint                         | Description                                            |
+| -------- | -------------------------------- | ------------------------------------------------------ |
+| `GET`    | `/api/jobs`                      | List all jobs                                          |
+| `GET`    | `/api/jobs/:id`                  | Get job details                                        |
+| `PATCH`  | `/api/jobs/:id`                  | Update job settings (queued only)                      |
+| `DELETE` | `/api/jobs/:id`                  | Remove a job                                           |
+| `POST`   | `/api/jobs/:id/retry`            | Retry a failed job                                     |
+| `POST`   | `/api/jobs/:id/cancel`           | Cancel an actively encoding job                        |
+| `GET`    | `/api/jobs/:id/subtitle-preview` | Preview subtitle reorder/rename for a job              |
+| `GET`    | `/api/config`                    | Get default settings                                   |
+| `PATCH`  | `/api/config`                    | Update default settings                                |
+| `GET`    | `/api/library`                   | List configured library root directories               |
+| `GET`    | `/api/library/browse`            | Browse a library folder (`?path=/data/library/Animes`) |
+| `POST`   | `/api/library/encode`            | Queue all videos in a folder for in-place encoding     |
 
 All API endpoints require authentication via `Authorization: Bearer <token>` header, where the token is the BLAKE2b-512 hash of `rabbitencoder-{PASSWORD}`.
 

@@ -162,6 +162,31 @@
 					</div>
 				</div>
 			</div>
+
+			<!-- Subtitle Preview Modal -->
+			<div id="sub-preview-modal" class="modal-overlay" style="display: none">
+				<div class="modal sub-preview-modal">
+					<div class="modal-header">
+						<h2 id="sub-preview-title">Subtitle Preview</h2>
+						<button class="btn-close" id="close-subtitle-preview-btn">&times;</button>
+					</div>
+					<div class="modal-body" id="sub-preview-body">
+						<div id="sub-preview-loading" class="sub-preview-loading">Analyzing subtitles…</div>
+						<div id="sub-preview-error" class="sub-preview-error" style="display: none"></div>
+						<div id="sub-preview-content" style="display: none">
+							<div class="sub-preview-section">
+								<h3>Source</h3>
+								<div id="sub-preview-source" class="sub-track-list"></div>
+							</div>
+							<div class="sub-preview-arrow">→</div>
+							<div class="sub-preview-section">
+								<h3>After Encode</h3>
+								<div id="sub-preview-output" class="sub-track-list"></div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
 		</div>
 
 		<script type="module" src="app.js"></script>
