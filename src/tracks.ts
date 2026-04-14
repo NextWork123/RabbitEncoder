@@ -347,11 +347,11 @@ export function extractSourceTag(title: string | undefined): string | null {
  */
 export function buildSubtitleTrackName(trackType: SubtitleTrackType, sourceTitle?: string): string {
 	const title = sourceTitle || "";
-	const isDubtitle = /dubtitle/i.test(title);
+	const isDubtitle = /dubtitle|\bdub\b/i.test(title);
 
 	const labels: Record<SubtitleTrackType, string> = {
 		full: isDubtitle ? "Full Dubtitles" : "Full Subtitles",
-		honorifics: "Full Subtitles (Honorifics)",
+		honorifics: isDubtitle ? "Full Dubtitles (Honorifics)" : "Full Subtitles (Honorifics)",
 		forced: "Signs & Songs",
 		sdh: "SDH",
 		commentary: "Commentary",
