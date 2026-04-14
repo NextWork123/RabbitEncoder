@@ -24,6 +24,7 @@ import indexHtml from "../public/index.html";
 import { bearerAuth } from "@rabbit-company/web-middleware/bearer-auth";
 import { previewSubtitles } from "./tracks";
 import { join } from "path";
+import { probeFile } from "./probe";
 
 export const config = await loadConfig();
 
@@ -91,17 +92,18 @@ app.get("/api/jobs/:id/subtitle-preview", async (c) => {
 	const job = getJob(c.params.id!);
 	if (!job) return c.json({ error: "Job not found" }, 404);
 
-	if (!job.probe) {
-		return c.json({ error: "Job has not been probed yet" }, 400);
-	}
-
-	const subtitleStreams = job.probe.subtitleStreams || [];
-	if (subtitleStreams.length === 0) {
-		return c.json({ source: [], output: [] });
-	}
-
 	if (!existsSync(job.inputPath)) {
 		return c.json({ error: "Source file no longer accessible" }, 400);
+	}
+
+	let probe = job.probe;
+	if (!job.probe) {
+		probe = await probeFile(job.inputPath);
+	}
+
+	const subtitleStreams = probe!.subtitleStreams || [];
+	if (subtitleStreams.length === 0) {
+		return c.json({ source: [], output: [] });
 	}
 
 	try {

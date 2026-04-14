@@ -571,15 +571,11 @@ function renderJobCard(job) {
 		error = `<div class="job-error">${escapeHtml(job.error)}</div>`;
 	}
 
-	const hasSubs = job.probe?.subtitleStreams?.length > 0;
-	const subBtn = hasSubs
-		? `
-  <button class="btn-icon" title="Preview Subtitles" data-job-id="${job.id}" data-action="sub-preview">
+	const subBtn = `<button class="btn-icon" title="Preview Subtitles" data-job-id="${job.id}" data-action="sub-preview">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
     </svg>
-  </button>`
-		: "";
+  </button>`;
 
 	let actions = "";
 	if (job.status === "queued") {
