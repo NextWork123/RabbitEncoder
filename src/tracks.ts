@@ -813,6 +813,17 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 		const extraction = extractions.get(stream.index);
 		if (!extraction) continue;
 
+		const analysis = contentCache.get(stream.index);
+		if (analysis?.assStyles) {
+			const { signStyleLines, totalLines } = analysis.assStyles;
+			if (totalLines >= 5 && signStyleLines / totalLines >= 0.8) {
+				Logger.info(
+					`[subtitle] Track ${stream.index}: skipping language detection — ` + `${signStyleLines}/${totalLines} sign/fx lines would confuse detector`,
+				);
+				continue;
+			}
+		}
+
 		const result = await detectLanguage(extraction.filePath, signal);
 
 		if (result === null) {
