@@ -44,6 +44,7 @@ All settings are configurable via environment variables in `docker-compose.yml`:
 | `ENCODER_DENOISE`       | `off`           | Default denoise level (`off`, `light`, `medium`, `heavy`)           |
 | `ENCODER_DOWNSCALE`     | `false`         | Downscale 4K sources to 1080p before encoding (`true`/`false`)      |
 | `ENCODER_SKIP_BOOSTING` | `false`         | Skip per-scene CRF boosting, encode directly with SvtAv1EncApp      |
+| `AUDIO_NO_PHASE_INV`    | `false`         | Disable phase inversion in Opus encoder (`true`/`false`)            |
 | `AUDIO_BITRATE_MONO`    | `64`            | Opus bitrate for mono audio (kbps)                                  |
 | `AUDIO_BITRATE_STEREO`  | `128`           | Opus bitrate for stereo audio (kbps)                                |
 | `AUDIO_BITRATE_2_1`     | `160`           | Opus bitrate for 2.1 audio (kbps)                                   |

@@ -30,6 +30,7 @@ export async function loadConfig(): Promise<AppConfig> {
 	const denoiseGpu = ["true", "1", "yes"].includes((process.env.ENCODER_DENOISE_GPU || "").toLowerCase());
 	const downscale = ["true", "1", "yes"].includes((process.env.ENCODER_DOWNSCALE || "").toLowerCase());
 	const skipBoosting = ["true", "1", "yes"].includes((process.env.ENCODER_SKIP_BOOSTING || "").toLowerCase());
+	const noPhaseInv = ["true", "1", "yes"].includes((process.env.AUDIO_NO_PHASE_INV || "").toLowerCase());
 
 	const bitrates: AudioChannelBitrates = {
 		mono: parseInt(process.env.AUDIO_BITRATE_MONO || "") || DEFAULT_BITRATES.mono,
@@ -66,6 +67,7 @@ export async function loadConfig(): Promise<AppConfig> {
 			denoiseGpu,
 			downscale,
 			skipBoosting,
+			noPhaseInv,
 		},
 	};
 }

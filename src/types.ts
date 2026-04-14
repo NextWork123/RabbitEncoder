@@ -24,6 +24,7 @@ export interface JobSettings {
 	denoiseGpu: boolean;
 	downscale: boolean;
 	skipBoosting: boolean;
+	noPhaseInv: boolean;
 }
 
 export interface AudioStreamInfo {

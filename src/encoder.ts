@@ -502,8 +502,12 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					throw new Error(`FFmpeg audio extraction failed for stream ${i}: ${ffRes.stderr || ffRes.stdout}`);
 				}
 
-				const opusArgs = ["opusenc", "--bitrate", String(bitrate), "--no-phase-inv", "--discard-comments", "--discard-pictures"];
-
+				const opusArgs = ["opusenc", "--bitrate", String(bitrate)];
+				if (job.settings.noPhaseInv) {
+					opusArgs.push("--no-phase-inv");
+				}
+				opusArgs.push("--discard-comments");
+				opusArgs.push("--discard-pictures");
 				opusArgs.push(flacFile, opusFile);
 
 				const opusRes = await run(opusArgs, { signal });

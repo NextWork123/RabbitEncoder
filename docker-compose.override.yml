@@ -38,6 +38,8 @@ services:
       - ENCODER_DOWNSCALE=false
       # Skip boosting (bypass per-scene CRF zone analysis, encode directly)
       - ENCODER_SKIP_BOOSTING=false
+      # Disable phase inversion in Opus encoder (true/false)
+      - AUDIO_NO_PHASE_INV=false
 
       # Audio bitrates (kbps per channel layout)
       - AUDIO_BITRATE_MONO=64
