@@ -672,6 +672,15 @@ function analyzeSrtContent(srtText: string): SubtitleContentAnalysis {
 	};
 }
 
+const DIALOGUE_STYLE_PATTERN =
+	/^(default|main|dialogue|dialog|narrat|italic|flashback|thought|internal|alt(?:ernate)?|overlap(?![-_ ]?sign)|top(?![-_ ]?title))/i;
+
+const DIALOGUE_STYLE_ANYWHERE_PATTERN = /(?:^|[-_ ])(default|main|dialogue|dialog|narrat|italics?|flashback|thought|internal)(?:$|[-_ ]|s\b)/i;
+
+function isDialogueStyle(style: string): boolean {
+	return DIALOGUE_STYLE_PATTERN.test(style) || DIALOGUE_STYLE_ANYWHERE_PATTERN.test(style);
+}
+
 function analyzeAssContent(assText: string): SubtitleContentAnalysis {
 	const dialogueLines = parseAssDialogueLines(assText);
 	let signStyleLines = 0;
@@ -680,19 +689,25 @@ function analyzeAssContent(assText: string): SubtitleContentAnalysis {
 	let sdhLineCount = 0;
 	let honorificCount = 0;
 	let totalTextLines = 0;
+	let dialogueTextLines = 0;
 
 	for (const { style, text } of dialogueLines) {
-		if (SIGN_STYLE_PATTERN.test(style)) signStyleLines++;
-		else if (/^(default|main|dialogue|dialog|narrat|italic|flashback|thought|internal|alt(?:ernate)?|overlap(?![-_ ]?sign)|top(?![-_ ]?title))/i.test(style))
-			dialogueStyleLines++;
+		const isSign = SIGN_STYLE_PATTERN.test(style);
+		const isDialogue = !isSign && isDialogueStyle(style);
+
+		if (isSign) signStyleLines++;
+		else if (isDialogue) dialogueStyleLines++;
 		else otherStyleLines++;
 
 		const cleaned = stripSubtitleTags(text);
 		if (!cleaned) continue;
 		totalTextLines++;
 
-		if (SDH_SPEAKER_PATTERN.test(cleaned) || SDH_BRACKET_PATTERN.test(cleaned) || SDH_PAREN_PATTERN.test(cleaned) || SDH_MUSIC_PATTERN.test(cleaned)) {
-			sdhLineCount++;
+		if (isDialogue) {
+			dialogueTextLines++;
+			if (SDH_SPEAKER_PATTERN.test(cleaned) || SDH_BRACKET_PATTERN.test(cleaned) || SDH_PAREN_PATTERN.test(cleaned) || SDH_MUSIC_PATTERN.test(cleaned)) {
+				sdhLineCount++;
+			}
 		}
 
 		const honMatches = cleaned.match(HONORIFIC_PATTERN);
@@ -702,7 +717,7 @@ function analyzeAssContent(assText: string): SubtitleContentAnalysis {
 	return {
 		dialogueLineCount: dialogueLines.length,
 		assStyles: { signStyleLines, dialogueStyleLines, otherStyleLines, totalLines: dialogueLines.length },
-		sdhRatio: totalTextLines > 0 ? sdhLineCount / totalTextLines : 0,
+		sdhRatio: dialogueTextLines > 0 ? sdhLineCount / dialogueTextLines : 0,
 		honorificCount,
 	};
 }
