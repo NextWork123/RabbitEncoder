@@ -63,6 +63,9 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 	const darRaw = await exec(["ffprobe", "-v", "error", "-select_streams", `v:0`, "-show_entries", "stream=display_aspect_ratio", "-of", "csv=p=0", inputPath]);
 	const displayAspectRatio = darRaw.trim() || "";
 
+	const videoLangRaw = await exec(["ffprobe", "-v", "error", "-select_streams", `v:0`, "-show_entries", "stream_tags=language", "-of", "csv=p=0", inputPath]);
+	const videoLanguage = videoLangRaw.trim() || "und";
+
 	const audioInfoJson = await exec([
 		"ffprobe",
 		"-v",
@@ -180,8 +183,9 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		videoFrameRate,
 		videoStreamFps,
 		videoDisplayFps,
-		isFrameRateMismatch,
+		videoLanguage,
 		videoOriginalFlag,
+		isFrameRateMismatch,
 	};
 }
 

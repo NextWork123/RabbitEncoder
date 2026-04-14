@@ -536,7 +536,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			'<?xml version="1.0" encoding="UTF-8"?>',
 			"<Tags><Tag>",
 			"<Targets><TargetTypeValue>50</TargetTypeValue></Targets>",
-			//`<Simple><Name>TITLE</Name><String>${escapeXml(baseTitle)}</String></Simple>`,
+			`<Simple><Name>TITLE</Name><String>${escapeXml(baseTitle)}</String></Simple>`,
 			`<Simple><Name>ENCODED_BY</Name><String>${escapeXml(config.organization)}</String></Simple>`,
 
 			"<Simple>",
@@ -563,13 +563,13 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		setStep(S_MUX, { progress: 5, detail: "Preparing tracks" });
 
-		const mkvArgs = ["mkvmerge", "-o", finalOutput, "--title", baseTitle, "--global-tags", xmlPath, "--no-audio", "--no-subtitles"];
+		const mkvArgs = ["mkvmerge", "-o", finalOutput, "--global-tags", xmlPath, "--no-audio", "--no-subtitles"];
 
 		if (existsSync(timecodesFile) && isTimecodesVFR(timecodesFile)) {
 			mkvArgs.push("--timestamps", `0:${timecodesFile}`);
 		}
 
-		mkvArgs.push("--language", "0:und");
+		mkvArgs.push("--language", `0:${probe.videoLanguage}`);
 		mkvArgs.push("--track-name", `0:${config.organization}`);
 		mkvArgs.push("--original-flag", `0:${probe.videoOriginalFlag ? "1" : "0"}`);
 

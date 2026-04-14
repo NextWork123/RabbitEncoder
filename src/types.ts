@@ -76,8 +76,9 @@ export interface ProbeResult {
 	videoFrameRate: string;
 	videoStreamFps: number;
 	videoDisplayFps: number;
-	isFrameRateMismatch: boolean;
+	videoLanguage: string;
 	videoOriginalFlag: boolean;
+	isFrameRateMismatch: boolean;
 }
 
 export interface JobStep {
