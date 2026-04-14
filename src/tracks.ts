@@ -128,6 +128,13 @@ const GROUP_BLOCKLIST = new Set([
 	"honorifics",
 	"honours",
 	"hon",
+	"subtitles",
+	"subtitle",
+	"subs",
+	"sub",
+	"full_subtitles",
+	"signs_songs",
+	"signs_and_songs",
 	"default",
 	"descriptive",
 	"hearing_impaired",
@@ -230,20 +237,46 @@ export function normalizeLanguageGroup(lang: string | undefined): string {
 }
 
 /**
+ * Detect editor/modifier credits that should not be treated as group names.
+ * Matches patterns like "deanzel edit", "Tormaid/joseole99 edit", "v2 fix".
+ */
+function isEditCredit(s: string): boolean {
+	return /\b(edit|edited|fix|fixed|patch|patched|mod|modified|restyle|restyled|retimed?|sync|synced)\b/i.test(s);
+}
+
+/**
  * Extract likely fansub/release group name from subtitle title.
  *
- * Examples:
- *   "English (SubsPlease)" => "SubsPlease"
- *   "Signs/Songs [MTBB]" => "MTBB"
- *   "English (CC) [SubsPlease]" => "SubsPlease"
- *   "English [Styled] (MTBB)" => "MTBB"
+ * Strategy 1 - Pipe-separated format (preferred):
+ *   "Full Subtitles | Static-Subs (Doki/deanzel edit)" => "Static-Subs"
+ *   "Signs/Songs | Sentai Filmworks"                   => "Sentai Filmworks"
+ *   "Subtitles | BlubberSubs (???/Mysteria edit)"      => "BlubberSubs"
+ *
+ * Strategy 2 - Bracketed group names (fallback):
+ *   "English (SubsPlease)"            => "SubsPlease"
+ *   "Signs/Songs [MTBB]"              => "MTBB"
+ *   "English (CC) [SubsPlease]"       => "SubsPlease"
+ *   "English [Styled] (MTBB)"         => "MTBB"
  */
 export function extractGroupFromTitle(title: string | undefined): string | null {
 	if (!title) return null;
 
+	// Strategy 1: Pipe-separated format "{Type} | {GroupName} ({credits})"
+	const pipeIndex = title.indexOf("|");
+	if (pipeIndex >= 0) {
+		const afterPipe = title.substring(pipeIndex + 1).trim();
+		// Take text before any parenthesized credits
+		const parenIndex = afterPipe.indexOf("(");
+		const groupPart = (parenIndex >= 0 ? afterPipe.substring(0, parenIndex) : afterPipe).trim();
+		if (groupPart && !isBlockedToken(groupPart)) {
+			return groupPart;
+		}
+	}
+
+	// Strategy 2: Bracketed group names [Group] or (Group)
 	const matches = [...title.matchAll(/[\[(]([^[\]()]*)[\])]/g)].map((m) => m[1]?.trim()).filter((s): s is string => Boolean(s));
 
-	const candidates = matches.filter(looksLikeGroupName);
+	const candidates = matches.filter((s) => looksLikeGroupName(s) && !isEditCredit(s));
 	if (candidates.length === 0) return null;
 
 	candidates.sort((a, b) => scoreGroupCandidate(b) - scoreGroupCandidate(a));
