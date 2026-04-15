@@ -759,6 +759,58 @@ function analyzeContent(extraction: SubtitleExtraction): SubtitleContentAnalysis
 	return extraction.format === "ass" ? analyzeAssContent(extraction.text) : analyzeSrtContent(extraction.text);
 }
 
+// Title-based regional variant detection patterns
+const SPANISH_EUROPEAN_PATTERN = /\b(european|castilian|espa[ñn]a|spain)\b|es[-_]es\b/i;
+const SPANISH_LATAM_PATTERN = /\b(latin\s*americ\w*|latino|latam|lat[-_]am)\b|es[-_](419|mx|ar|co|cl|pe|ve)\b/i;
+const PORTUGUESE_EUROPEAN_PATTERN = /\b(european|portugal|portugu[eê]s\s*europeu)\b|pt[-_]pt\b/i;
+const PORTUGUESE_BRAZILIAN_PATTERN = /\b(brazil\w*|brasil\w*)\b|pt[-_]br\b/i;
+const FRENCH_CANADIAN_PATTERN = /\b(canad\w*|qu[eé]b[eé]c\w*)\b|fr[-_]ca\b/i;
+const FRENCH_EUROPEAN_PATTERN = /\b(france|parisian|fran[cç]ais\s*(?:de\s*)?france|european)\b|fr[-_]fr\b/i;
+const CHINESE_TRADITIONAL_PATTERN = /\b(traditional|繁體|繁体|taiwan\w*|hong\s*kong)\b|zh[-_](hant|tw|hk)\b/i;
+const CHINESE_SIMPLIFIED_PATTERN = /\b(simplified|简体|简體|mainland)\b|zh[-_](hans|cn)\b/i;
+
+/**
+ * Extract a regional language variant from the subtitle track title.
+ *
+ * When the title contains explicit regional hints (e.g. "Latin America",
+ * "Castilian", "Brazilian"), we trust that over the language-detector
+ * which cannot reliably distinguish regional variants of the same language.
+ *
+ * Returns a BCP47 code if a variant is detected, null otherwise.
+ */
+function extractRegionalVariant(stream: SubtitleStreamInfo): string | null {
+	const title = stream.title || "";
+	if (!title) return null;
+
+	const lang = (stream.language || "").toLowerCase();
+
+	// Spanish: es-ES (European/Castilian) vs es-419 (Latin America)
+	if (lang === "spa" || lang === "es" || lang.startsWith("es-")) {
+		if (SPANISH_EUROPEAN_PATTERN.test(title)) return "es-ES";
+		if (SPANISH_LATAM_PATTERN.test(title)) return "es-419";
+	}
+
+	// Portuguese: pt-PT (European) vs pt-BR (Brazilian)
+	if (lang === "por" || lang === "pt" || lang.startsWith("pt-")) {
+		if (PORTUGUESE_EUROPEAN_PATTERN.test(title)) return "pt-PT";
+		if (PORTUGUESE_BRAZILIAN_PATTERN.test(title)) return "pt-BR";
+	}
+
+	// French: fr-FR (France) vs fr-CA (Canadian)
+	if (lang === "fre" || lang === "fra" || lang === "fr" || lang.startsWith("fr-")) {
+		if (FRENCH_EUROPEAN_PATTERN.test(title)) return "fr-FR";
+		if (FRENCH_CANADIAN_PATTERN.test(title)) return "fr-CA";
+	}
+
+	// Chinese: zh-Hant (Traditional) vs zh-Hans (Simplified)
+	if (lang === "zho" || lang === "chi" || lang === "zh" || lang.startsWith("zh-")) {
+		if (CHINESE_TRADITIONAL_PATTERN.test(title)) return "zh-Hant";
+		if (CHINESE_SIMPLIFIED_PATTERN.test(title)) return "zh-Hans";
+	}
+
+	return null;
+}
+
 /**
  * Comprehensive subtitle analysis. Mutates streams in place.
  *
@@ -813,13 +865,19 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 		const extraction = extractions.get(stream.index);
 		if (!extraction) continue;
 
+		const titleVariant = extractRegionalVariant(stream);
+		if (titleVariant) {
+			const origLang = stream.language || "und";
+			Logger.info(`[subtitle] Track ${stream.index}: title "${stream.title}" → regional variant ${titleVariant} (from "${origLang}")`);
+			stream.language = titleVariant;
+			continue;
+		}
+
 		const analysis = contentCache.get(stream.index);
 		if (analysis?.assStyles) {
 			const { signStyleLines, totalLines } = analysis.assStyles;
 			if (totalLines >= 5 && signStyleLines / totalLines >= 0.8) {
-				Logger.info(
-					`[subtitle] Track ${stream.index}: skipping language detection — ` + `${signStyleLines}/${totalLines} sign/fx lines would confuse detector`,
-				);
+				Logger.info(`[subtitle] Track ${stream.index}: skipping language detection — ${signStyleLines}/${totalLines} sign/fx lines would confuse detector`);
 				continue;
 			}
 		}
@@ -962,6 +1020,29 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
  * Map a language code (BCP47, ISO 639-1, ISO 639-2/3) to a flag emoji.
  */
 export function languageToFlag(lang: string | undefined): string {
+	const BCP47_TO_COUNTRY: Record<string, string> = {
+		"es-es": "ES",
+		"es-419": "MX",
+		"es-mx": "MX",
+		"es-ar": "AR",
+		"es-co": "CO",
+		"es-cl": "CL",
+		"es-pe": "PE",
+		"es-ve": "VE",
+		"pt-pt": "PT",
+		"pt-br": "BR",
+		"fr-fr": "FR",
+		"fr-ca": "CA",
+		"zh-hant": "TW",
+		"zh-hans": "CN",
+		"zh-tw": "TW",
+		"zh-hk": "HK",
+		"zh-cn": "CN",
+		"en-gb": "GB",
+		"en-us": "US",
+		"en-au": "AU",
+	};
+
 	const LANG_TO_COUNTRY: Record<string, string> = {
 		en: "US",
 		ja: "JP",
@@ -1052,6 +1133,12 @@ export function languageToFlag(lang: string | undefined): string {
 	const GLOBE = "\u{1F310}";
 
 	if (!lang || lang === "und" || lang === "undetermined") return GLOBE;
+
+	const fullLower = lang.toLowerCase();
+	const bcp47Country = BCP47_TO_COUNTRY[fullLower];
+	if (bcp47Country) {
+		return String.fromCodePoint(...[...bcp47Country].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+	}
 
 	const base = lang.split("-")[0]!.toLowerCase();
 	const country = LANG_TO_COUNTRY[base];
