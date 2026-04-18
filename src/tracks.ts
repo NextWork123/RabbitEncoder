@@ -162,6 +162,7 @@ const GROUP_BLOCKLIST = new Set([
 	"portuguese",
 	"parisian",
 	"castilian",
+	"canadian",
 	"russian",
 	"chinese",
 	"korean",
