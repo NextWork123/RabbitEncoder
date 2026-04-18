@@ -200,7 +200,7 @@ function looksLikeGroupName(s: string): boolean {
 	if (!trimmed || trimmed.length < 2 || trimmed.length > 40) return false;
 
 	// Allow common group-name chars, including spaces
-	if (!/^[A-Za-z0-9._@+\- ]+$/.test(trimmed)) return false;
+	if (!/^[A-Za-z0-9._@+\- /]+$/.test(trimmed)) return false;
 
 	// Reject pure language/tag words
 	if (isBlockedToken(trimmed)) return false;
