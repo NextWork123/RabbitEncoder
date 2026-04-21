@@ -241,6 +241,8 @@ function scoreGroupCandidate(s: string): number {
 export function normalizeLanguageGroup(lang: string | undefined): string {
 	if (isEnglish(lang)) return "en";
 	if (isJapanese(lang)) return "ja";
+	if (isMalay(lang)) return "msa";
+	if (isIndonesian(lang)) return "ind";
 	if (isUndefined(lang)) return "und";
 	return (lang || "und").toLowerCase();
 }
@@ -300,6 +302,16 @@ export function isEnglish(lang: string | undefined): boolean {
 export function isJapanese(lang: string | undefined): boolean {
 	const l = (lang || "").toLowerCase();
 	return l === "jpn" || l === "ja" || l === "japanese" || l.startsWith("ja-");
+}
+
+export function isMalay(lang: string | undefined): boolean {
+	const l = (lang || "").toLowerCase();
+	return l === "may" || l === "msa" || l === "ms" || l === "malay" || l.startsWith("ms-");
+}
+
+export function isIndonesian(lang: string | undefined): boolean {
+	const l = (lang || "").toLowerCase();
+	return l === "ind" || l === "id" || l === "indonesian" || l.startsWith("id-");
 }
 
 export function isUndefined(lang: string | undefined): boolean {
@@ -920,6 +932,22 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 				Logger.info(`[subtitle] Track ${stream.index}: skipping language detection — ${signStyleLines}/${totalLines} sign/fx lines would confuse detector`);
 				continue;
 			}
+		}
+
+		if (isMalay(stream.language)) {
+			Logger.info(
+				`[subtitle] Track ${stream.index}: skipping language detection — Malay/Indonesian are too similar to distinguish reliably, trusting "${stream.language}"`,
+			);
+			stream.language = "msa";
+			continue;
+		}
+
+		if (isIndonesian(stream.language)) {
+			Logger.info(
+				`[subtitle] Track ${stream.index}: skipping language detection — Malay/Indonesian are too similar to distinguish reliably, trusting "${stream.language}"`,
+			);
+			stream.language = "ind";
+			continue;
 		}
 
 		const result = await detectLanguage(extraction.filePath, signal);
