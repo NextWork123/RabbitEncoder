@@ -897,7 +897,11 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 			continue;
 		}
 
-		const langCode = result.detected.bcp47 || result.detected.iso_639_2;
+		const rawLangCode = result.detected.bcp47 || result.detected.iso_639_2;
+		// We don't distinguish between US and GB English (both collapse to "eng").
+		const lowerRaw = rawLangCode.toLowerCase();
+		const langCode = lowerRaw === "en-us" || lowerRaw === "en-gb" ? "eng" : rawLangCode;
+
 		const confidence = result.detected.confidence;
 		const origLang = stream.language || "und";
 
