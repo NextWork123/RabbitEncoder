@@ -1044,7 +1044,7 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 		const analysis = contentCache.get(stream.index);
 		if (!analysis) continue;
 
-		if (analysis.sdhRatio >= 0.15 && analysis.dialogueLineCount >= 10) {
+		if (analysis.sdhRatio >= 0.2 && analysis.dialogueLineCount >= 10) {
 			Logger.warn(`[subtitle] Track ${stream.index}: ${(analysis.sdhRatio * 100).toFixed(0)}% SDH markers — reclassifying as SDH`);
 			stream.isHearingImpaired = true;
 		}
