@@ -138,6 +138,8 @@ const GROUP_BLOCKLIST = new Set([
 	"default",
 	"descriptive",
 	"hearing_impaired",
+	"us",
+	"gb",
 	"hi",
 	"ad",
 	"eng",
