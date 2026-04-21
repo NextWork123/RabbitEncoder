@@ -13,6 +13,7 @@ import {
 	sortSubtitleStreams,
 	analyzeSubtitleStreams,
 	normalizeLanguageGroup,
+	deduplicateSubtitleStreams,
 } from "./tracks";
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
@@ -619,8 +620,14 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		// Subtitle tracks
 		const allSubtitleStreams = probe.subtitleStreams || [];
+
 		await analyzeSubtitleStreams(allSubtitleStreams, job.inputPath, tempDir, signal);
-		const subtitleStreams = sortSubtitleStreams(allSubtitleStreams);
+		const sortedSubtitleStreams = sortSubtitleStreams(allSubtitleStreams);
+		const subtitleStreams = job.settings.dedupeSubtitles ? deduplicateSubtitleStreams(sortedSubtitleStreams) : sortedSubtitleStreams;
+
+		if (job.settings.dedupeSubtitles && sortedSubtitleStreams.length !== subtitleStreams.length) {
+			Logger.info(`[subtitle] Deduplicated ${sortedSubtitleStreams.length - subtitleStreams.length} redundant track(s)`);
+		}
 
 		if (subtitleStreams.length > 0) {
 			const subSortedTypes = subtitleStreams.map((s) => `${s.language || "und"}:${detectSubtitleTrackType(s)}`);

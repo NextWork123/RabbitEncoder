@@ -109,7 +109,9 @@ app.get("/api/jobs/:id/subtitle-preview", async (c) => {
 	try {
 		const tempDir = mkdtempSync(join(config.tempDir, "sub-preview-"));
 
-		const result = await previewSubtitles(job.inputPath, subtitleStreams, tempDir);
+		const result = await previewSubtitles(job.inputPath, subtitleStreams, tempDir, {
+			dedupe: job.settings.dedupeSubtitles,
+		});
 
 		try {
 			rmSync(tempDir, { recursive: true, force: true });

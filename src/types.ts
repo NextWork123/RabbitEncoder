@@ -25,6 +25,7 @@ export interface JobSettings {
 	downscale: boolean;
 	skipBoosting: boolean;
 	noPhaseInv: boolean;
+	dedupeSubtitles: boolean;
 }
 
 export interface AudioStreamInfo {

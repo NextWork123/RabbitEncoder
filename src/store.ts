@@ -84,6 +84,7 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 	if (typeof settings.downscale === "boolean") appConfig.defaults.downscale = settings.downscale;
 	if (typeof settings.skipBoosting === "boolean") appConfig.defaults.skipBoosting = settings.skipBoosting;
 	if (typeof settings.noPhaseInv === "boolean") appConfig.defaults.noPhaseInv = settings.noPhaseInv;
+	if (typeof settings.dedupeSubtitles === "boolean") appConfig.defaults.dedupeSubtitles = settings.dedupeSubtitles;
 	if (settings.audioBitrates) {
 		appConfig.defaults.audioBitrates = {
 			...appConfig.defaults.audioBitrates,
@@ -253,6 +254,7 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 	if (typeof settings.downscale === "boolean") job.settings.downscale = settings.downscale;
 	if (typeof settings.skipBoosting === "boolean") job.settings.skipBoosting = settings.skipBoosting;
 	if (typeof settings.noPhaseInv === "boolean") job.settings.noPhaseInv = settings.noPhaseInv;
+	if (typeof settings.dedupeSubtitles === "boolean") job.settings.dedupeSubtitles = settings.dedupeSubtitles;
 	if (settings.audioBitrates) {
 		job.settings.audioBitrates = {
 			...job.settings.audioBitrates,

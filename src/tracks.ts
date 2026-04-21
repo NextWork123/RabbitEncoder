@@ -510,6 +510,37 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStre
 	});
 }
 
+/**
+ * Deduplicate subtitle streams: keep only the first stream per
+ * (language group + track type) combination.
+ *
+ * Input is already sorted best-first by sortSubtitleStreams,
+ * so the first occurrence is the highest-quality candidate.
+ *
+ * Regional variants (es-ES vs es-419, pt-PT vs pt-BR, zh-Hant vs zh-Hans)
+ * are kept as separate keys since normalizeLanguageGroup preserves them.
+ */
+export function deduplicateSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStreamInfo[] {
+	const seen = new Set<string>();
+	const kept: SubtitleStreamInfo[] = [];
+
+	for (const stream of streams) {
+		const langGroup = normalizeLanguageGroup(stream.language);
+		const type = detectSubtitleTrackType(stream);
+		const key = `${langGroup}:${type}`;
+
+		if (seen.has(key)) {
+			Logger.info(`[subtitle] Dedup: dropping track ${stream.index} ` + `(${stream.language || "und"}:${type}) — already kept a better candidate`);
+			continue;
+		}
+
+		seen.add(key);
+		kept.push(stream);
+	}
+
+	return kept;
+}
+
 interface LanguageDetectorResult {
 	file: string;
 	total_words: number;
@@ -1195,7 +1226,12 @@ function computeOutputFlags(
  * Run the full subtitle analysis pipeline without encoding and return
  * a before/after comparison.
  */
-export async function previewSubtitles(inputPath: string, sourceStreams: SubtitleStreamInfo[], tempDir: string): Promise<SubtitlePreviewResult> {
+export async function previewSubtitles(
+	inputPath: string,
+	sourceStreams: SubtitleStreamInfo[],
+	tempDir: string,
+	options: { dedupe?: boolean } = {},
+): Promise<SubtitlePreviewResult> {
 	const source: SubtitlePreviewTrack[] = sourceStreams.map((s) => {
 		const trackType = detectSubtitleTrackType(s);
 		return {
@@ -1227,11 +1263,12 @@ export async function previewSubtitles(inputPath: string, sourceStreams: Subtitl
 	await analyzeSubtitleStreams(cloned, inputPath, tempDir);
 
 	const sorted = sortSubtitleStreams(cloned);
+	const finalStreams = options.dedupe ? deduplicateSubtitleStreams(sorted) : sorted;
 
 	const defaultAssigned = new Set<string>();
 	const forcedAssigned = new Set<string>();
 
-	const output: SubtitlePreviewTrack[] = sorted.map((s) => {
+	const output: SubtitlePreviewTrack[] = finalStreams.map((s) => {
 		const trackType = detectSubtitleTrackType(s);
 		const lang = s.language || "und";
 		const langGroup = normalizeLanguageGroup(lang);
