@@ -60,8 +60,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy SVT-AV1-Essential binary
-COPY binaries/SvtAv1EncApp /usr/local/bin/SvtAv1EncApp
-RUN chmod +x /usr/local/bin/SvtAv1EncApp
+COPY binaries/SvtAv1EncApp_Generic /app/binaries/
+COPY binaries/SvtAv1EncApp_Optimized /app/binaries/
+RUN chmod +x /app/binaries/SvtAv1EncApp_Generic /app/binaries/SvtAv1EncApp_Optimized
+
+# Entrypoint
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Auto-Boost-Essential script
 RUN mkdir -p /opt/Auto-Boost-Essential
@@ -81,4 +86,5 @@ COPY --from=builder /app/rabbit-encoder /app/
 RUN mkdir -p /data/input /data/output /data/temp
 
 EXPOSE 3000
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/app/rabbit-encoder"]
