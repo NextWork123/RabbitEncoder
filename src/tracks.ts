@@ -3,6 +3,7 @@ import { run } from "./process";
 import { Logger } from "./logger";
 import { join } from "path";
 import { readFileSync, unlinkSync, existsSync } from "fs";
+import { classifyAssLines } from "./ass-classifier";
 
 export type AudioTrackType = "main" | "commentary" | "descriptive";
 
@@ -639,62 +640,7 @@ function cleanupExtraction(extraction: SubtitleExtraction): void {
 	} catch {}
 }
 
-// ASS parsing
-interface AssDialogueLine {
-	style: string;
-	text: string;
-}
-
-function parseAssDialogueLines(assContent: string): AssDialogueLine[] {
-	const lines = assContent.split("\n");
-	let inEvents = false;
-	let styleIndex = 3;
-	let textIndex = 9;
-	let fieldCount = 10;
-	const result: AssDialogueLine[] = [];
-
-	for (const rawLine of lines) {
-		const line = rawLine.trim();
-
-		if (line.startsWith("[") && line.endsWith("]")) {
-			inEvents = line.toLowerCase() === "[events]";
-			continue;
-		}
-
-		if (!inEvents) continue;
-
-		if (line.toLowerCase().startsWith("format:")) {
-			const fields = line
-				.substring(7)
-				.split(",")
-				.map((f) => f.trim().toLowerCase());
-			fieldCount = fields.length;
-			const si = fields.indexOf("style");
-			const ti = fields.indexOf("text");
-			if (si >= 0) styleIndex = si;
-			if (ti >= 0) textIndex = ti;
-			continue;
-		}
-
-		if (!line.startsWith("Dialogue:")) continue;
-
-		const afterPrefix = line.substring(line.indexOf(":") + 1);
-		const parts = afterPrefix.split(",");
-		if (parts.length < fieldCount) continue;
-
-		const style = parts[styleIndex]?.trim() || "";
-		const text = parts.slice(textIndex).join(",").trim();
-		result.push({ style, text });
-	}
-
-	return result;
-}
-
 // Content analysis
-
-const SIGN_STYLE_PATTERN =
-	/^(sign|song|op|ed|title|typeset|insert|karaoke|kara|logo|preview|eyecatch|next[-_ ]?ep|opening|ending|credit|note|screen|border|italics?[-_ ]?top|top[-_ ]?title|ep[-_ ]?title|chapter|mask|flash|blur|overlap[-_ ]?sign)/i;
-
 const HONORIFIC_PATTERN = /\b\w+[-–](?:san|kun|chan|sama|sensei|senpai|k[oō]hai|dono|tan|n[ei]e|n[ei]i|b[oō]|shi|jo)\b/gi;
 
 const SDH_SPEAKER_PATTERN = /^[A-Z][A-Z\s.'-]{1,30}:/;
@@ -759,17 +705,8 @@ function analyzeSrtContent(srtText: string): SubtitleContentAnalysis {
 	};
 }
 
-const DIALOGUE_STYLE_PATTERN =
-	/^(default|main|dialogue|dialog|narrat|italic|flashback|thought|internal|alt(?:ernate)?|overlap(?![-_ ]?sign)|top(?![-_ ]?title))/i;
-
-const DIALOGUE_STYLE_ANYWHERE_PATTERN = /(?:^|[-_ ])(default|main|dialogue|dialog|narrat|italics?|flashback|thought|internal)(?:$|[-_ ]|s\b)/i;
-
-function isDialogueStyle(style: string): boolean {
-	return DIALOGUE_STYLE_PATTERN.test(style) || DIALOGUE_STYLE_ANYWHERE_PATTERN.test(style);
-}
-
 function analyzeAssContent(assText: string): SubtitleContentAnalysis {
-	const dialogueLines = parseAssDialogueLines(assText);
+	const classified = classifyAssLines(assText);
 	let signStyleLines = 0;
 	let dialogueStyleLines = 0;
 	let otherStyleLines = 0;
@@ -778,19 +715,16 @@ function analyzeAssContent(assText: string): SubtitleContentAnalysis {
 	let totalTextLines = 0;
 	let dialogueTextLines = 0;
 
-	for (const { style, text } of dialogueLines) {
-		const isSign = SIGN_STYLE_PATTERN.test(style);
-		const isDialogue = !isSign && isDialogueStyle(style);
-
-		if (isSign) signStyleLines++;
-		else if (isDialogue) dialogueStyleLines++;
+	for (const { text, kind } of classified) {
+		if (kind === "sign" || kind === "song") signStyleLines++;
+		else if (kind === "dialogue") dialogueStyleLines++;
 		else otherStyleLines++;
 
 		const cleaned = stripSubtitleTags(text);
 		if (!cleaned) continue;
 		totalTextLines++;
 
-		if (isDialogue) {
+		if (kind === "dialogue") {
 			dialogueTextLines++;
 			if (SDH_SPEAKER_PATTERN.test(cleaned) || SDH_BRACKET_PATTERN.test(cleaned) || SDH_PAREN_PATTERN.test(cleaned) || SDH_MUSIC_PATTERN.test(cleaned)) {
 				sdhLineCount++;
@@ -802,8 +736,8 @@ function analyzeAssContent(assText: string): SubtitleContentAnalysis {
 	}
 
 	return {
-		dialogueLineCount: dialogueLines.length,
-		assStyles: { signStyleLines, dialogueStyleLines, otherStyleLines, totalLines: dialogueLines.length },
+		dialogueLineCount: classified.length,
+		assStyles: { signStyleLines, dialogueStyleLines, otherStyleLines, totalLines: classified.length },
 		sdhRatio: dialogueTextLines > 0 ? sdhLineCount / dialogueTextLines : 0,
 		honorificCount,
 	};
