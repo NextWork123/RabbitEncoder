@@ -59,10 +59,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -f /etc/OpenCL/vendors/mesa.icd \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy SVT-AV1-Essential binary
-COPY binaries/SvtAv1EncApp_Generic /app/binaries/
-COPY binaries/SvtAv1EncApp_Optimized /app/binaries/
-RUN chmod +x /app/binaries/SvtAv1EncApp_Generic /app/binaries/SvtAv1EncApp_Optimized
+# Copy binaries
+COPY binaries/ /app/binaries/
+RUN chmod +x /app/binaries/language-detector /app/binaries/x86_64_v2/SvtAv1EncApp /app/binaries/x86_64_v3/SvtAv1EncApp
 
 # Entrypoint
 COPY docker/entrypoint.sh /entrypoint.sh
@@ -71,12 +70,6 @@ RUN chmod +x /entrypoint.sh
 # Auto-Boost-Essential script
 RUN mkdir -p /opt/Auto-Boost-Essential
 COPY scripts/Auto-Boost-Essential.py /opt/Auto-Boost-Essential/
-
-COPY binaries/libvszip.so /usr/lib/x86_64-linux-gnu/vapoursynth/libvszip.so
-
-# Copy language-detector binary
-COPY binaries/language-detector /usr/local/bin/language-detector
-RUN chmod +x /usr/local/bin/language-detector
 
 # Application
 WORKDIR /app
