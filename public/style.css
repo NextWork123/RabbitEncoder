@@ -1332,3 +1332,20 @@ code {
 		text-align: center;
 	}
 }
+
+.mediainfo-modal {
+	width: min(800px, calc(100vw - 32px));
+}
+.mediainfo-content {
+	font-family: var(--font-mono);
+	font-size: 0.78rem;
+	color: var(--text-0);
+	background: var(--bg-0);
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-sm);
+	padding: 14px 16px;
+	max-height: 60vh;
+	overflow: auto;
+	white-space: pre;
+	margin: 0;
+}

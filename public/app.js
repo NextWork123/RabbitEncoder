@@ -454,6 +454,42 @@ async function openSubtitlePreview(jobId) {
 	}
 }
 
+async function openMediaInfo(jobId) {
+	const jobs = await fetchJobs();
+	const job = jobs.find((j) => j.id === jobId);
+	if (!job) return;
+
+	document.getElementById("mediainfo-title").textContent = `Media Info — ${job.filename}`;
+	document.getElementById("mediainfo-loading").style.display = "";
+	document.getElementById("mediainfo-error").style.display = "none";
+	document.getElementById("mediainfo-content").style.display = "none";
+	document.getElementById("mediainfo-modal").style.display = "";
+
+	try {
+		const res = await authFetch(`${API}/api/jobs/${jobId}/mediainfo`);
+		const data = await res.json();
+		document.getElementById("mediainfo-loading").style.display = "none";
+		if (data.error) {
+			const el = document.getElementById("mediainfo-error");
+			el.textContent = data.error;
+			el.style.display = "";
+			return;
+		}
+		const pre = document.getElementById("mediainfo-content");
+		pre.textContent = data.text;
+		pre.style.display = "";
+	} catch (err) {
+		document.getElementById("mediainfo-loading").style.display = "none";
+		const el = document.getElementById("mediainfo-error");
+		el.textContent = `Failed: ${err.message || err}`;
+		el.style.display = "";
+	}
+}
+
+function closeMediaInfo() {
+	document.getElementById("mediainfo-modal").style.display = "none";
+}
+
 function renderSubtitlePreview(data) {
 	document.getElementById("sub-preview-loading").style.display = "none";
 	document.getElementById("sub-preview-content").style.display = "";
@@ -571,6 +607,12 @@ function renderJobCard(job) {
 		error = `<div class="job-error">${escapeHtml(job.error)}</div>`;
 	}
 
+	const infoBtn = `<button class="btn-icon" title="Media info" data-job-id="${job.id}" data-action="mediainfo">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+    </svg>
+	</button>`;
+
 	const subBtn = `<button class="btn-icon" title="Preview Subtitles" data-job-id="${job.id}" data-action="sub-preview">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
@@ -588,6 +630,7 @@ function renderJobCard(job) {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
       </div>
+			${infoBtn}
 			${subBtn}
       <button class="btn-icon" title="Settings" data-job-id="${job.id}" data-action="edit">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
@@ -597,12 +640,14 @@ function renderJobCard(job) {
       </button>`;
 	} else if (active) {
 		actions = `
+			${infoBtn}
 			${subBtn}
       <button class="btn-icon btn-cancel" title="Cancel" data-job-id="${job.id}" data-action="cancel">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
       </button>`;
 	} else if (err) {
 		actions = `
+			${infoBtn}
 			${subBtn}
       <button class="btn-icon" title="Retry" data-job-id="${job.id}" data-action="retry">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
@@ -1547,6 +1592,8 @@ function initEventListeners() {
 			cancelJob(jobId).then(() => update());
 		} else if (action === "sub-preview") {
 			openSubtitlePreview(jobId);
+		} else if (action === "mediainfo") {
+			openMediaInfo(jobId);
 		}
 	});
 
@@ -1570,6 +1617,15 @@ function initEventListeners() {
 			if (path) toggleNodeCheck(path);
 			return;
 		}
+	});
+
+	document.getElementById("close-mediainfo-btn").addEventListener("click", closeMediaInfo);
+	document.getElementById("mediainfo-modal").addEventListener("click", (e) => {
+		if (e.target === e.currentTarget) closeMediaInfo();
+	});
+	document.getElementById("copy-mediainfo-btn").addEventListener("click", () => {
+		navigator.clipboard.writeText(document.getElementById("mediainfo-content").textContent);
+		closeMediaInfo();
 	});
 }
 

@@ -179,6 +179,24 @@
 				</div>
 			</div>
 
+			<!-- Mediainfo Preview Modal -->
+			<div id="mediainfo-modal" class="modal-overlay" style="display: none">
+				<div class="modal mediainfo-modal">
+					<div class="modal-header">
+						<h2 id="mediainfo-title">Media Info</h2>
+						<button class="btn-close" id="close-mediainfo-btn">&times;</button>
+					</div>
+					<div class="modal-body">
+						<div id="mediainfo-loading" class="sub-preview-loading">Reading metadata…</div>
+						<div id="mediainfo-error" class="sub-preview-error" style="display: none"></div>
+						<pre id="mediainfo-content" class="mediainfo-content" style="display: none"></pre>
+					</div>
+					<div class="modal-footer">
+						<button class="btn" id="copy-mediainfo-btn">Copy</button>
+					</div>
+				</div>
+			</div>
+
 			<!-- Subtitle Preview Modal -->
 			<div id="sub-preview-modal" class="modal-overlay" style="display: none">
 				<div class="modal sub-preview-modal">

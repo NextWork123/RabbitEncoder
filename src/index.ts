@@ -123,6 +123,24 @@ app.get("/api/jobs/:id/subtitle-preview", async (c) => {
 	}
 });
 
+app.get("/api/jobs/:id/mediainfo", async (c) => {
+	const job = getJob(c.params.id!);
+	if (!job) return c.json({ error: "Job not found" }, 404);
+
+	if (!existsSync(job.inputPath)) {
+		return c.json({ error: "Source file no longer accessible" }, 400);
+	}
+
+	try {
+		const proc = Bun.spawn(["mediainfo", job.inputPath], { stdout: "pipe", stderr: "pipe" });
+		const text = await new Response(proc.stdout).text();
+		await proc.exited;
+		return c.json({ filename: job.filename, text: text.trim() });
+	} catch (err: any) {
+		return c.json({ error: `mediainfo failed: ${err.message || err}` }, 500);
+	}
+});
+
 app.post("/api/jobs/:id/move", async (c) => {
 	const body = (await c.req.json()) as { direction?: string };
 	const direction = body.direction;
