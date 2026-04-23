@@ -655,7 +655,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 				let effectiveLang = lang;
 				if (trackType === "honorifics") {
-					effectiveLang = "enm";
+					effectiveLang = "en-JP";
 				}
 
 				const subFile = join(tempDir, `sub_${stream.index}.mkv`);

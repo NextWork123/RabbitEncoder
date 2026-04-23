@@ -299,7 +299,7 @@ export function extractGroupFromTitle(title: string | undefined): string | null 
 
 export function isEnglish(lang: string | undefined): boolean {
 	const l = (lang || "").toLowerCase();
-	return l === "eng" || l === "en" || l === "english" || l.startsWith("en-");
+	return l === "eng" || l === "en" || l === "english" || l === "enm" || l.startsWith("en-");
 }
 
 export function isJapanese(lang: string | undefined): boolean {
@@ -817,6 +817,22 @@ function extractRegionalVariant(stream: SubtitleStreamInfo): string | null {
 export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inputPath: string, tempDir: string, signal?: AbortSignal): Promise<void> {
 	if (streams.length === 0) return;
 
+	for (const stream of streams) {
+		const lang = (stream.language || "").toLowerCase();
+		if (lang === "enm" || lang === "en-jp" || lang === "en_jp") {
+			const origLang = stream.language;
+			stream.language = "en-JP";
+			if (origLang !== "en-JP") {
+				Logger.info(`[subtitle] Track ${stream.index}: normalizing language "${origLang}" → "en-JP" (honorifics)`);
+			}
+			const title = stream.title || "";
+			if (!SUB_HONORIFICS_PATTERN.test(title)) {
+				stream.title = title ? `${title} [Honorifics]` : "Honorifics";
+				Logger.info(`[subtitle] Track ${stream.index}: adding [Honorifics] marker based on language code`);
+			}
+		}
+	}
+
 	// Step 1: Extract & content-analyze
 	const contentCache = new Map<number, SubtitleContentAnalysis>();
 	const extractions = new Map<number, SubtitleExtraction>();
@@ -1239,7 +1255,7 @@ export async function previewSubtitles(
 		const trackName = buildSubtitleTrackName(trackType, s.title);
 
 		let effectiveLang = lang;
-		if (trackType === "honorifics") effectiveLang = "enm";
+		if (trackType === "honorifics") effectiveLang = "en-JP";
 
 		const flags = computeOutputFlags(trackType, langGroup, defaultAssigned, forcedAssigned);
 
