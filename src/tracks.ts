@@ -177,6 +177,7 @@ const GROUP_BLOCKLIST = new Set([
 	"simplified",
 	"traditional",
 	"hong_kong",
+	"la",
 	"latin_america",
 	"latin_american",
 	"brazil",
