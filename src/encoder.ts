@@ -17,7 +17,7 @@ import {
 } from "./tracks";
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
-import { buildPrepareFilterConfig } from "./denoise";
+import { buildPrepareFilterConfig } from "./filters";
 
 export { CancelledError } from "./process";
 
@@ -158,8 +158,15 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			throw new Error(`Failed to extract video stream: ${extractRes.stderr || extractRes.stdout}`);
 		}
 
-		// Prepare filter pass (downscale + denoise)
-		const prepareFilter = await buildPrepareFilterConfig(job.settings.downscale, probe.height, job.settings.denoise, job.settings.denoiseGpu);
+		// Prepare filter pass (downscale + deband + denoise)
+		const prepareFilter = await buildPrepareFilterConfig(
+			job.settings.downscale,
+			probe.height,
+			job.settings.denoise,
+			job.settings.denoiseGpu,
+			job.settings.deband,
+		);
+
 		if (prepareFilter) {
 			checkCancelled();
 
@@ -550,6 +557,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			`<Simple><Name>SETTINGS</Name><String>${escapeXml(
 				`Quality ${job.settings.quality}, Speed ${job.settings.finalSpeed}` +
 					`${job.settings.downscale && probe.height > 1080 ? ", Downscale 1080p" : ""}` +
+					`${job.settings.deband !== "off" ? ", Deband " + job.settings.deband : ""}` +
 					`${job.settings.denoise !== "off" ? ", Denoise " + job.settings.denoise : ""}`,
 			)}</String></Simple>`,
 			"</Simple>",

@@ -42,6 +42,7 @@ All settings are configurable via environment variables in `docker-compose.yml`:
 | `ENCODER_QUALITY`          | `medium`        | Default video quality (`low`, `medium`, `high`)                     |
 | `ENCODER_SPEED`            | `slow`          | Default encode speed (`slower`, `slow`, `medium`, `fast`, `faster`) |
 | `ENCODER_DENOISE`          | `off`           | Default denoise level (`off`, `light`, `medium`, `heavy`)           |
+| `ENCODER_DEBAND`           | `off`           | Default deband level (`off`, `light`, `medium`, `heavy`)            |
 | `ENCODER_DOWNSCALE`        | `false`         | Downscale 4K sources to 1080p before encoding (`true`/`false`)      |
 | `ENCODER_SKIP_BOOSTING`    | `false`         | Skip per-scene CRF boosting, encode directly with SvtAv1EncApp      |
 | `ENCODER_DEDUPE_SUBTITLES` | `false`         | Keep only one subtitle per language and type                        |

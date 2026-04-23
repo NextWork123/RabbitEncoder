@@ -1,6 +1,7 @@
 export type EncoderQuality = "low" | "medium" | "high";
 export type EncoderSpeed = "slower" | "slow" | "medium" | "fast" | "faster";
 export type DenoiseLevel = "off" | "light" | "medium" | "heavy";
+export type DebandLevel = "off" | "light" | "medium" | "heavy";
 
 export type JobStatus = "queued" | "probing" | "encoding_video" | "encoding_audio" | "muxing" | "done" | "error" | "cancelled";
 
@@ -22,6 +23,7 @@ export interface JobSettings {
 	audioBitrates: AudioChannelBitrates;
 	denoise: DenoiseLevel;
 	denoiseGpu: boolean;
+	deband: DebandLevel;
 	downscale: boolean;
 	skipBoosting: boolean;
 	noPhaseInv: boolean;

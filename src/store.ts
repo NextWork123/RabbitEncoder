@@ -81,6 +81,7 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 	if (settings.finalSpeed) appConfig.defaults.finalSpeed = settings.finalSpeed;
 	if (settings.denoise) appConfig.defaults.denoise = settings.denoise;
 	if (typeof settings.denoiseGpu === "boolean") appConfig.defaults.denoiseGpu = settings.denoiseGpu;
+	if (settings.deband) appConfig.defaults.deband = settings.deband;
 	if (typeof settings.downscale === "boolean") appConfig.defaults.downscale = settings.downscale;
 	if (typeof settings.skipBoosting === "boolean") appConfig.defaults.skipBoosting = settings.skipBoosting;
 	if (typeof settings.noPhaseInv === "boolean") appConfig.defaults.noPhaseInv = settings.noPhaseInv;
@@ -251,6 +252,7 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 	if (settings.finalSpeed) job.settings.finalSpeed = settings.finalSpeed;
 	if (settings.denoise) job.settings.denoise = settings.denoise;
 	if (typeof settings.denoiseGpu === "boolean") job.settings.denoiseGpu = settings.denoiseGpu;
+	if (settings.deband) job.settings.deband = settings.deband;
 	if (typeof settings.downscale === "boolean") job.settings.downscale = settings.downscale;
 	if (typeof settings.skipBoosting === "boolean") job.settings.skipBoosting = settings.skipBoosting;
 	if (typeof settings.noPhaseInv === "boolean") job.settings.noPhaseInv = settings.noPhaseInv;

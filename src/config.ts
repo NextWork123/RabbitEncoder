@@ -1,6 +1,6 @@
 import { Logger } from "./logger";
 import { run } from "./process";
-import type { AppConfig, AudioChannelBitrates, DenoiseLevel, EncoderQuality, EncoderSpeed } from "./types";
+import type { AppConfig, AudioChannelBitrates, DebandLevel, DenoiseLevel, EncoderQuality, EncoderSpeed } from "./types";
 
 const DEFAULT_BITRATES: AudioChannelBitrates = {
 	mono: 64,
@@ -28,6 +28,7 @@ export async function loadConfig(): Promise<AppConfig> {
 	const finalSpeed = (process.env.ENCODER_SPEED || "slow") as EncoderSpeed;
 	const denoise = (process.env.ENCODER_DENOISE || "off") as DenoiseLevel;
 	const denoiseGpu = ["true", "1", "yes"].includes((process.env.ENCODER_DENOISE_GPU || "").toLowerCase());
+	const deband = (process.env.ENCODER_DEBAND || "off") as DebandLevel;
 	const downscale = ["true", "1", "yes"].includes((process.env.ENCODER_DOWNSCALE || "").toLowerCase());
 	const skipBoosting = ["true", "1", "yes"].includes((process.env.ENCODER_SKIP_BOOSTING || "").toLowerCase());
 	const noPhaseInv = ["true", "1", "yes"].includes((process.env.AUDIO_NO_PHASE_INV || "").toLowerCase());
@@ -66,6 +67,7 @@ export async function loadConfig(): Promise<AppConfig> {
 			audioBitrates: bitrates,
 			denoise,
 			denoiseGpu,
+			deband,
 			downscale,
 			skipBoosting,
 			noPhaseInv,

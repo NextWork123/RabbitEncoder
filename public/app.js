@@ -12,6 +12,7 @@ let pollTimer = null;
 const QUALITIES = ["low", "medium", "high"];
 const SPEEDS = ["slower", "slow", "medium", "fast", "faster"];
 const DENOISE_LEVELS = ["off", "light", "medium", "heavy"];
+const DEBAND_LEVELS = ["off", "light", "medium", "heavy"];
 
 const CHANNELS = [
 	{ key: "mono", label: "Mono" },
@@ -1009,6 +1010,7 @@ async function openSettings() {
 	renderRadioPills(document.getElementById("default-speed"), SPEEDS, tempDefaults.finalSpeed, (v) => (tempDefaults.finalSpeed = v));
 	renderRadioPills(document.getElementById("default-denoise"), DENOISE_LEVELS, tempDefaults.denoise || "off", (v) => (tempDefaults.denoise = v));
 	renderGpuToggle(document.getElementById("default-denoise-gpu"), tempDefaults.denoiseGpu || false, (v) => (tempDefaults.denoiseGpu = v));
+	renderRadioPills(document.getElementById("default-deband"), DEBAND_LEVELS, tempDefaults.deband || "off", (v) => (tempDefaults.deband = v));
 	renderDownscaleToggle(document.getElementById("default-downscale"), tempDefaults.downscale || false, (v) => (tempDefaults.downscale = v));
 	renderSkipBoostingToggle(document.getElementById("default-skip-boosting"), tempDefaults.skipBoosting || false, (v) => (tempDefaults.skipBoosting = v));
 	renderNoPhaseInvToggle(document.getElementById("default-no-phase-inv"), tempDefaults.noPhaseInv || false, (v) => (tempDefaults.noPhaseInv = v));
@@ -1055,6 +1057,7 @@ async function openJobSettings(jobId) {
 	renderRadioPills(document.getElementById("job-speed"), SPEEDS, tempSettings.finalSpeed, (v) => (tempSettings.finalSpeed = v));
 	renderRadioPills(document.getElementById("job-denoise"), DENOISE_LEVELS, tempSettings.denoise || "off", (v) => (tempSettings.denoise = v));
 	renderGpuToggle(document.getElementById("job-denoise-gpu"), tempSettings.denoiseGpu || false, (v) => (tempSettings.denoiseGpu = v));
+	renderRadioPills(document.getElementById("job-deband"), DEBAND_LEVELS, tempSettings.deband || "off", (v) => (tempSettings.deband = v));
 	renderDownscaleToggle(document.getElementById("job-downscale"), tempSettings.downscale || false, (v) => (tempSettings.downscale = v));
 	renderSkipBoostingToggle(document.getElementById("job-skip-boosting"), tempSettings.skipBoosting || false, (v) => (tempSettings.skipBoosting = v));
 	renderNoPhaseInvToggle(document.getElementById("job-no-phase-inv"), tempSettings.noPhaseInv || false, (v) => (tempSettings.noPhaseInv = v));
