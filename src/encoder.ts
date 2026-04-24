@@ -73,10 +73,12 @@ function cleanupAssociatedFiles(videoPath: string): void {
 	} catch {}
 }
 
-function fmtFramesWithFps(current: number, total: number, startedAt: number | undefined): string {
+function fmtFramesWithFps(current: number, total: number, startedAt: number | undefined, estVideoSize?: string, estTotalSize?: string): string {
 	const base = fmtFrames(current, total);
 	const fps = computeFps(current, startedAt);
-	return fps ? `${base} (${fps} fps)` : base;
+	const fpsStr = fps ? ` (${fps} fps)` : "";
+	const estStr = estVideoSize && estTotalSize ? ` — Video: ~${estVideoSize} · Total: ~${estTotalSize}` : "";
+	return `${base}${fpsStr}${estStr}`;
 }
 
 export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial: Partial<Job>) => void, signal?: AbortSignal): Promise<void> {
@@ -277,6 +279,18 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		updateJob({ status: "encoding_video" });
 
 		const ivfFile = join(tempDir, "source_video.ivf");
+		const inProgressIvf = join(tempDir, "abe_temp", "source_video.ivf");
+
+		const estimatedAudioStreams = (probe.audioStreams || []).filter((s) => !s.title || !/compatibility/i.test(s.title));
+		const estimatedAudioBytes = Math.round(
+			((estimatedAudioStreams.reduce((sum, s) => {
+				const layout = normalizeLayout(s.channelLayout);
+				return sum + getOpusBitrateForLayout(layout, job.settings.audioBitrates);
+			}, 0) *
+				1000) /
+				8) *
+				probe.duration,
+		);
 
 		if (job.settings.skipBoosting) {
 			// Skip boosting: mark ABE-only steps as done (skipped)
@@ -348,9 +362,29 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				}
 
 				if (evt.event === "progress" && si !== undefined) {
+					let estVideo: string | undefined;
+					let estTotal: string | undefined;
+
+					if (evt.stage === 4 && evt.current > 0 && evt.total > 0) {
+						const frac = evt.current / evt.total;
+						if (frac >= 0.02) {
+							try {
+								const curBytes = statSync(inProgressIvf).size;
+								const estVideoBytes = curBytes / frac;
+								const estTotalBytes = estVideoBytes + estimatedAudioBytes + 2 * 1024 * 1024;
+								estVideo = humanSize(estVideoBytes);
+								estTotal = humanSize(estTotalBytes);
+								updateJob({
+									estimatedVideoSize: estVideo,
+									estimatedFinalSize: estTotal,
+								});
+							} catch {}
+						}
+					}
+
 					setStep(si, {
 						progress: pct2(evt.current, evt.total),
-						detail: evt.total ? fmtFramesWithFps(evt.current, evt.total, steps[si]!.startedAt) : undefined,
+						detail: evt.total ? fmtFramesWithFps(evt.current, evt.total, steps[si]!.startedAt, estVideo, estTotal) : undefined,
 					});
 					return;
 				}

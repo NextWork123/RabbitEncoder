@@ -110,6 +110,8 @@ export interface Job {
 	error?: string;
 	startedAt?: number;
 	finishedAt?: number;
+	estimatedVideoSize?: string;
+	estimatedFinalSize?: string;
 	encodedVideoSize?: string;
 	encodedFileSize?: string;
 	replaceSource: boolean;
