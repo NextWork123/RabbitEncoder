@@ -820,6 +820,7 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 
 	for (const stream of streams) {
 		const lang = (stream.language || "").toLowerCase();
+
 		if (lang === "enm" || lang === "en-jp" || lang === "en_jp") {
 			const origLang = stream.language;
 			stream.language = "en-JP";
@@ -831,6 +832,13 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 				stream.title = title ? `${title} [Honorifics]` : "Honorifics";
 				Logger.info(`[subtitle] Track ${stream.index}: adding [Honorifics] marker based on language code`);
 			}
+		}
+
+		// Bibliographic -> terminology (ger -> deu, fre -> fra...)
+		const normalized = normalizeBibliographicLanguage(stream.language);
+		if (normalized && normalized !== stream.language) {
+			Logger.info(`[subtitle] Track ${stream.index}: normalizing language "${stream.language}" → "${normalized}" (bibliographic → terminology)`);
+			stream.language = normalized;
 		}
 	}
 
@@ -1039,6 +1047,48 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 		return `${lang}:${type}`;
 	});
 	Logger.info(`[subtitle] Final classification: ${summary.join(", ")}`);
+}
+
+/**
+ * ISO 639-2/B (bibliographic) -> 639-2/T (terminology) mapping.
+ *
+ * MKV/Matroska prefers terminology codes, and language-detector returns them
+ * too.
+ */
+const BIBLIOGRAPHIC_TO_TERMINOLOGY: Record<string, string> = {
+	alb: "sqi", // Albanian
+	arm: "hye", // Armenian
+	baq: "eus", // Basque
+	tib: "bod", // Tibetan
+	bur: "mya", // Burmese
+	cze: "ces", // Czech
+	chi: "zho", // Chinese
+	wel: "cym", // Welsh
+	dut: "nld", // Dutch
+	fre: "fra", // French
+	geo: "kat", // Georgian
+	ger: "deu", // German
+	gre: "ell", // Greek
+	ice: "isl", // Icelandic
+	mac: "mkd", // Macedonian
+	mao: "mri", // Maori
+	may: "msa", // Malay
+	per: "fas", // Persian
+	rum: "ron", // Romanian
+	slo: "slk", // Slovak
+};
+
+/**
+ * Normalize an ISO 639-2/B bibliographic code to its 639-2/T terminology
+ * equivalent. Preserves case-style of the input subtag, leaves BCP47 region
+ * suffixes alone, and returns non-bibliographic codes unchanged.
+ */
+export function normalizeBibliographicLanguage(lang: string | undefined): string | undefined {
+	if (!lang) return lang;
+	const [base, ...rest] = lang.split("-");
+	const mapped = BIBLIOGRAPHIC_TO_TERMINOLOGY[base!.toLowerCase()];
+	if (!mapped) return lang;
+	return rest.length > 0 ? `${mapped}-${rest.join("-")}` : mapped;
 }
 
 /**
