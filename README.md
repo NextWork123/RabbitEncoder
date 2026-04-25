@@ -166,6 +166,9 @@ Source tags are detected from the input filename: `Bluray`, `WEBDL`, `WEBRip`, `
 | `GET`    | `/api/library`                   | List configured library root directories               |
 | `GET`    | `/api/library/browse`            | Browse a library folder (`?path=/data/library/Animes`) |
 | `POST`   | `/api/library/encode`            | Queue all videos in a folder for in-place encoding     |
+| `GET`    | `/api/queue`                     | Get queue state (paused or running)                    |
+| `POST`   | `/api/queue/pause`               | Pause encoding - stops current encode, preserves queue |
+| `POST`   | `/api/queue/resume`              | Resume encoding from where it was paused               |
 | `GET`    | `/api/benchmark`                 | Get current benchmark state                            |
 | `POST`   | `/api/benchmark`                 | Start a denoise benchmark run                          |
 | `DELETE` | `/api/benchmark`                 | Cancel a running benchmark                             |

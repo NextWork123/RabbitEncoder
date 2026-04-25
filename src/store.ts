@@ -6,6 +6,7 @@ import { isAlreadyEncoded } from "./library";
 import { Logger } from "./logger";
 
 const jobs = new Map<string, Job>();
+let paused = false;
 let processing = false;
 let orderCounter = 0;
 let appConfig: AppConfig;
@@ -18,6 +19,28 @@ export function initStore(config: AppConfig) {
 	queueFile = join(config.tempDir, "queue.json");
 	loadQueue();
 	processQueue();
+}
+
+export function isQueuePaused(): boolean {
+	return paused;
+}
+
+export function pauseQueue(): boolean {
+	if (paused) return false;
+	paused = true;
+	Logger.info("[store] Queue paused");
+	if (activeAbortController) {
+		activeAbortController.abort();
+	}
+	return true;
+}
+
+export function resumeQueue(): boolean {
+	if (!paused) return false;
+	paused = false;
+	Logger.info("[store] Queue resumed");
+	processQueue();
+	return true;
 }
 
 function saveQueue(): void {
@@ -350,7 +373,7 @@ export function reorderJobs(orderedIds: string[]): boolean {
 }
 
 async function processQueue() {
-	if (processing) return;
+	if (processing || paused) return;
 
 	const next = Array.from(jobs.values())
 		.filter((j) => j.status === "queued")
@@ -373,8 +396,20 @@ async function processQueue() {
 		await encodeJob(next, appConfig, updateFn, controller.signal);
 	} catch (err: any) {
 		if (err instanceof CancelledError) {
-			jobs.delete(next.id);
-			Logger.info(`[store] Job ${next.id} cancelled and removed`);
+			if (paused) {
+				// Re-queue instead of deleting (the job stays in the queue)
+				next.status = "queued";
+				next.progress = 0;
+				next.currentStage = "Waiting in queue";
+				next.steps = [];
+				next.startedAt = undefined;
+				next.finishedAt = undefined;
+				next.error = undefined;
+				Logger.info(`[store] Job ${next.id} paused and returned to queue`);
+			} else {
+				jobs.delete(next.id);
+				Logger.info(`[store] Job ${next.id} cancelled and removed`);
+			}
 		} else {
 			next.status = "error";
 			next.error = err?.message || String(err);

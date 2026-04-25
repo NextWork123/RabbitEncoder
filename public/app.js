@@ -4,6 +4,7 @@ import pkg from "../package.json";
 document.getElementById("title-version").innerText = `v${pkg.version}`;
 
 const API = "";
+let queuePaused = false;
 let defaults = null;
 let currentEditJobId = null;
 let authToken = localStorage.getItem("authToken") || "";
@@ -142,6 +143,21 @@ async function fetchJobs() {
 
 async function fetchConfig() {
 	const res = await authFetch(`${API}/api/config`);
+	return res.json();
+}
+
+async function fetchQueueState() {
+	const res = await authFetch(`${API}/api/queue`);
+	return res.json();
+}
+
+async function pauseQueueRequest() {
+	const res = await authFetch(`${API}/api/queue/pause`, { method: "POST" });
+	return res.json();
+}
+
+async function resumeQueueRequest() {
+	const res = await authFetch(`${API}/api/queue/resume`, { method: "POST" });
 	return res.json();
 }
 
@@ -974,15 +990,59 @@ function escapeHtml(s) {
 
 let lastJobsJson = "";
 
+function updatePauseUI() {
+	const btn = document.getElementById("pause-queue-btn");
+	const pauseIcon = document.getElementById("pause-icon");
+	const resumeIcon = document.getElementById("resume-icon");
+	const label = document.getElementById("pause-label");
+	const banner = document.getElementById("queue-paused-banner");
+
+	if (queuePaused) {
+		pauseIcon.style.display = "none";
+		resumeIcon.style.display = "";
+		label.textContent = "Continue";
+		btn.classList.add("btn-paused");
+		banner.style.display = "";
+	} else {
+		pauseIcon.style.display = "";
+		resumeIcon.style.display = "none";
+		label.textContent = "Pause";
+		btn.classList.remove("btn-paused");
+		banner.style.display = "none";
+	}
+}
+
+async function handlePauseToggle() {
+	const btn = document.getElementById("pause-queue-btn");
+	btn.disabled = true;
+	try {
+		if (queuePaused) {
+			await resumeQueueRequest();
+		} else {
+			await pauseQueueRequest();
+		}
+		lastJobsJson = ""; // force re-render
+		await update();
+	} catch (e) {
+		console.error("Pause toggle failed:", e);
+	} finally {
+		btn.disabled = false;
+	}
+}
+
 async function update() {
 	try {
-		const jobs = await fetchJobs();
-		const json = JSON.stringify(jobs);
+		const [jobs, queueState] = await Promise.all([fetchJobs(), fetchQueueState().catch(() => ({ paused: false }))]);
 
+		queuePaused = !!queueState.paused;
+
+		const hashKey = JSON.stringify({ j: jobs, p: queuePaused });
 		const hasActive = jobs.some((j) => isActive(j.status));
 
-		if (json === lastJobsJson && !hasActive) return;
-		lastJobsJson = json;
+		updatePauseUI();
+
+		if (hashKey === lastJobsJson && !hasActive) return;
+		lastJobsJson = hashKey;
 
 		const emptyEl = document.getElementById("empty-state");
 		const listEl = document.getElementById("jobs-list");
@@ -1819,6 +1879,8 @@ function initEventListeners() {
 	document.getElementById("save-job-settings-btn").addEventListener("click", saveJobSettings);
 	document.getElementById("sub-preview-modal").addEventListener("click", closeSubPreviewIfOutside);
 	document.getElementById("logout-btn").addEventListener("click", logout);
+
+	document.getElementById("pause-queue-btn").addEventListener("click", handlePauseToggle);
 
 	document.getElementById("open-benchmark-btn").addEventListener("click", openBenchmark);
 	document.getElementById("close-benchmark-btn").addEventListener("click", closeBenchmark);

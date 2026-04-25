@@ -16,20 +16,30 @@
 					</div>
 				</div>
 				<div class="header-right">
-					<button class="btn btn-ghost" id="open-library-btn" style="display: none">
+					<button title="Pause" class="btn btn-ghost" id="pause-queue-btn">
+						<svg id="pause-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<rect x="6" y="4" width="4" height="16" rx="1" />
+							<rect x="14" y="4" width="4" height="16" rx="1" />
+						</svg>
+						<svg id="resume-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" style="display: none">
+							<polygon points="6 4 20 12 6 20 6 4" />
+						</svg>
+						<span id="pause-label">Pause</span>
+					</button>
+					<button title="Library" class="btn btn-ghost" id="open-library-btn" style="display: none">
 						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
 						</svg>
 						Library
 					</button>
-					<button class="btn btn-ghost" id="open-benchmark-btn">
+					<button title="Benchmark" class="btn btn-ghost" id="open-benchmark-btn">
 						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<path d="M12 14l4-4" />
 							<path d="M3.34 19a10 10 0 1 1 17.32 0" />
 						</svg>
 						Benchmark
 					</button>
-					<button class="btn btn-ghost" id="open-settings-btn">
+					<button title="Defaults" class="btn btn-ghost" id="open-settings-btn">
 						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<circle cx="12" cy="12" r="3" />
 							<path
@@ -38,7 +48,7 @@
 						</svg>
 						Defaults
 					</button>
-					<button class="btn btn-ghost" id="logout-btn">
+					<button title="Logout" class="btn btn-ghost" id="logout-btn">
 						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
 							<polyline points="16 17 21 12 16 7" />
@@ -50,6 +60,13 @@
 			</header>
 
 			<main class="main">
+				<div id="queue-paused-banner" class="queue-paused-banner" style="display: none">
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<rect x="6" y="4" width="4" height="16" rx="1" />
+						<rect x="14" y="4" width="4" height="16" rx="1" />
+					</svg>
+					<span>Encoding paused - jobs will wait in the queue until you press Continue</span>
+				</div>
 				<div id="empty-state" class="empty-state"></div>
 				<div id="jobs-list" class="jobs-list" style="display: none"></div>
 			</main>

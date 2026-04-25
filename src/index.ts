@@ -12,6 +12,9 @@ import {
 	moveJob,
 	reorderJobs,
 	cancelJob,
+	isQueuePaused,
+	pauseQueue,
+	resumeQueue,
 } from "./store";
 import { startWatcher } from "./watcher";
 import { browseFolder, isPathAllowed } from "./library";
@@ -170,6 +173,22 @@ app.patch("/api/config", async (c) => {
 	const body = (await c.req.json()) as Partial<JobSettings>;
 	const updated = updateDefaults(body);
 	return c.json(updated);
+});
+
+app.get("/api/queue", (c) => {
+	return c.json({ paused: isQueuePaused() });
+});
+
+app.post("/api/queue/pause", (c) => {
+	const ok = pauseQueue();
+	if (!ok) return c.json({ error: "Queue is already paused", paused: true }, 400);
+	return c.json({ ok: true, paused: true });
+});
+
+app.post("/api/queue/resume", (c) => {
+	const ok = resumeQueue();
+	if (!ok) return c.json({ error: "Queue is not paused", paused: false }, 400);
+	return c.json({ ok: true, paused: false });
 });
 
 app.get("/api/benchmark", (c) => {
