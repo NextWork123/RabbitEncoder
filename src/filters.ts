@@ -2,7 +2,7 @@ import type { DenoiseLevel, DebandLevel } from "./types";
 import { Logger } from "./logger";
 
 /** CPU/GPU nlmeans filter parameters for each denoise level. */
-const NLMEANS_PARAMS: Record<string, string> = {
+export const NLMEANS_PARAMS: Record<string, string> = {
 	light: "s=1:p=3:r=7",
 	medium: "s=2:p=5:r=9",
 	heavy: "s=3:p=7:r=11",
@@ -17,7 +17,7 @@ const NLMEANS_PARAMS: Record<string, string> = {
  * The filter also adds dither, which is why it must come before any denoise pass
  * (denoise would otherwise strip the dither and the bands come back).
  */
-const GRADFUN_PARAMS: Record<string, string> = {
+export const GRADFUN_PARAMS: Record<string, string> = {
 	light: "strength=0.8:radius=8",
 	medium: "strength=1.4:radius=16",
 	heavy: "strength=2.8:radius=24",

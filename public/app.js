@@ -8,6 +8,8 @@ let defaults = null;
 let currentEditJobId = null;
 let authToken = localStorage.getItem("authToken") || "";
 let pollTimer = null;
+let benchmarkPollTimer = null;
+let benchmarkElapsedTimer = null;
 
 const QUALITIES = ["low", "medium", "high"];
 const SPEEDS = ["slower", "slow", "medium", "fast", "faster"];
@@ -140,6 +142,21 @@ async function fetchJobs() {
 
 async function fetchConfig() {
 	const res = await authFetch(`${API}/api/config`);
+	return res.json();
+}
+
+async function fetchBenchmark() {
+	const res = await authFetch(`${API}/api/benchmark`);
+	return res.json();
+}
+
+async function startBenchmarkRun() {
+	const res = await authFetch(`${API}/api/benchmark`, { method: "POST" });
+	return res.json();
+}
+
+async function cancelBenchmarkRun() {
+	const res = await authFetch(`${API}/api/benchmark`, { method: "DELETE" });
 	return res.json();
 }
 
@@ -1039,6 +1056,267 @@ function closeSettingsIfOutside(e) {
 	if (e.target === e.currentTarget) closeSettings();
 }
 
+function formatElapsed(ms) {
+	const total = Math.floor(ms / 1000);
+	const m = Math.floor(total / 60);
+	const s = total % 60;
+	return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function classifySpeedup(x) {
+	if (x === null || x === undefined || isNaN(x)) return "";
+	if (x >= 2) return "speedup-good";
+	if (x >= 1.2) return "speedup-meh";
+	return "speedup-bad";
+}
+
+function renderBenchmarkResults(state) {
+	const container = document.getElementById("benchmark-results");
+	const hasGpu = state.gpuAvailable === true;
+	const levels = ["light", "medium", "heavy"];
+
+	const cpuMap = new Map();
+	const gpuMap = new Map();
+	for (const r of state.results) {
+		(r.mode === "gpu" ? gpuMap : cpuMap).set(r.level, r);
+	}
+
+	if (state.results.length === 0 && state.status !== "completed") {
+		container.style.display = "none";
+		return;
+	}
+
+	let speedupSum = 0;
+	let speedupCount = 0;
+	const rows = levels
+		.map((level) => {
+			const cpu = cpuMap.get(level);
+			const gpu = gpuMap.get(level);
+			const cpuFps = cpu && !cpu.error ? cpu.fps : null;
+			const gpuFps = gpu && !gpu.error ? gpu.fps : null;
+			const speedup = cpuFps && gpuFps ? gpuFps / cpuFps : null;
+			if (speedup !== null) {
+				speedupSum += speedup;
+				speedupCount++;
+			}
+
+			const cell = (entry, fps) => {
+				if (!entry) return `<td class="numeric cell-empty">—</td>`;
+				if (entry.error) return `<td class="numeric cell-failed" title="${escapeHtml(entry.error)}">failed</td>`;
+				if (fps === null || fps === undefined) return `<td class="numeric cell-empty">—</td>`;
+				const speed = entry.speed ? ` <span class="cell-empty">(${escapeHtml(entry.speed)})</span>` : "";
+				return `<td class="numeric">${fps.toFixed(2)}${speed}</td>`;
+			};
+
+			const speedupCell =
+				speedup !== null ? `<td class="numeric ${classifySpeedup(speedup)}">${speedup.toFixed(2)}x</td>` : `<td class="numeric cell-empty">—</td>`;
+
+			return (
+				`<tr>` +
+				`<td class="level-cell">${level}</td>` +
+				cell(cpu, cpuFps) +
+				(hasGpu ? cell(gpu, gpuFps) : `<td class="numeric cell-empty">—</td>`) +
+				speedupCell +
+				`</tr>`
+			);
+		})
+		.join("");
+
+	container.innerHTML = `
+		<table>
+			<thead>
+				<tr>
+					<th>Level</th>
+					<th class="numeric">CPU fps</th>
+					<th class="numeric">GPU fps</th>
+					<th class="numeric">Speedup</th>
+				</tr>
+			</thead>
+			<tbody>${rows}</tbody>
+		</table>
+	`;
+
+	if (state.status === "completed") {
+		const avgSpeedup = speedupCount > 0 ? speedupSum / speedupCount : null;
+		let recHtml = "";
+		if (state.gpuAvailable === false) {
+			recHtml = `<div class="benchmark-recommendation meh">No OpenCL device detected - denoising will run on CPU.</div>`;
+		} else if (avgSpeedup !== null && avgSpeedup >= 2) {
+			recHtml = `<div class="benchmark-recommendation good">GPU is ${avgSpeedup.toFixed(1)}x faster on average - keep <code>ENCODER_DENOISE_GPU=true</code>.</div>`;
+		} else if (avgSpeedup !== null && avgSpeedup >= 1.2) {
+			recHtml = `<div class="benchmark-recommendation meh">GPU is only ${avgSpeedup.toFixed(1)}x faster - modest gain, GPU is still recommended.</div>`;
+		} else if (avgSpeedup !== null) {
+			recHtml = `<div class="benchmark-recommendation bad">GPU is not faster than CPU here (${avgSpeedup.toFixed(2)}x). CPU denoise may be the better choice.</div>`;
+		}
+		container.insertAdjacentHTML("beforeend", recHtml);
+	}
+
+	container.style.display = "";
+}
+
+function escapeHtml(s) {
+	return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+function renderBenchmark(state) {
+	const statusEl = document.getElementById("benchmark-status");
+	const statusLabel = document.getElementById("benchmark-status-label");
+	const statusStep = document.getElementById("benchmark-status-step");
+	const statusFill = document.getElementById("benchmark-progress-fill");
+	const statusMeta = document.getElementById("benchmark-status-meta");
+	const errEl = document.getElementById("benchmark-error");
+	const runBtn = document.getElementById("benchmark-run-btn");
+	const cancelBtn = document.getElementById("benchmark-cancel-btn");
+	const noteEl = document.getElementById("benchmark-note");
+
+	errEl.style.display = "none";
+
+	if (state.status === "running") {
+		statusEl.style.display = "";
+		statusLabel.textContent = state.currentLabel || "Running…";
+		statusStep.textContent = state.totalSteps > 0 ? `Step ${state.currentStep} / ${state.totalSteps}` : "";
+		const pct = state.totalSteps > 0 ? Math.min(100, (state.currentStep / state.totalSteps) * 100) : 0;
+		statusFill.style.width = `${pct}%`;
+		const elapsed = state.startedAt ? Date.now() - state.startedAt : 0;
+		statusMeta.textContent = `Elapsed ${formatElapsed(elapsed)} · ${state.size} · ${state.duration}s @ ${state.rate} fps`;
+		runBtn.style.display = "none";
+		cancelBtn.style.display = "";
+		noteEl.textContent = "";
+	} else if (state.status === "completed") {
+		statusEl.style.display = "";
+		statusLabel.textContent = "Completed";
+		statusStep.textContent = `${state.results.length} / ${state.totalSteps} runs`;
+		statusFill.style.width = "100%";
+		const elapsed = state.startedAt && state.completedAt ? state.completedAt - state.startedAt : 0;
+		statusMeta.textContent = `Total ${formatElapsed(elapsed)} · ${state.size} · ${state.duration}s @ ${state.rate} fps`;
+		runBtn.style.display = "";
+		runBtn.textContent = "Run Again";
+		cancelBtn.style.display = "none";
+		noteEl.textContent = "";
+	} else if (state.status === "failed") {
+		statusEl.style.display = "none";
+		errEl.textContent = state.error || "Benchmark failed";
+		errEl.style.display = "";
+		runBtn.style.display = "";
+		runBtn.textContent = "Retry";
+		cancelBtn.style.display = "none";
+		noteEl.textContent = "";
+	} else if (state.status === "cancelled") {
+		statusEl.style.display = "";
+		statusLabel.textContent = "Cancelled";
+		statusStep.textContent = "";
+		statusMeta.textContent = "";
+		runBtn.style.display = "";
+		runBtn.textContent = "Run Benchmark";
+		cancelBtn.style.display = "none";
+		noteEl.textContent = "";
+	} else {
+		// idle
+		statusEl.style.display = "none";
+		runBtn.style.display = "";
+		runBtn.textContent = "Run Benchmark";
+		cancelBtn.style.display = "none";
+		noteEl.textContent = "";
+	}
+
+	renderBenchmarkResults(state);
+}
+
+function startBenchmarkPolling() {
+	stopBenchmarkPolling();
+	const tick = async () => {
+		try {
+			const state = await fetchBenchmark();
+			renderBenchmark(state);
+			if (state.status !== "running") {
+				stopBenchmarkPolling();
+			}
+		} catch {
+			stopBenchmarkPolling();
+		}
+	};
+	benchmarkPollTimer = setInterval(tick, 700);
+	// Update elapsed seconds smoothly between polls
+	benchmarkElapsedTimer = setInterval(async () => {
+		try {
+			const state = await fetchBenchmark();
+			if (state.status === "running") {
+				const elapsed = state.startedAt ? Date.now() - state.startedAt : 0;
+				const meta = document.getElementById("benchmark-status-meta");
+				if (meta) {
+					meta.textContent = `Elapsed ${formatElapsed(elapsed)} · ${state.size} · ${state.duration}s @ ${state.rate} fps`;
+				}
+			}
+		} catch {}
+	}, 250);
+	tick();
+}
+
+function stopBenchmarkPolling() {
+	if (benchmarkPollTimer) clearInterval(benchmarkPollTimer);
+	if (benchmarkElapsedTimer) clearInterval(benchmarkElapsedTimer);
+	benchmarkPollTimer = null;
+	benchmarkElapsedTimer = null;
+}
+
+async function openBenchmark() {
+	document.getElementById("benchmark-modal").style.display = "";
+	try {
+		const state = await fetchBenchmark();
+		renderBenchmark(state);
+		if (state.status === "running") startBenchmarkPolling();
+	} catch {
+		document.getElementById("benchmark-error").textContent = "Failed to load benchmark state";
+		document.getElementById("benchmark-error").style.display = "";
+	}
+}
+
+function closeBenchmark() {
+	document.getElementById("benchmark-modal").style.display = "none";
+	stopBenchmarkPolling();
+}
+
+function closeBenchmarkIfOutside(e) {
+	if (e.target === e.currentTarget) closeBenchmark();
+}
+
+async function handleBenchmarkRun() {
+	const runBtn = document.getElementById("benchmark-run-btn");
+	const noteEl = document.getElementById("benchmark-note");
+	runBtn.disabled = true;
+	runBtn.textContent = "Starting…";
+	noteEl.textContent = "";
+	try {
+		const result = await startBenchmarkRun();
+		if (result.error) {
+			noteEl.textContent = result.error;
+			runBtn.textContent = "Run Benchmark";
+		} else {
+			renderBenchmark(result);
+			startBenchmarkPolling();
+		}
+	} catch {
+		noteEl.textContent = "Failed to start benchmark";
+		runBtn.textContent = "Run Benchmark";
+	} finally {
+		runBtn.disabled = false;
+	}
+}
+
+async function handleBenchmarkCancel() {
+	const cancelBtn = document.getElementById("benchmark-cancel-btn");
+	cancelBtn.disabled = true;
+	try {
+		await cancelBenchmarkRun();
+		const state = await fetchBenchmark();
+		renderBenchmark(state);
+		stopBenchmarkPolling();
+	} catch {
+	} finally {
+		cancelBtn.disabled = false;
+	}
+}
+
 async function openJobSettings(jobId) {
 	const jobs = await fetchJobs();
 	const job = jobs.find((j) => j.id === jobId);
@@ -1541,6 +1819,12 @@ function initEventListeners() {
 	document.getElementById("save-job-settings-btn").addEventListener("click", saveJobSettings);
 	document.getElementById("sub-preview-modal").addEventListener("click", closeSubPreviewIfOutside);
 	document.getElementById("logout-btn").addEventListener("click", logout);
+
+	document.getElementById("open-benchmark-btn").addEventListener("click", openBenchmark);
+	document.getElementById("close-benchmark-btn").addEventListener("click", closeBenchmark);
+	document.getElementById("benchmark-modal").addEventListener("click", closeBenchmarkIfOutside);
+	document.getElementById("benchmark-run-btn").addEventListener("click", handleBenchmarkRun);
+	document.getElementById("benchmark-cancel-btn").addEventListener("click", handleBenchmarkCancel);
 
 	document.getElementById("login-submit-btn").addEventListener("click", handleLogin);
 	document.getElementById("login-password").addEventListener("keydown", (e) => {

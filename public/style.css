@@ -1349,3 +1349,159 @@ code {
 	white-space: pre;
 	margin: 0;
 }
+
+.benchmark-modal {
+	width: min(560px, calc(100vw - 32px));
+}
+
+.benchmark-intro {
+	font-size: 0.82rem;
+	color: var(--text-1);
+	line-height: 1.5;
+}
+
+.benchmark-status {
+	background: var(--bg-2);
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-sm);
+	padding: 12px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.benchmark-status-row {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.benchmark-status-label {
+	font-size: 0.82rem;
+	font-weight: 600;
+	color: var(--text-0);
+}
+
+.benchmark-status-step {
+	font-family: var(--font-mono);
+	font-size: 0.72rem;
+	color: var(--text-2);
+}
+
+.benchmark-progress {
+	height: 4px;
+	background: var(--bg-3);
+	border-radius: 2px;
+	overflow: hidden;
+}
+
+.benchmark-progress-fill {
+	height: 100%;
+	width: 0%;
+	background: linear-gradient(90deg, var(--accent), var(--purple));
+	transition: width 0.3s ease;
+}
+
+.benchmark-status-meta {
+	font-family: var(--font-mono);
+	font-size: 0.7rem;
+	color: var(--text-2);
+}
+
+.benchmark-results table {
+	width: 100%;
+	border-collapse: collapse;
+	font-family: var(--font-mono);
+	font-size: 0.78rem;
+}
+
+.benchmark-results th {
+	text-align: left;
+	font-size: 0.68rem;
+	font-weight: 600;
+	color: var(--text-2);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--border-subtle);
+}
+
+.benchmark-results th.numeric,
+.benchmark-results td.numeric {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.benchmark-results td {
+	padding: 9px 10px;
+	border-bottom: 1px solid var(--border-subtle);
+	color: var(--text-1);
+}
+
+.benchmark-results tr:last-child td {
+	border-bottom: none;
+}
+
+.benchmark-results .level-cell {
+	color: var(--text-0);
+	font-weight: 600;
+	text-transform: capitalize;
+}
+
+.benchmark-results .speedup-good {
+	color: var(--green);
+	font-weight: 600;
+}
+
+.benchmark-results .speedup-meh {
+	color: var(--amber);
+	font-weight: 600;
+}
+
+.benchmark-results .speedup-bad {
+	color: var(--red);
+	font-weight: 600;
+}
+
+.benchmark-results .cell-empty {
+	color: var(--text-2);
+}
+
+.benchmark-results .cell-failed {
+	color: var(--red);
+}
+
+.benchmark-recommendation {
+	margin-top: 12px;
+	padding: 10px 12px;
+	border-radius: var(--radius-sm);
+	font-size: 0.8rem;
+	line-height: 1.4;
+}
+
+.benchmark-recommendation.good {
+	background: var(--green-dim);
+	color: var(--green);
+}
+
+.benchmark-recommendation.meh {
+	background: var(--amber-dim);
+	color: var(--amber);
+}
+
+.benchmark-recommendation.bad {
+	background: var(--red-dim);
+	color: var(--red);
+}
+
+.benchmark-error {
+	background: var(--red-dim);
+	color: var(--red);
+	padding: 10px 12px;
+	border-radius: var(--radius-sm);
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	line-height: 1.5;
+	word-break: break-word;
+}

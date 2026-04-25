@@ -25,6 +25,7 @@ import { bearerAuth } from "@rabbit-company/web-middleware/bearer-auth";
 import { previewSubtitles } from "./tracks";
 import { join } from "path";
 import { probeFile } from "./probe";
+import { cancelBenchmark, getBenchmarkState, startBenchmark } from "./benchmark";
 
 export const config = await loadConfig();
 
@@ -169,6 +170,24 @@ app.patch("/api/config", async (c) => {
 	const body = (await c.req.json()) as Partial<JobSettings>;
 	const updated = updateDefaults(body);
 	return c.json(updated);
+});
+
+app.get("/api/benchmark", (c) => {
+	return c.json(getBenchmarkState());
+});
+
+app.post("/api/benchmark", async (c) => {
+	const result = await startBenchmark();
+	if (!result.ok) {
+		return c.json({ error: result.error || "Failed to start benchmark" }, 409);
+	}
+	return c.json(getBenchmarkState());
+});
+
+app.delete("/api/benchmark", (c) => {
+	const ok = cancelBenchmark();
+	if (!ok) return c.json({ error: "No benchmark currently running" }, 400);
+	return c.json({ ok: true });
 });
 
 app.get("/api/library", (c) => {
