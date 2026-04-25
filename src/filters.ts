@@ -1,7 +1,7 @@
 import type { DenoiseLevel, DebandLevel } from "./types";
 import { Logger } from "./logger";
 
-/** CPU nlmeans filter parameters for each denoise level. */
+/** CPU/GPU nlmeans filter parameters for each denoise level. */
 const NLMEANS_PARAMS: Record<string, string> = {
 	light: "s=1:p=3:r=7",
 	medium: "s=2:p=5:r=9",
@@ -22,6 +22,9 @@ const GRADFUN_PARAMS: Record<string, string> = {
 	medium: "strength=1.4:radius=16",
 	heavy: "strength=2.8:radius=24",
 };
+
+const OPENCL_DEVICE_NAME = "gpu";
+const OPENCL_DEVICE_SPEC = `opencl=${OPENCL_DEVICE_NAME}:0.0`;
 
 export interface DenoiseConfig {
 	/** The -vf filter string to pass to FFmpeg. */
@@ -47,16 +50,35 @@ export interface PrepareFilterConfig {
 }
 
 /**
- * Probe whether FFmpeg can initialize an OpenCL device.
- * Runs `ffmpeg -init_hw_device opencl=gpu -f lavfi -i nullsrc -frames:v 1 -f null -`
- * and checks for a zero exit code.
+ * Probe whether FFmpeg can actually run the OpenCL nlmeans path.
  */
 export async function isOpenClAvailable(): Promise<boolean> {
 	try {
 		const proc = Bun.spawn(
-			["ffmpeg", "-hide_banner", "-init_hw_device", "opencl=gpu", "-f", "lavfi", "-i", "nullsrc=s=16x16:d=0.04", "-frames:v", "1", "-f", "null", "-"],
+			[
+				"ffmpeg",
+				"-hide_banner",
+				"-v",
+				"error",
+				"-init_hw_device",
+				OPENCL_DEVICE_SPEC,
+				"-filter_hw_device",
+				OPENCL_DEVICE_NAME,
+				"-f",
+				"lavfi",
+				"-i",
+				"testsrc2=size=64x64:rate=1:duration=1",
+				"-vf",
+				"format=yuv420p,hwupload,nlmeans_opencl=s=1:p=3:r=7,hwdownload,format=yuv420p",
+				"-frames:v",
+				"1",
+				"-f",
+				"null",
+				"-",
+			],
 			{ stdout: "ignore", stderr: "pipe" },
 		);
+
 		const code = await proc.exited;
 		return code === 0;
 	} catch {
@@ -67,8 +89,8 @@ export async function isOpenClAvailable(): Promise<boolean> {
 /**
  * Build the DenoiseConfig for a given level and GPU preference.
  *
- * When `useGpu` is true, probes for OpenCL availability first.
- * Falls back to CPU nlmeans transparently if OpenCL is not available.
+ * When `useGpu` is true, probes the actual OpenCL nlmeans filter path first.
+ * Falls back to CPU nlmeans transparently if OpenCL filtering is not available.
  */
 export async function buildDenoiseConfig(level: DenoiseLevel, useGpu: boolean): Promise<DenoiseConfig | null> {
 	const params = NLMEANS_PARAMS[level];
@@ -76,15 +98,18 @@ export async function buildDenoiseConfig(level: DenoiseLevel, useGpu: boolean): 
 
 	if (useGpu) {
 		const gpuAvailable = await isOpenClAvailable();
+
 		if (gpuAvailable) {
-			Logger.info("[denoise] OpenCL device detected, using GPU-accelerated nlmeans_opencl");
+			Logger.info("[denoise] OpenCL nlmeans path verified, using GPU-accelerated nlmeans_opencl");
+
 			return {
-				filter: `hwupload,nlmeans_opencl=${params},hwdownload,format=yuv420p`,
-				preInputArgs: ["-init_hw_device", "opencl=gpu", "-filter_hw_device", "gpu"],
+				filter: `format=yuv420p,hwupload,nlmeans_opencl=${params},hwdownload,format=yuv420p`,
+				preInputArgs: ["-init_hw_device", OPENCL_DEVICE_SPEC, "-filter_hw_device", OPENCL_DEVICE_NAME],
 				isGpu: true,
 			};
 		}
-		Logger.warn("[denoise] GPU denoise requested but no OpenCL device found, falling back to CPU nlmeans");
+
+		Logger.warn("[denoise] GPU denoise requested but FFmpeg OpenCL nlmeans path failed, falling back to CPU nlmeans");
 	}
 
 	return {
@@ -103,6 +128,7 @@ export async function buildDenoiseConfig(level: DenoiseLevel, useGpu: boolean): 
 export function buildDebandConfig(level: DebandLevel): DebandConfig | null {
 	const params = GRADFUN_PARAMS[level];
 	if (!params) return null;
+
 	return {
 		filter: `gradfun=${params}`,
 	};
@@ -153,6 +179,7 @@ export async function buildPrepareFilterConfig(
 	if (denoiseConfig) {
 		parts.push(denoiseConfig.filter);
 		preInputArgs.push(...denoiseConfig.preInputArgs);
+
 		const gpuLabel = denoiseConfig.isGpu ? " [GPU]" : " [CPU]";
 		labelParts.push(`Denoising (${denoise}${gpuLabel})`);
 	}
