@@ -1296,7 +1296,6 @@ function startBenchmarkPolling() {
 		}
 	};
 	benchmarkPollTimer = setInterval(tick, 700);
-	// Update elapsed seconds smoothly between polls
 	benchmarkElapsedTimer = setInterval(async () => {
 		try {
 			const state = await fetchBenchmark();
@@ -1308,7 +1307,7 @@ function startBenchmarkPolling() {
 				}
 			}
 		} catch {}
-	}, 250);
+	}, 700);
 	tick();
 }
 
