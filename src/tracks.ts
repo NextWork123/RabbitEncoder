@@ -133,6 +133,8 @@ const GROUP_BLOCKLIST = new Set([
 	"subtitle",
 	"subs",
 	"sub",
+	"ass",
+	"srt",
 	"full_subtitles",
 	"signs_songs",
 	"signs_and_songs",
