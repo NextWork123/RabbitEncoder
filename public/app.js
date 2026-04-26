@@ -10,7 +10,6 @@ let currentEditJobId = null;
 let authToken = localStorage.getItem("authToken") || "";
 let pollTimer = null;
 let benchmarkPollTimer = null;
-let benchmarkElapsedTimer = null;
 
 const QUALITIES = ["low", "medium", "high"];
 const SPEEDS = ["slower", "slow", "medium", "fast", "faster"];
@@ -134,6 +133,19 @@ async function authFetch(url, opts = {}) {
 	}
 
 	return res;
+}
+
+let openClDevices = null;
+async function fetchOpenClDevices() {
+	if (openClDevices !== null) return openClDevices;
+	try {
+		const res = await authFetch(`${API}/api/opencl-devices`);
+		const data = await res.json();
+		openClDevices = data.devices || [];
+	} catch {
+		openClDevices = [];
+	}
+	return openClDevices;
 }
 
 async function fetchJobs() {
@@ -370,6 +382,63 @@ function renderRadioPills(container, options, selected, onChange) {
 		};
 		container.appendChild(pill);
 	});
+}
+
+function renderGpuDevicePicker(container, devices, selectedId, onChange) {
+	container.innerHTML = "";
+	if (!devices || devices.length === 0) {
+		container.style.display = "none";
+		return;
+	}
+	container.style.display = "";
+	if (devices.length === 1) {
+		const d = devices[0];
+		const info = document.createElement("div");
+		info.className = "gpu-device-info";
+		info.textContent = `Device: ${d.deviceName.split("(")[0].trim()} (${d.id})`;
+		container.appendChild(info);
+		// ensure config still carries the id
+		if (selectedId !== d.id) onChange(d.id);
+		return;
+	}
+	for (const d of devices) {
+		const label = document.createElement("label");
+		label.className = "radio-pill";
+		const input = document.createElement("input");
+		input.type = "radio";
+		input.name = container.id + "-radio";
+		input.value = d.id;
+		input.checked = d.id === selectedId;
+		input.onchange = () => onChange(d.id);
+		const text = document.createElement("span");
+		text.textContent = `${d.deviceName.split("(")[0].trim()} (${d.id})`;
+		label.appendChild(input);
+		label.appendChild(text);
+		container.appendChild(label);
+	}
+}
+
+function renderGpuToggle(container, checked, onChange, devicePickerEl) {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => {
+		onChange(input.checked);
+		if (devicePickerEl) {
+			devicePickerEl.style.display = input.checked ? "" : "none";
+		}
+	};
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Use GPU acceleration (OpenCL)";
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+	if (devicePickerEl) {
+		devicePickerEl.style.display = checked ? "" : "none";
+	}
 }
 
 function renderBitrateInputs(container, bitrates, onChange) {
@@ -1083,6 +1152,15 @@ async function openSettings() {
 		audioBitrates: { ...defaults.audioBitrates },
 	};
 
+	const devices = await fetchOpenClDevices();
+	if (!tempDefaults.gpuDevice || !devices.some((d) => d.id === tempDefaults.gpuDevice)) {
+		tempDefaults.gpuDevice = devices[0]?.id || "0.0";
+	}
+
+	const devicePickerEl = document.getElementById("default-gpu-device");
+	renderGpuDevicePicker(devicePickerEl, devices, tempDefaults.gpuDevice, (v) => (tempDefaults.gpuDevice = v));
+	renderGpuToggle(document.getElementById("default-denoise-gpu"), tempDefaults.denoiseGpu || false, (v) => (tempDefaults.denoiseGpu = v), devicePickerEl);
+
 	renderRadioPills(document.getElementById("default-quality"), QUALITIES, tempDefaults.quality, (v) => (tempDefaults.quality = v));
 	renderRadioPills(document.getElementById("default-speed"), SPEEDS, tempDefaults.finalSpeed, (v) => (tempDefaults.finalSpeed = v));
 	renderRadioPills(document.getElementById("default-denoise"), DENOISE_LEVELS, tempDefaults.denoise || "off", (v) => (tempDefaults.denoise = v));
@@ -1219,6 +1297,23 @@ function escapeHtml(s) {
 }
 
 function renderBenchmark(state) {
+	const cpuEl = document.getElementById("benchmark-cpu-name");
+	const gpuEl = document.getElementById("benchmark-gpu-name");
+
+	if (cpuEl) cpuEl.textContent = state.cpuName || "Unknown";
+	if (gpuEl) {
+		if (state.gpuName) {
+			gpuEl.textContent = `${state.gpuName.split("(")[0].trim()} (${state.gpuDevice})`;
+			gpuEl.classList.remove("benchmark-hardware-missing");
+		} else if (state.gpuDevice) {
+			gpuEl.textContent = `Device ${state.gpuDevice} not found`;
+			gpuEl.classList.add("benchmark-hardware-missing");
+		} else {
+			gpuEl.textContent = "Not available";
+			gpuEl.classList.add("benchmark-hardware-missing");
+		}
+	}
+
 	const statusEl = document.getElementById("benchmark-status");
 	const statusLabel = document.getElementById("benchmark-status-label");
 	const statusStep = document.getElementById("benchmark-status-step");
@@ -1296,26 +1391,12 @@ function startBenchmarkPolling() {
 		}
 	};
 	benchmarkPollTimer = setInterval(tick, 700);
-	benchmarkElapsedTimer = setInterval(async () => {
-		try {
-			const state = await fetchBenchmark();
-			if (state.status === "running") {
-				const elapsed = state.startedAt ? Date.now() - state.startedAt : 0;
-				const meta = document.getElementById("benchmark-status-meta");
-				if (meta) {
-					meta.textContent = `Elapsed ${formatElapsed(elapsed)} · ${state.size} · ${state.duration}s @ ${state.rate} fps`;
-				}
-			}
-		} catch {}
-	}, 700);
 	tick();
 }
 
 function stopBenchmarkPolling() {
 	if (benchmarkPollTimer) clearInterval(benchmarkPollTimer);
-	if (benchmarkElapsedTimer) clearInterval(benchmarkElapsedTimer);
 	benchmarkPollTimer = null;
-	benchmarkElapsedTimer = null;
 }
 
 async function openBenchmark() {
@@ -1388,7 +1469,17 @@ async function openJobSettings(jobId) {
 		...job.settings,
 		audioBitrates: { ...job.settings.audioBitrates },
 	};
+
+	const devices = await fetchOpenClDevices();
+	if (!tempSettings.gpuDevice || !devices.some((d) => d.id === tempSettings.gpuDevice)) {
+		tempSettings.gpuDevice = devices[0]?.id || "0.0";
+	}
+
 	window._tempJobSettings = tempSettings;
+
+	const devicePickerEl = document.getElementById("job-gpu-device");
+	renderGpuDevicePicker(devicePickerEl, devices, tempSettings.gpuDevice, (v) => (tempSettings.gpuDevice = v));
+	renderGpuToggle(document.getElementById("job-denoise-gpu"), tempSettings.denoiseGpu || false, (v) => (tempSettings.denoiseGpu = v), devicePickerEl);
 
 	renderRadioPills(document.getElementById("job-quality"), QUALITIES, tempSettings.quality, (v) => (tempSettings.quality = v));
 	renderRadioPills(document.getElementById("job-speed"), SPEEDS, tempSettings.finalSpeed, (v) => (tempSettings.finalSpeed = v));

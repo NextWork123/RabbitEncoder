@@ -34,6 +34,10 @@ services:
       # GPU-accelerated denoising via OpenCL (true/false)
       # Falls back to CPU automatically if no OpenCL device is found
       - ENCODER_DENOISE_GPU=true
+      # OpenCL device to use, in <platform>.<device> format.
+      # Run `docker exec rabbit-encoder clinfo -l` to list available devices.
+      # Default 0.0 = first device on the Rusticl platform.
+      - ENCODER_GPU_DEVICE=0.0
       # Deband level: off, light, medium, heavy
       - ENCODER_DEBAND=off
       # Downscale 4K sources to 1080p before encoding

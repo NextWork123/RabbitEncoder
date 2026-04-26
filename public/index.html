@@ -110,6 +110,7 @@
 							<label>Denoise</label>
 							<div class="radio-group" id="default-denoise"></div>
 							<div class="toggle-group" id="default-denoise-gpu"></div>
+							<div class="radio-group radio-group-stacked" id="default-gpu-device" style="display: none"></div>
 						</div>
 						<div class="setting-group">
 							<label>Deband</label>
@@ -162,6 +163,7 @@
 							<label>Denoise</label>
 							<div class="radio-group" id="job-denoise"></div>
 							<div class="toggle-group" id="job-denoise-gpu"></div>
+							<div class="radio-group radio-group-stacked" id="job-gpu-device" style="display: none"></div>
 						</div>
 						<div class="setting-group">
 							<label>Deband</label>
@@ -222,6 +224,17 @@
 						<p class="benchmark-intro">
 							Measures CPU vs GPU <code>nlmeans</code> performance at all three intensity levels using a 1920x1080 / 24 fps synthetic source.
 						</p>
+
+						<div class="benchmark-hardware" id="benchmark-hardware">
+							<div class="benchmark-hardware-row">
+								<span class="benchmark-hardware-label">CPU</span>
+								<span class="benchmark-hardware-value" id="benchmark-cpu-name">—</span>
+							</div>
+							<div class="benchmark-hardware-row">
+								<span class="benchmark-hardware-label">GPU</span>
+								<span class="benchmark-hardware-value" id="benchmark-gpu-name">—</span>
+							</div>
+						</div>
 
 						<div id="benchmark-status" class="benchmark-status" style="display: none">
 							<div class="benchmark-status-row">

@@ -23,6 +23,7 @@ export interface JobSettings {
 	audioBitrates: AudioChannelBitrates;
 	denoise: DenoiseLevel;
 	denoiseGpu: boolean;
+	gpuDevice: string;
 	deband: DebandLevel;
 	downscale: boolean;
 	skipBoosting: boolean;

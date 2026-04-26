@@ -1,4 +1,5 @@
 import { Logger } from "./logger";
+import { isValidDeviceSpec } from "./opencl";
 import { run } from "./process";
 import type { AppConfig, AudioChannelBitrates, DebandLevel, DenoiseLevel, EncoderQuality, EncoderSpeed } from "./types";
 
@@ -28,6 +29,8 @@ export async function loadConfig(): Promise<AppConfig> {
 	const finalSpeed = (process.env.ENCODER_SPEED || "slow") as EncoderSpeed;
 	const denoise = (process.env.ENCODER_DENOISE || "off") as DenoiseLevel;
 	const denoiseGpu = ["true", "1", "yes"].includes((process.env.ENCODER_DENOISE_GPU || "").toLowerCase());
+	const rawGpuDevice = (process.env.ENCODER_GPU_DEVICE || "0.0").trim();
+	const gpuDevice = isValidDeviceSpec(rawGpuDevice) ? rawGpuDevice : "0.0";
 	const deband = (process.env.ENCODER_DEBAND || "off") as DebandLevel;
 	const downscale = ["true", "1", "yes"].includes((process.env.ENCODER_DOWNSCALE || "").toLowerCase());
 	const skipBoosting = ["true", "1", "yes"].includes((process.env.ENCODER_SKIP_BOOSTING || "").toLowerCase());
@@ -67,6 +70,7 @@ export async function loadConfig(): Promise<AppConfig> {
 			audioBitrates: bitrates,
 			denoise,
 			denoiseGpu,
+			gpuDevice,
 			deband,
 			downscale,
 			skipBoosting,

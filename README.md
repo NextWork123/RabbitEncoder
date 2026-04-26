@@ -42,6 +42,8 @@ All settings are configurable via environment variables in `docker-compose.yml`:
 | `ENCODER_QUALITY`          | `medium`        | Default video quality (`low`, `medium`, `high`)                     |
 | `ENCODER_SPEED`            | `slow`          | Default encode speed (`slower`, `slow`, `medium`, `fast`, `faster`) |
 | `ENCODER_DENOISE`          | `off`           | Default denoise level (`off`, `light`, `medium`, `heavy`)           |
+| `ENCODER_DENOISE_GPU`      | `true`          | Enable GPU accelerated denoising (`true`/`false`)                   |
+| `ENCODER_GPU_DEVICE`       | `0.0`           | OpenCL device to use, in <platform>.<device> format.                |
 | `ENCODER_DEBAND`           | `off`           | Default deband level (`off`, `light`, `medium`, `heavy`)            |
 | `ENCODER_DOWNSCALE`        | `false`         | Downscale 4K sources to 1080p before encoding (`true`/`false`)      |
 | `ENCODER_SKIP_BOOSTING`    | `false`         | Skip per-scene CRF boosting, encode directly with SvtAv1EncApp      |
@@ -169,6 +171,7 @@ Source tags are detected from the input filename: `Bluray`, `WEBDL`, `WEBRip`, `
 | `GET`    | `/api/queue`                     | Get queue state (paused or running)                    |
 | `POST`   | `/api/queue/pause`               | Pause encoding - stops current encode, preserves queue |
 | `POST`   | `/api/queue/resume`              | Resume encoding from where it was paused               |
+| `GET`    | `/api/opencl-devices`            | List available OpenCL devices                          |
 | `GET`    | `/api/benchmark`                 | Get current benchmark state                            |
 | `POST`   | `/api/benchmark`                 | Start a denoise benchmark run                          |
 | `DELETE` | `/api/benchmark`                 | Cancel a running benchmark                             |

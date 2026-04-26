@@ -57,7 +57,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 		mesa-opencl-icd \
 		clinfo \
  && pip3 install --no-cache-dir --break-system-packages --no-deps vstools \
-#&& rm -f /etc/OpenCL/vendors/mesa.icd \
+ && rm -f /etc/OpenCL/vendors/mesa.icd \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy binaries

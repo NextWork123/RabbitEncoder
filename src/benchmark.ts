@@ -1,6 +1,8 @@
 import { Logger } from "./logger";
 import { isOpenClAvailable, NLMEANS_PARAMS } from "./filters";
 import { getAllJobs } from "./store";
+import { getCpuName } from "./system";
+import { listOpenClDevices } from "./opencl";
 
 const DURATION = 10;
 const SIZE = "1920x1080";
@@ -10,6 +12,10 @@ const TOTAL_FRAMES = DURATION * RATE;
 export type BenchmarkLevel = "light" | "medium" | "heavy";
 export type BenchmarkMode = "cpu" | "gpu";
 export type BenchmarkStatus = "idle" | "running" | "completed" | "failed" | "cancelled";
+
+export interface StartBenchmarkOptions {
+	gpuDevice: string;
+}
 
 export interface BenchmarkResult {
 	mode: BenchmarkMode;
@@ -54,6 +60,12 @@ export interface BenchmarkState {
 	gpuAvailable: boolean | null;
 	/** Set when the whole run failed (not when an individual ffmpeg returned non-zero). */
 	error: string | null;
+	/** CPU model name. */
+	cpuName: string | null;
+	/** GPU model name being (or to be) benchmarked. */
+	gpuName: string | null;
+	/** GPU device id (e.g. "0.0"). */
+	gpuDevice: string | null;
 }
 
 let state: BenchmarkState = newIdleState();
@@ -74,10 +86,19 @@ function newIdleState(): BenchmarkState {
 		results: [],
 		gpuAvailable: null,
 		error: null,
+		cpuName: getCpuName(),
+		gpuName: null,
+		gpuDevice: null,
 	};
 }
 
-export function getBenchmarkState(): BenchmarkState {
+export async function getBenchmarkState(currentGpuDevice: string): Promise<BenchmarkState> {
+	if (state.status !== "running") {
+		state.cpuName = getCpuName();
+		state.gpuDevice = currentGpuDevice;
+		const devices = await listOpenClDevices();
+		state.gpuName = devices.find((d) => d.id === currentGpuDevice)?.deviceName ?? null;
+	}
 	return state;
 }
 
@@ -237,18 +258,14 @@ export interface StartResult {
 	error?: string;
 }
 
-export async function startBenchmark(): Promise<StartResult> {
-	if (state.status === "running") {
-		return { ok: false, error: "Benchmark already running" };
-	}
-	if (isAnythingEncoding()) {
-		return { ok: false, error: "Cannot run benchmark while encoding is in progress" };
-	}
+export async function startBenchmark(options: StartBenchmarkOptions): Promise<StartResult> {
+	if (state.status === "running") return { ok: false, error: "Benchmark already running" };
+	if (isAnythingEncoding()) return { ok: false, error: "Cannot run benchmark while encoding is in progress" };
 
 	abortController = new AbortController();
 	state = { ...newIdleState(), status: "running", startedAt: Date.now() };
 
-	runBenchmarkAsync(abortController.signal).catch((err) => {
+	runBenchmarkAsync(abortController.signal, options).catch((err) => {
 		Logger.error(`[benchmark] Unhandled error: ${err?.message || err}`);
 		state.status = "failed";
 		state.error = err?.message || String(err);
@@ -266,14 +283,19 @@ export function cancelBenchmark(): boolean {
 	return true;
 }
 
-async function runBenchmarkAsync(signal: AbortSignal): Promise<void> {
-	Logger.info("[benchmark] Starting denoise benchmark");
+async function runBenchmarkAsync(signal: AbortSignal, options: StartBenchmarkOptions): Promise<void> {
+	Logger.info(`[benchmark] Starting denoise benchmark on device ${options.gpuDevice}`);
+
+	state.cpuName = getCpuName();
+	state.gpuDevice = options.gpuDevice;
+	const devices = await listOpenClDevices();
+	state.gpuName = devices.find((d) => d.id === options.gpuDevice)?.deviceName ?? null;
 
 	state.currentLabel = "Probing OpenCL availability";
 	const gpuAvailable = await isOpenClAvailable();
 	state.gpuAvailable = gpuAvailable;
 	if (!gpuAvailable) {
-		Logger.warn("[benchmark] OpenCL not available, GPU runs will be skipped");
+		Logger.warn(`[benchmark] OpenCL not available on ${options.gpuDevice}, GPU runs will be skipped`);
 	}
 
 	if (signal.aborted) {
