@@ -5,6 +5,8 @@ import { join } from "path";
 import { readFileSync, unlinkSync, existsSync } from "fs";
 import { classifyAssLines } from "./ass-classifier";
 
+const MIN_LINES_FOR_LANG_DETECTION = 5;
+
 export type AudioTrackType = "main" | "commentary" | "descriptive";
 
 const COMMENTARY_PATTERN = /\b(commentary|director'?s?\s+commentary)\b/i;
@@ -910,6 +912,16 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 				`[subtitle] Track ${stream.index}: skipping language detection — Malay/Indonesian are too similar to distinguish reliably, trusting "${stream.language}"`,
 			);
 			stream.language = "ind";
+			continue;
+		}
+
+		const dialogueLineCount = analysis?.dialogueLineCount ?? 0;
+		const origLangLower = (stream.language || "").toLowerCase();
+		const origIsKnown = origLangLower !== "" && origLangLower !== "und";
+		if (origIsKnown && dialogueLineCount < MIN_LINES_FOR_LANG_DETECTION) {
+			Logger.info(
+				`[subtitle] Track ${stream.index}: skipping language detection — only ${dialogueLineCount} dialogue lines, trusting declared "${stream.language}"`,
+			);
 			continue;
 		}
 
