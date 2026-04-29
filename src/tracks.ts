@@ -4,10 +4,41 @@ import { Logger } from "./logger";
 import { join } from "path";
 import { readFileSync, unlinkSync, existsSync } from "fs";
 import { classifyAssLines } from "./ass-classifier";
+import { LANG_ALIASES } from "./naming";
 
 const MIN_LINES_FOR_LANG_DETECTION = 5;
 
+type WithLanguage = { language?: string };
 export type AudioTrackType = "main" | "commentary" | "descriptive";
+
+export function normalizeLanguageCode(input: string | undefined): string {
+	if (!input) return "und";
+	const s = input.toLowerCase().trim();
+	return LANG_ALIASES[s] || s;
+}
+
+/**
+ * Keep only tracks whose language matches the allowed list.
+ * Empty list = no filter. `und`/missing-language tracks are dropped when active.
+ * If the filter would drop every track, keep all and warn (avoid producing
+ * a silent or sub-less encode from a typo).
+ */
+export function filterStreamsByLanguage<T extends WithLanguage>(streams: T[], allowed: string[], logTag: string): T[] {
+	if (!allowed || allowed.length === 0) return streams;
+
+	const allowedSet = new Set(allowed.map(normalizeLanguageCode));
+	const filtered = streams.filter((s) => {
+		if (!s.language) return false;
+		return allowedSet.has(normalizeLanguageCode(s.language));
+	});
+
+	if (filtered.length === 0 && streams.length > 0) {
+		Logger.warn(`[${logTag}] Language filter [${allowed.join(", ")}] matched no tracks, keeping all ${streams.length} as fallback`);
+		return streams;
+	}
+
+	return filtered;
+}
 
 const COMMENTARY_PATTERN = /\b(commentary|director'?s?\s+commentary)\b/i;
 const DESCRIPTIVE_PATTERN = /\b(descriptive|description|audio\s*desc(?:ription)?|visually\s*impaired|\bAD\b)\b/i;
@@ -1275,7 +1306,7 @@ export async function previewSubtitles(
 	inputPath: string,
 	sourceStreams: SubtitleStreamInfo[],
 	tempDir: string,
-	options: { dedupe?: boolean } = {},
+	options: { dedupe?: boolean; languages?: string[] } = {},
 ): Promise<SubtitlePreviewResult> {
 	const source: SubtitlePreviewTrack[] = sourceStreams.map((s) => {
 		const trackType = detectSubtitleTrackType(s);
@@ -1308,7 +1339,8 @@ export async function previewSubtitles(
 	await analyzeSubtitleStreams(cloned, inputPath, tempDir);
 
 	const sorted = sortSubtitleStreams(cloned);
-	const finalStreams = options.dedupe ? deduplicateSubtitleStreams(sorted) : sorted;
+	const langFiltered = filterStreamsByLanguage(sorted, options.languages || [], "subtitle");
+	const finalStreams = options.dedupe ? deduplicateSubtitleStreams(langFiltered) : langFiltered;
 
 	const defaultAssigned = new Set<string>();
 	const forcedAssigned = new Set<string>();

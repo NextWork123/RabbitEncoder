@@ -109,6 +109,12 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 	if (typeof settings.skipBoosting === "boolean") appConfig.defaults.skipBoosting = settings.skipBoosting;
 	if (typeof settings.noPhaseInv === "boolean") appConfig.defaults.noPhaseInv = settings.noPhaseInv;
 	if (typeof settings.dedupeSubtitles === "boolean") appConfig.defaults.dedupeSubtitles = settings.dedupeSubtitles;
+	if (Array.isArray(settings.audioLanguages)) {
+		appConfig.defaults.audioLanguages = settings.audioLanguages.map((s) => String(s).trim()).filter((s) => s.length > 0);
+	}
+	if (Array.isArray(settings.subtitleLanguages)) {
+		appConfig.defaults.subtitleLanguages = settings.subtitleLanguages.map((s) => String(s).trim()).filter((s) => s.length > 0);
+	}
 	if (settings.audioBitrates) {
 		appConfig.defaults.audioBitrates = {
 			...appConfig.defaults.audioBitrates,
@@ -280,6 +286,12 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 	if (typeof settings.skipBoosting === "boolean") job.settings.skipBoosting = settings.skipBoosting;
 	if (typeof settings.noPhaseInv === "boolean") job.settings.noPhaseInv = settings.noPhaseInv;
 	if (typeof settings.dedupeSubtitles === "boolean") job.settings.dedupeSubtitles = settings.dedupeSubtitles;
+	if (Array.isArray(settings.audioLanguages)) {
+		job.settings.audioLanguages = settings.audioLanguages.map((s) => String(s).trim()).filter((s) => s.length > 0);
+	}
+	if (Array.isArray(settings.subtitleLanguages)) {
+		job.settings.subtitleLanguages = settings.subtitleLanguages.map((s) => String(s).trim()).filter((s) => s.length > 0);
+	}
 	if (settings.audioBitrates) {
 		job.settings.audioBitrates = {
 			...job.settings.audioBitrates,

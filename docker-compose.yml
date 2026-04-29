@@ -46,6 +46,12 @@ services:
       - ENCODER_SKIP_BOOSTING=false
       # Keep only one subtitle per language + type (drops duplicates, keeps best)
       - ENCODER_DEDUPE_SUBTITLES=false
+      # Comma-separated audio language codes to keep (empty = keep all)
+      # Accepts ISO 639-1, 639-2, or English names. Example: jpn,eng
+      - AUDIO_LANGUAGES=
+      # Comma-separated subtitle language codes to keep (empty = keep all).
+      # Accepts ISO 639-1, 639-2, or English names. Example: jpn,eng
+      - SUBTITLE_LANGUAGES=
       # Disable phase inversion in Opus encoder (true/false)
       - AUDIO_NO_PHASE_INV=false
 

@@ -14,6 +14,7 @@ import {
 	analyzeSubtitleStreams,
 	normalizeLanguageGroup,
 	deduplicateSubtitleStreams,
+	filterStreamsByLanguage,
 } from "./tracks";
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
@@ -493,16 +494,24 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		updateJob({ status: "encoding_audio" });
 
 		const allAudioStreams = probe.audioStreams || [];
-		const filteredStreams = allAudioStreams.filter((s) => !s.title || !/compatibility/i.test(s.title));
-		const skippedCompat = allAudioStreams.length - filteredStreams.length;
+
+		const compatFiltered = allAudioStreams.filter((s) => !s.title || !/compatibility/i.test(s.title));
+		const skippedCompat = allAudioStreams.length - compatFiltered.length;
 		if (skippedCompat > 0) {
 			Logger.info(`[audio] Skipped ${skippedCompat} compatibility track(s)`);
 		}
 
-		const audioStreams = deduplicateAudioStreams(sortAudioStreams(filteredStreams));
+		const allowedAudioLangs = job.settings.audioLanguages || [];
+		const langFiltered = filterStreamsByLanguage(compatFiltered, allowedAudioLangs, "audio");
+		const skippedLang = compatFiltered.length - langFiltered.length;
+		if (skippedLang > 0) {
+			Logger.info(`[audio] Filtered ${skippedLang} track(s) not in [${allowedAudioLangs.join(", ")}]`);
+		}
 
-		if (filteredStreams.length !== audioStreams.length) {
-			Logger.info(`[audio] Deduplicated ${filteredStreams.length - audioStreams.length} redundant track(s)`);
+		const audioStreams = deduplicateAudioStreams(sortAudioStreams(langFiltered));
+
+		if (langFiltered.length !== audioStreams.length) {
+			Logger.info(`[audio] Deduplicated ${langFiltered.length - audioStreams.length} redundant track(s)`);
 		}
 
 		const sortedTypes = audioStreams.map((s) => `${s.language || "und"}:${detectAudioTrackType(s)}:${s.channels || "?"}ch`);
@@ -665,10 +674,18 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		await analyzeSubtitleStreams(allSubtitleStreams, job.inputPath, tempDir, signal);
 		const sortedSubtitleStreams = sortSubtitleStreams(allSubtitleStreams);
-		const subtitleStreams = job.settings.dedupeSubtitles ? deduplicateSubtitleStreams(sortedSubtitleStreams) : sortedSubtitleStreams;
 
-		if (job.settings.dedupeSubtitles && sortedSubtitleStreams.length !== subtitleStreams.length) {
-			Logger.info(`[subtitle] Deduplicated ${sortedSubtitleStreams.length - subtitleStreams.length} redundant track(s)`);
+		const allowedSubLangs = job.settings.subtitleLanguages || [];
+		const langFilteredSubs = filterStreamsByLanguage(sortedSubtitleStreams, allowedSubLangs, "subtitle");
+		const skippedSubLang = sortedSubtitleStreams.length - langFilteredSubs.length;
+		if (skippedSubLang > 0) {
+			Logger.info(`[subtitle] Filtered ${skippedSubLang} track(s) not in [${allowedSubLangs.join(", ")}]`);
+		}
+
+		const subtitleStreams = job.settings.dedupeSubtitles ? deduplicateSubtitleStreams(langFilteredSubs) : langFilteredSubs;
+
+		if (job.settings.dedupeSubtitles && langFilteredSubs.length !== subtitleStreams.length) {
+			Logger.info(`[subtitle] Deduplicated ${langFilteredSubs.length - subtitleStreams.length} redundant track(s)`);
 		}
 
 		if (subtitleStreams.length > 0) {

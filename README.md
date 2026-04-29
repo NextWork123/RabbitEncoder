@@ -48,6 +48,8 @@ All settings are configurable via environment variables in `docker-compose.yml`:
 | `ENCODER_DOWNSCALE`        | `false`         | Downscale 4K sources to 1080p before encoding (`true`/`false`)      |
 | `ENCODER_SKIP_BOOSTING`    | `false`         | Skip per-scene CRF boosting, encode directly with SvtAv1EncApp      |
 | `ENCODER_DEDUPE_SUBTITLES` | `false`         | Keep only one subtitle per language and type                        |
+| `AUDIO_LANGUAGES`          | _(empty)_       | Comma-separated audio languages to keep (empty = keep all)          |
+| `SUBTITLE_LANGUAGES`       | _(empty)_       | Comma-separated subtitle languages to keep (empty = keep all)       |
 | `AUDIO_NO_PHASE_INV`       | `false`         | Disable phase inversion in Opus encoder (`true`/`false`)            |
 | `AUDIO_BITRATE_MONO`       | `64`            | Opus bitrate for mono audio (kbps)                                  |
 | `AUDIO_BITRATE_STEREO`     | `128`           | Opus bitrate for stereo audio (kbps)                                |

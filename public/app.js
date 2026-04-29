@@ -1174,6 +1174,12 @@ async function openSettings() {
 		tempDefaults.dedupeSubtitles || false,
 		(v) => (tempDefaults.dedupeSubtitles = v),
 	);
+	renderAudioLanguagesInput(document.getElementById("default-audio-languages"), tempDefaults.audioLanguages || [], (v) => (tempDefaults.audioLanguages = v));
+	renderLanguageFilterInput(
+		document.getElementById("default-subtitle-languages"),
+		tempDefaults.subtitleLanguages || [],
+		(v) => (tempDefaults.subtitleLanguages = v),
+	);
 	renderBitrateInputs(document.getElementById("default-bitrates"), tempDefaults.audioBitrates, (ch, val) => (tempDefaults.audioBitrates[ch] = val));
 
 	window._tempDefaults = tempDefaults;
@@ -1493,6 +1499,12 @@ async function openJobSettings(jobId) {
 		document.getElementById("job-dedupe-subtitles"),
 		tempSettings.dedupeSubtitles || false,
 		(v) => (tempSettings.dedupeSubtitles = v),
+	);
+	renderAudioLanguagesInput(document.getElementById("job-audio-languages"), tempSettings.audioLanguages || [], (v) => (tempSettings.audioLanguages = v));
+	renderLanguageFilterInput(
+		document.getElementById("job-subtitle-languages"),
+		tempSettings.subtitleLanguages || [],
+		(v) => (tempSettings.subtitleLanguages = v),
 	);
 	renderBitrateInputs(document.getElementById("job-bitrates"), tempSettings.audioBitrates, (ch, val) => (tempSettings.audioBitrates[ch] = val));
 
@@ -1891,6 +1903,56 @@ function renderDedupeSubtitlesToggle(container, checked, onChange) {
 	label.appendChild(input);
 	label.appendChild(span);
 	container.appendChild(label);
+}
+
+function renderAudioLanguagesInput(container, value, onChange) {
+	container.innerHTML = "";
+
+	const input = document.createElement("input");
+	input.type = "text";
+	input.className = "lang-filter-input";
+	input.placeholder = "jpn, eng (empty = keep all)";
+	input.value = (value || []).join(", ");
+
+	const hint = document.createElement("div");
+	hint.className = "lang-filter-hint";
+	hint.textContent = "Comma-separated ISO codes. Empty keeps every track.";
+
+	input.oninput = () =>
+		onChange(
+			input.value
+				.split(",")
+				.map((s) => s.trim())
+				.filter((s) => s.length > 0),
+		);
+
+	container.appendChild(input);
+	container.appendChild(hint);
+}
+
+function renderLanguageFilterInput(container, value, onChange) {
+	container.innerHTML = "";
+
+	const input = document.createElement("input");
+	input.type = "text";
+	input.className = "lang-filter-input";
+	input.placeholder = "jpn, eng (empty = keep all)";
+	input.value = (value || []).join(", ");
+
+	const hint = document.createElement("div");
+	hint.className = "lang-filter-hint";
+	hint.textContent = "Comma-separated ISO codes. Empty keeps every track.";
+
+	input.oninput = () =>
+		onChange(
+			input.value
+				.split(",")
+				.map((s) => s.trim())
+				.filter((s) => s.length > 0),
+		);
+
+	container.appendChild(input);
+	container.appendChild(hint);
 }
 
 async function openLibrary() {

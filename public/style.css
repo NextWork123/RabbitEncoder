@@ -1592,3 +1592,24 @@ code {
 	font-size: 0.82rem;
 	font-weight: 500;
 }
+
+.lang-filter-input {
+	width: 100%;
+	font-family: var(--font-mono);
+	font-size: 0.8rem;
+	padding: 8px 10px;
+	background: var(--bg-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--text-0);
+	box-sizing: border-box;
+}
+.lang-filter-input:focus {
+	outline: none;
+	border-color: var(--accent);
+}
+.lang-filter-hint {
+	margin-top: 6px;
+	font-size: 0.7rem;
+	color: var(--text-2);
+}

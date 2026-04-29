@@ -121,6 +121,7 @@ app.get("/api/jobs/:id/subtitle-preview", async (c) => {
 
 		const result = await previewSubtitles(job.inputPath, subtitleStreams, tempDir, {
 			dedupe: job.settings.dedupeSubtitles,
+			languages: job.settings.subtitleLanguages || [],
 		});
 
 		try {

@@ -1,5 +1,168 @@
 import type { DenoiseLevel } from "./types";
 
+export const LANG_ALIASES: Record<string, string> = {
+	// Japanese
+	ja: "jpn",
+	jpn: "jpn",
+	japanese: "jpn",
+
+	// English
+	en: "eng",
+	eng: "eng",
+	english: "eng",
+
+	// Spanish
+	es: "spa",
+	spa: "spa",
+	spanish: "spa",
+	"es-ES": "spa",
+	"es-MX": "spa",
+	"es-AR": "spa",
+	"es-CO": "spa",
+	"es-419": "spa",
+
+	// French
+	fr: "fra",
+	fra: "fra",
+	fre: "fra",
+	french: "fra",
+
+	// German
+	de: "deu",
+	deu: "deu",
+	ger: "deu",
+	german: "deu",
+
+	// Italian
+	it: "ita",
+	ita: "ita",
+	italian: "ita",
+
+	// Portuguese
+	pt: "por",
+	por: "por",
+	portuguese: "por",
+	"pt-BR": "por",
+	"pt-PT": "por",
+	"pt-AO": "por",
+
+	// Russian
+	ru: "rus",
+	rus: "rus",
+	russian: "rus",
+
+	// Korean
+	ko: "kor",
+	kor: "kor",
+	korean: "kor",
+
+	// Chinese
+	zh: "zho",
+	zho: "zho",
+	chi: "zho",
+	chinese: "zho",
+	"zh-Hans": "zho",
+	"zh-Hant": "zho",
+	"zh-CN": "zho",
+	"zh-TW": "zho",
+	"zh-SG": "zho",
+	"zh-HK": "zho",
+
+	// Dutch
+	nl: "nld",
+	nld: "nld",
+	dut: "nld",
+	dutch: "nld",
+
+	// Arabic
+	ar: "ara",
+	ara: "ara",
+	arabic: "ara",
+
+	// Hindi
+	hi: "hin",
+	hin: "hin",
+	hindi: "hin",
+
+	// Turkish
+	tr: "tur",
+	tur: "tur",
+	turkish: "tur",
+
+	// Polish
+	pl: "pol",
+	pol: "pol",
+	polish: "pol",
+
+	// Swedish
+	sv: "swe",
+	swe: "swe",
+	swedish: "swe",
+
+	// Norwegian
+	no: "nor",
+	nor: "nor",
+	norwegian: "nor",
+
+	// Danish
+	da: "dan",
+	dan: "dan",
+	danish: "dan",
+
+	// Finnish
+	fi: "fin",
+	fin: "fin",
+	finnish: "fin",
+
+	// Czech
+	cs: "ces",
+	ces: "ces",
+	cze: "ces",
+	czech: "ces",
+
+	// Ukrainian
+	uk: "ukr",
+	ukr: "ukr",
+	ukrainian: "ukr",
+
+	// Thai
+	th: "tha",
+	tha: "tha",
+	thai: "tha",
+
+	// Vietnamese
+	vi: "vie",
+	vie: "vie",
+	vietnamese: "vie",
+
+	// Indonesian
+	id: "ind",
+	ind: "ind",
+	indonesian: "ind",
+
+	// Greek
+	el: "ell",
+	ell: "ell",
+	gre: "ell",
+	greek: "ell",
+
+	// Hebrew
+	he: "heb",
+	heb: "heb",
+	hebrew: "heb",
+
+	// Hungarian
+	hu: "hun",
+	hun: "hun",
+	hungarian: "hun",
+
+	// Romanian
+	ro: "ron",
+	ron: "ron",
+	rum: "ron",
+	romanian: "ron",
+};
+
 /**
  * Infer an optical-disc source tag from the video stream's codec and resolution.
  * Returns null when the stream doesn't match any known disc format.

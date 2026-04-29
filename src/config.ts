@@ -37,6 +37,16 @@ export async function loadConfig(): Promise<AppConfig> {
 	const noPhaseInv = ["true", "1", "yes"].includes((process.env.AUDIO_NO_PHASE_INV || "").toLowerCase());
 	const dedupeSubtitles = ["true", "1", "yes"].includes((process.env.ENCODER_DEDUPE_SUBTITLES || "").toLowerCase());
 
+	const audioLanguages = (process.env.AUDIO_LANGUAGES || "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+
+	const subtitleLanguages = (process.env.SUBTITLE_LANGUAGES || "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+
 	const bitrates: AudioChannelBitrates = {
 		mono: parseInt(process.env.AUDIO_BITRATE_MONO || "") || DEFAULT_BITRATES.mono,
 		stereo: parseInt(process.env.AUDIO_BITRATE_STEREO || "") || DEFAULT_BITRATES.stereo,
@@ -76,6 +86,8 @@ export async function loadConfig(): Promise<AppConfig> {
 			skipBoosting,
 			noPhaseInv,
 			dedupeSubtitles,
+			audioLanguages,
+			subtitleLanguages,
 		},
 	};
 }

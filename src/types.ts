@@ -29,6 +29,8 @@ export interface JobSettings {
 	skipBoosting: boolean;
 	noPhaseInv: boolean;
 	dedupeSubtitles: boolean;
+	audioLanguages: string[];
+	subtitleLanguages: string[];
 }
 
 export interface AudioStreamInfo {
