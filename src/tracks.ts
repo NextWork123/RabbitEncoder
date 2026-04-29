@@ -1,15 +1,24 @@
-import type { AudioStreamInfo, SubtitlePreviewResult, SubtitlePreviewTrack, SubtitleStreamInfo } from "./types";
+import type {
+	AudioChannelBitrates,
+	AudioPreviewResult,
+	AudioPreviewTrack,
+	AudioStreamInfo,
+	AudioTrackType,
+	SubtitlePreviewResult,
+	SubtitlePreviewTrack,
+	SubtitleStreamInfo,
+} from "./types";
 import { run } from "./process";
 import { Logger } from "./logger";
 import { join } from "path";
 import { readFileSync, unlinkSync, existsSync } from "fs";
 import { classifyAssLines } from "./ass-classifier";
 import { LANG_ALIASES } from "./naming";
+import { getOpusBitrateForLayout, normalizeLayout } from "./probe";
 
 const MIN_LINES_FOR_LANG_DETECTION = 5;
 
 type WithLanguage = { language?: string };
-export type AudioTrackType = "main" | "commentary" | "descriptive";
 
 export function normalizeLanguageCode(input: string | undefined): string {
 	if (!input) return "und";
@@ -1366,6 +1375,55 @@ export async function previewSubtitles(
 			trackType,
 			...flags,
 			isText: isTextSubtitleCodec(s.codec),
+		};
+	});
+
+	return { source, output };
+}
+
+export function previewAudio(sourceStreams: AudioStreamInfo[], bitrates: AudioChannelBitrates, options: { languages?: string[] } = {}): AudioPreviewResult {
+	const source: AudioPreviewTrack[] = sourceStreams.map((s) => ({
+		index: s.index,
+		codec: s.codec || "unknown",
+		language: s.language || "und",
+		flag: languageToFlag(s.language),
+		title: s.title || "",
+		trackType: detectAudioTrackType(s),
+		channels: s.channels,
+		channelLayout: normalizeLayout(s.channelLayout),
+		bitrate: s.bitrate,
+		isDefault: false,
+		isOriginal: s.isOriginal || false,
+	}));
+
+	const compatFiltered = sourceStreams.filter((s) => !s.title || !/compatibility/i.test(s.title));
+	const langFiltered = filterStreamsByLanguage(compatFiltered, options.languages || [], "audio");
+	const finalStreams = deduplicateAudioStreams(sortAudioStreams(langFiltered));
+
+	const defaultAssigned = new Set<string>();
+
+	const output: AudioPreviewTrack[] = finalStreams.map((s) => {
+		const trackType = detectAudioTrackType(s);
+		const lang = s.language || "und";
+		const langGroup = normalizeLanguageGroup(lang);
+		const layout = normalizeLayout(s.channelLayout);
+
+		const isDefault = trackType === "main" && !defaultAssigned.has(langGroup);
+		if (isDefault) defaultAssigned.add(langGroup);
+
+		return {
+			index: s.index,
+			codec: "opus", // post-encode codec
+			language: lang,
+			flag: languageToFlag(lang),
+			title: "", // encoder clears the track name
+			trackType,
+			channels: s.channels,
+			channelLayout: layout,
+			bitrate: s.bitrate,
+			outputBitrate: getOpusBitrateForLayout(layout, bitrates),
+			isDefault,
+			isOriginal: s.isOriginal || false,
 		};
 	});
 

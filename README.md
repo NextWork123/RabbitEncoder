@@ -164,6 +164,7 @@ Source tags are detected from the input filename: `Bluray`, `WEBDL`, `WEBRip`, `
 | `DELETE` | `/api/jobs/:id`                  | Remove a job                                           |
 | `POST`   | `/api/jobs/:id/retry`            | Retry a failed job                                     |
 | `POST`   | `/api/jobs/:id/cancel`           | Cancel an actively encoding job                        |
+| `GET`    | `/api/jobs/:id/audio-preview`    | Preview audio reorder/filter/dedup for a job           |
 | `GET`    | `/api/jobs/:id/subtitle-preview` | Preview subtitle reorder/rename for a job              |
 | `GET`    | `/api/config`                    | Get default settings                                   |
 | `PATCH`  | `/api/config`                    | Update default settings                                |

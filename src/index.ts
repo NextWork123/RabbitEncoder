@@ -25,7 +25,7 @@ import { Logger } from "./logger";
 import { logger } from "@rabbit-company/web-middleware/logger";
 import indexHtml from "../public/index.html";
 import { bearerAuth } from "@rabbit-company/web-middleware/bearer-auth";
-import { previewSubtitles } from "./tracks";
+import { previewAudio, previewSubtitles } from "./tracks";
 import { join } from "path";
 import { probeFile } from "./probe";
 import { cancelBenchmark, getBenchmarkState, startBenchmark } from "./benchmark";
@@ -128,6 +128,34 @@ app.get("/api/jobs/:id/subtitle-preview", async (c) => {
 			rmSync(tempDir, { recursive: true, force: true });
 		} catch {}
 
+		return c.json(result);
+	} catch (err: any) {
+		return c.json({ error: `Preview failed: ${err.message || err}` }, 500);
+	}
+});
+
+app.get("/api/jobs/:id/audio-preview", async (c) => {
+	const job = getJob(c.params.id!);
+	if (!job) return c.json({ error: "Job not found" }, 404);
+
+	if (!existsSync(job.inputPath)) {
+		return c.json({ error: "Source file no longer accessible" }, 400);
+	}
+
+	let probe = job.probe;
+	if (!probe) {
+		probe = await probeFile(job.inputPath);
+	}
+
+	const audioStreams = probe.audioStreams || [];
+	if (audioStreams.length === 0) {
+		return c.json({ source: [], output: [] });
+	}
+
+	try {
+		const result = previewAudio(audioStreams, job.settings.audioBitrates, {
+			languages: job.settings.audioLanguages || [],
+		});
 		return c.json(result);
 	} catch (err: any) {
 		return c.json({ error: `Preview failed: ${err.message || err}` }, 500);

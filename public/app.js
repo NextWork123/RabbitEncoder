@@ -593,6 +593,85 @@ function closeMediaInfo() {
 	document.getElementById("mediainfo-modal").style.display = "none";
 }
 
+async function openAudioPreview(jobId) {
+	const jobs = await fetchJobs();
+	const job = jobs.find((j) => j.id === jobId);
+	if (!job) return;
+
+	document.getElementById("audio-preview-title").textContent = `Audio — ${job.filename}`;
+	document.getElementById("audio-preview-loading").style.display = "";
+	document.getElementById("audio-preview-error").style.display = "none";
+	document.getElementById("audio-preview-content").style.display = "none";
+	document.getElementById("audio-preview-modal").style.display = "";
+
+	try {
+		const res = await authFetch(`${API}/api/jobs/${jobId}/audio-preview`);
+		const data = await res.json();
+
+		if (data.error) {
+			document.getElementById("audio-preview-loading").style.display = "none";
+			document.getElementById("audio-preview-error").textContent = data.error;
+			document.getElementById("audio-preview-error").style.display = "";
+			return;
+		}
+
+		renderAudioPreview(data);
+	} catch (err) {
+		document.getElementById("audio-preview-loading").style.display = "none";
+		document.getElementById("audio-preview-error").textContent = `Failed: ${err.message || err}`;
+		document.getElementById("audio-preview-error").style.display = "";
+	}
+}
+
+function renderAudioPreview(data) {
+	document.getElementById("audio-preview-loading").style.display = "none";
+	document.getElementById("audio-preview-content").style.display = "";
+
+	document.getElementById("audio-preview-source").innerHTML =
+		data.source.length > 0 ? data.source.map((t) => renderAudioTrack(t, false)).join("") : '<div class="sub-track"><em>No audio tracks</em></div>';
+
+	document.getElementById("audio-preview-output").innerHTML =
+		data.output.length > 0 ? data.output.map((t) => renderAudioTrack(t, true)).join("") : '<div class="sub-track"><em>No audio tracks</em></div>';
+}
+
+function formatBitrate(raw) {
+	if (raw === undefined || raw === null) return "";
+	// Probe may return bps or kbps - normalize.
+	const kbps = raw >= 10000 ? Math.round(raw / 1000) : Math.round(raw);
+	return `${kbps} kbps`;
+}
+
+function renderAudioTrack(track, isOutput) {
+	const badges = [];
+	if (track.isDefault) badges.push('<span class="sub-badge sub-badge-default">Default</span>');
+	if (track.isOriginal) badges.push('<span class="sub-badge sub-badge-forced">Original</span>');
+	if (track.trackType === "commentary") badges.push('<span class="sub-badge sub-badge-commentary">Commentary</span>');
+	if (track.trackType === "descriptive") badges.push('<span class="sub-badge sub-badge-hi">Descriptive</span>');
+	badges.push(`<span class="sub-badge sub-badge-type">${escapeHtml(track.channelLayout)}</span>`);
+
+	const name = track.title || track.trackType;
+	const bitrate = isOutput ? formatBitrate(track.outputBitrate * 1000) : formatBitrate(track.bitrate);
+
+	return `
+		<div class="sub-track">
+			<div class="sub-track-top">
+				<span class="sub-track-flag">${track.flag}</span>
+				<span class="sub-track-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+				<span class="sub-track-lang">${escapeHtml(track.language)}</span>
+				<span class="sub-track-codec">${escapeHtml(track.codec)}${bitrate ? " · " + bitrate : ""}</span>
+			</div>
+			<div class="sub-track-badges">${badges.join("")}</div>
+		</div>`;
+}
+
+function closeAudioPreview() {
+	document.getElementById("audio-preview-modal").style.display = "none";
+}
+
+function closeAudioPreviewIfOutside(e) {
+	if (e.target === e.currentTarget) closeAudioPreview();
+}
+
 function renderSubtitlePreview(data) {
 	document.getElementById("sub-preview-loading").style.display = "none";
 	document.getElementById("sub-preview-content").style.display = "";
@@ -716,6 +795,13 @@ function renderJobCard(job) {
     </svg>
 	</button>`;
 
+	const audioBtn = `<button class="btn-icon" title="Preview Audio" data-job-id="${job.id}" data-action="audio-preview">
+		<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+			<path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
+			<path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
+		</svg>
+	</button>`;
+
 	const subBtn = `<button class="btn-icon" title="Preview Subtitles" data-job-id="${job.id}" data-action="sub-preview">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
@@ -734,6 +820,7 @@ function renderJobCard(job) {
         </button>
       </div>
 			${infoBtn}
+			${audioBtn}
 			${subBtn}
       <button class="btn-icon" title="Settings" data-job-id="${job.id}" data-action="edit">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
@@ -744,6 +831,7 @@ function renderJobCard(job) {
 	} else if (active) {
 		actions = `
 			${infoBtn}
+			${audioBtn}
 			${subBtn}
       <button class="btn-icon btn-cancel" title="Cancel" data-job-id="${job.id}" data-action="cancel">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
@@ -751,6 +839,7 @@ function renderJobCard(job) {
 	} else if (err) {
 		actions = `
 			${infoBtn}
+			${audioBtn}
 			${subBtn}
       <button class="btn-icon" title="Retry" data-job-id="${job.id}" data-action="retry">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
@@ -2032,6 +2121,9 @@ function initEventListeners() {
 	document.getElementById("sub-preview-modal").addEventListener("click", closeSubPreviewIfOutside);
 	document.getElementById("logout-btn").addEventListener("click", logout);
 
+	document.getElementById("close-audio-preview-btn").addEventListener("click", closeAudioPreview);
+	document.getElementById("audio-preview-modal").addEventListener("click", closeAudioPreviewIfOutside);
+
 	document.getElementById("pause-queue-btn").addEventListener("click", handlePauseToggle);
 
 	document.getElementById("open-benchmark-btn").addEventListener("click", openBenchmark);
@@ -2093,6 +2185,8 @@ function initEventListeners() {
 			cancelJob(jobId).then(() => update());
 		} else if (action === "sub-preview") {
 			openSubtitlePreview(jobId);
+		} else if (action === "audio-preview") {
+			openAudioPreview(jobId);
 		} else if (action === "mediainfo") {
 			openMediaInfo(jobId);
 		}

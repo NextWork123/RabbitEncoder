@@ -1219,7 +1219,8 @@ code {
 	font-size: 0.82rem;
 }
 
-#sub-preview-content {
+#sub-preview-content,
+#audio-preview-content {
 	display: flex;
 	gap: 16px;
 	align-items: flex-start;
@@ -1348,7 +1349,8 @@ code {
 
 /* Responsive: stack columns on narrow screens */
 @media (max-width: 640px) {
-	#sub-preview-content {
+	#sub-preview-content,
+	#audio-preview-content {
 		flex-direction: column;
 	}
 	.sub-preview-arrow {

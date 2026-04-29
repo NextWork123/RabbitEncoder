@@ -293,6 +293,31 @@
 				</div>
 			</div>
 
+			<!-- Audio Preview Modal -->
+			<div id="audio-preview-modal" class="modal-overlay" style="display: none">
+				<div class="modal sub-preview-modal">
+					<div class="modal-header">
+						<h2 id="audio-preview-title">Audio Preview</h2>
+						<button class="btn-close" id="close-audio-preview-btn">&times;</button>
+					</div>
+					<div class="modal-body" id="audio-preview-body">
+						<div id="audio-preview-loading" class="sub-preview-loading">Loading audio tracks…</div>
+						<div id="audio-preview-error" class="sub-preview-error" style="display: none"></div>
+						<div id="audio-preview-content" style="display: none">
+							<div class="sub-preview-section">
+								<h3>Source</h3>
+								<div id="audio-preview-source" class="sub-track-list"></div>
+							</div>
+							<div class="sub-preview-arrow">→</div>
+							<div class="sub-preview-section">
+								<h3>After Encode</h3>
+								<div id="audio-preview-output" class="sub-track-list"></div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+
 			<!-- Subtitle Preview Modal -->
 			<div id="sub-preview-modal" class="modal-overlay" style="display: none">
 				<div class="modal sub-preview-modal">

@@ -5,6 +5,8 @@ export type DebandLevel = "off" | "light" | "medium" | "heavy";
 
 export type JobStatus = "queued" | "probing" | "encoding_video" | "encoding_audio" | "muxing" | "done" | "error" | "cancelled";
 
+export type AudioTrackType = "main" | "commentary" | "descriptive";
+
 export const MEDIA_EXTENSIONS = new Set([".mp4", ".mkv", ".avi", ".webm", ".flv", ".ts", ".mov"]);
 
 export interface AudioChannelBitrates {
@@ -154,4 +156,24 @@ export interface SubtitlePreviewTrack {
 export interface SubtitlePreviewResult {
 	source: SubtitlePreviewTrack[];
 	output: SubtitlePreviewTrack[];
+}
+
+export interface AudioPreviewTrack {
+	index: number;
+	codec: string;
+	language: string;
+	flag: string;
+	title: string;
+	trackType: AudioTrackType; // "main" | "commentary" | "descriptive"
+	channels: number;
+	channelLayout: string;
+	bitrate?: number; // source: input bitrate from probe (raw)
+	outputBitrate?: number; // output: predicted Opus bitrate in kbps
+	isDefault: boolean;
+	isOriginal: boolean;
+}
+
+export interface AudioPreviewResult {
+	source: AudioPreviewTrack[];
+	output: AudioPreviewTrack[];
 }
