@@ -180,6 +180,7 @@ const GROUP_BLOCKLIST = new Set([
 	"full_subtitles",
 	"signs_songs",
 	"signs_and_songs",
+	"sings_and_songs",
 	"default",
 	"descriptive",
 	"hearing_impaired",
