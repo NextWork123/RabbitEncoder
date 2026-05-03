@@ -65,6 +65,12 @@ export interface PrepareFilterConfig {
 	preInputArgs: string[];
 	/** Human-readable label for the step detail. */
 	label: string;
+	/** When set, the encoder runs runSegmentedAutoDenoiseGpu after the filter pass to apply per-range GPU denoise. */
+	deferredAutoDenoise?: {
+		plan: DenoisePlan;
+		backend: GpuBackend;
+		gpuDevice: string;
+	};
 }
 
 export async function isOpenClAvailable(deviceId: string = DEFAULT_OPENCL_DEVICE_ID): Promise<boolean> {
@@ -235,6 +241,13 @@ export function buildDebandConfig(level: DebandLevel): DebandConfig | null {
  *     could return at low encode bitrates.
  *   - When GPU denoise is active, deband still runs on CPU and its output
  *     is handed to hwupload for the GPU pass.
+ *
+ * Auto-denoise on GPU is handled via deferral: nlmeans_vulkan/nlmeans_opencl
+ * don't honor enable= timeline expressions, so per-range gating can't be
+ * baked into a single -vf graph. When buildAutoDenoiseFilter returns a
+ * config with deferredPlan set, this function leaves the denoise out of the
+ * filter graph and surfaces deferredAutoDenoise on the returned config; the
+ * encoder then runs runSegmentedAutoDenoiseGpu after the filter pass.
  */
 export async function buildPrepareFilterConfig(
 	downscale: boolean,
@@ -255,14 +268,26 @@ export async function buildPrepareFilterConfig(
 	let denoiseFilter: string | null = null;
 	let denoisePreInputArgs: string[] = [];
 	let denoiseLabel: string | null = null;
+	let deferredAutoDenoise: PrepareFilterConfig["deferredAutoDenoise"] = undefined;
 
 	if (denoise === "auto") {
 		if (autoPlan && autoPlan.length > 0) {
 			const auto = await buildAutoDenoiseFilter(autoPlan, useGpuDenoise, backend, gpuDevice, totalDuration);
 			if (auto) {
-				denoiseFilter = auto.filter;
-				denoisePreInputArgs = auto.preInputArgs;
 				denoiseLabel = auto.label;
+
+				if (auto.deferredPlan && auto.deferredBackend && auto.deferredGpuDevice) {
+					// GPU path: defer to segmented stage, contribute nothing to the -vf graph.
+					deferredAutoDenoise = {
+						plan: auto.deferredPlan,
+						backend: auto.deferredBackend,
+						gpuDevice: auto.deferredGpuDevice,
+					};
+				} else {
+					// CPU path: inline filter with enable= timeline expressions.
+					denoiseFilter = auto.filter;
+					denoisePreInputArgs = auto.preInputArgs;
+				}
 			}
 		}
 	} else {
@@ -275,7 +300,7 @@ export async function buildPrepareFilterConfig(
 		}
 	}
 
-	if (!needsScale && !debandConfig && !denoiseFilter) return null;
+	if (!needsScale && !debandConfig && !denoiseFilter && !deferredAutoDenoise) return null;
 
 	const parts: string[] = [];
 	const preInputArgs: string[] = [];
@@ -292,12 +317,15 @@ export async function buildPrepareFilterConfig(
 	if (denoiseFilter) {
 		parts.push(denoiseFilter);
 		preInputArgs.push(...denoisePreInputArgs);
-		labelParts.push(denoiseLabel!);
+	}
+	if (denoiseLabel) {
+		labelParts.push(denoiseLabel);
 	}
 
 	return {
 		filter: parts.join(","),
 		preInputArgs,
 		label: labelParts.join(" + "),
+		deferredAutoDenoise,
 	};
 }

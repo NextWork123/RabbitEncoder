@@ -19,7 +19,7 @@ import {
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
 import { buildPrepareFilterConfig } from "./filters";
-import { runAnalysisPass, type DenoisePlan } from "./auto-denoise";
+import { runAnalysisPass, runSegmentedAutoDenoiseGpu, type DenoisePlan } from "./auto-denoise";
 
 export { CancelledError } from "./process";
 
@@ -198,30 +198,16 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			const filteredVideo = join(tempDir, "source_video_filtered.mkv");
 			const filterStartedAt = Date.now();
 
-			const filterProc = Bun.spawn(
-				[
-					"ffmpeg",
-					"-y",
-					...prepareFilter.preInputArgs,
-					"-i",
-					preparedVideo,
-					"-vf",
-					prepareFilter.filter,
-					"-c:v",
-					"ffv1",
-					"-level",
-					"3",
-					"-threads",
-					"0",
-					"-an",
-					"-sn",
-					filteredVideo,
-				],
-				{
-					stdout: "pipe",
-					stderr: "pipe",
-				},
-			);
+			const filterArgs = ["ffmpeg", "-y", ...prepareFilter.preInputArgs, "-i", preparedVideo];
+			if (prepareFilter.filter) {
+				filterArgs.push("-vf", prepareFilter.filter);
+			}
+			filterArgs.push("-c:v", "ffv1", "-level", "3", "-threads", "0", "-an", "-sn", filteredVideo);
+
+			const filterProc = Bun.spawn(filterArgs, {
+				stdout: "pipe",
+				stderr: "pipe",
+			});
 
 			const onAbortFilter = () => {
 				try {
@@ -290,6 +276,36 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			renameSync(filteredVideo, preparedVideo);
 
 			Logger.info(`[prepare] Filter pass complete`);
+		}
+
+		if (prepareFilter?.deferredAutoDenoise) {
+			checkCancelled();
+			const { plan, backend, gpuDevice } = prepareFilter.deferredAutoDenoise;
+			const denoisedVideo = join(tempDir, "source_video_denoised.mkv");
+
+			Logger.info(`[prepare] Running segmented GPU auto-denoise (${plan.length} ranges, ${backend} on device ${gpuDevice})`);
+
+			await runSegmentedAutoDenoiseGpu(
+				preparedVideo,
+				denoisedVideo,
+				plan,
+				probe.duration,
+				backend,
+				gpuDevice,
+				tempDir,
+				(i, n, label) => {
+					setStep(S_PREPARE, {
+						progress: 5 + (95 * i) / n,
+						detail: `Auto denoise GPU — segment ${i}/${n} (${label})`,
+					});
+				},
+				signal,
+			);
+
+			unlinkSync(preparedVideo);
+			renameSync(denoisedVideo, preparedVideo);
+
+			Logger.info(`[prepare] Segmented GPU auto-denoise complete`);
 		}
 
 		setStep(S_PREPARE, { status: "done", progress: 100 });

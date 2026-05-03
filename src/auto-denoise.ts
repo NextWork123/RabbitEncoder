@@ -1,8 +1,8 @@
 import { join } from "path";
-import { readFileSync, existsSync, unlinkSync } from "fs";
+import { readFileSync, existsSync, unlinkSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { Logger } from "./logger";
-import { CancelledError } from "./process";
-import { NLMEANS_PARAMS } from "./filters";
+import { CancelledError, run } from "./process";
+import { NLMEANS_PARAMS, isOpenClAvailable, isVulkanAvailable, defaultDeviceFor } from "./filters";
 import type { AutoDenoiseThresholds, GpuBackend } from "./types";
 
 export const DEFAULT_AUTO_THRESHOLDS: AutoDenoiseThresholds = {
@@ -22,7 +22,7 @@ export interface DenoiseRange {
 export type DenoisePlan = DenoiseRange[];
 
 export interface AutoDenoiseConfig {
-	/** The -vf filter string to inject into the prepare filter graph. */
+	/** The -vf filter string to inject into the prepare filter graph. Empty when work is deferred to segmented stage. */
 	filter: string;
 	/** Args to insert before -i (hw device init when GPU is used). */
 	preInputArgs: string[];
@@ -34,6 +34,23 @@ export interface AutoDenoiseConfig {
 	label: string;
 	/** Total seconds covered by the plan (for logging / progress reporting). */
 	denoisedSeconds: number;
+	/** When set, the prepare stage should defer denoising to runSegmentedAutoDenoiseGpu. */
+	deferredPlan?: DenoisePlan;
+	/** Backend to use for the deferred segmented pass. */
+	deferredBackend?: GpuBackend;
+	/** GPU device id resolved at probe time for the deferred segmented pass. */
+	deferredGpuDevice?: string;
+}
+
+/**
+ * Single span in a segmented denoise pass. `level === null` means the segment
+ * is passthrough (stream-copied from the FFV1 intermediate); otherwise it's
+ * re-encoded through the GPU nlmeans filter at the given level.
+ */
+export interface DenoiseSegment {
+	start: number;
+	end: number;
+	level: DenoiseRange["level"] | null;
 }
 
 interface NoiseSample {
@@ -45,6 +62,9 @@ const SAMPLE_EVERY_N_FRAMES = 12;
 const SCDET_THRESHOLD = 10;
 const SCENE_DETECT_HEIGHT = 480;
 const MIN_SCENE_DURATION = 1.0;
+
+/** Vulkan-only nlmeans tuning param (mirrors the constant in filters.ts). */
+const NLMEANS_VULKAN_EXTRA = "t=8";
 
 /**
  * Parse three threshold env vars into an AutoDenoiseThresholds.
@@ -196,16 +216,18 @@ export async function runAnalysisPass(
 /**
  * Build a DenoiseConfig-shaped object from a plan.
  *
- * Chains one nlmeans per level, each gated by FFmpeg's `enable=` timeline
- * expression. When a frame is outside `enable`, the filter framework skips
- * invocation entirely — pass-through cost only.
+ * CPU path: chains one nlmeans per level, each gated by FFmpeg's `enable=`
+ * timeline expression. When a frame is outside `enable`, the filter framework
+ * skips invocation entirely — pass-through cost only.
  *
- * NOTE: This is currently CPU-only. nlmeans_vulkan and nlmeans_opencl don't
- * yet honor the `enable=` option, so per-range gating doesn't work on the
- * GPU variants — every frame would get denoised. When `useGpu` is true we
- * log a warning and fall back to CPU. GPU auto-denoise is planned for a
- * later pass that splits the source into per-range segments and encodes
- * each one independently, side-stepping the `enable=` limitation.
+ * GPU path: nlmeans_vulkan and nlmeans_opencl don't honor `enable=`, so
+ * per-range gating doesn't work in a single filter graph. When `useGpu` is
+ * true and the requested backend probes successfully, this function returns
+ * a config with `filter: ""` and `deferredPlan` set — the prepare stage
+ * detects this and runs `runSegmentedAutoDenoiseGpu` after the scale/deband
+ * pass to cut, denoise, and concat segments back together.
+ *
+ * If the GPU probe fails, falls back to CPU `enable=` gating.
  *
  * Returns null if plan is empty (no scenes need denoising).
  */
@@ -217,14 +239,6 @@ export async function buildAutoDenoiseFilter(
 	totalDuration?: number,
 ): Promise<AutoDenoiseConfig | null> {
 	if (plan.length === 0) return null;
-
-	if (useGpu) {
-		Logger.warn(
-			`[auto-denoise] GPU backend (${backend}) requested but nlmeans_vulkan/nlmeans_opencl ` +
-				`do not support enable= timeline expressions; falling back to CPU nlmeans. ` +
-				`(gpuDevice=${gpuDevice ?? "default"})`,
-		);
-	}
 
 	const byLevel = new Map<DenoiseRange["level"], DenoiseRange[]>();
 	for (const r of plan) {
@@ -240,17 +254,6 @@ export async function buildAutoDenoiseFilter(
 		seconds[r.level] += r.end - r.start;
 	}
 
-	const filterParts: string[] = [];
-	for (const level of ["light", "medium", "heavy"] as const) {
-		const ranges = byLevel.get(level);
-		if (!ranges || ranges.length === 0) continue;
-		const params = NLMEANS_PARAMS[level]!;
-		const enable = ranges.map((r) => `between(t,${r.start.toFixed(3)},${r.end.toFixed(3)})`).join("+");
-		filterParts.push(`nlmeans=${params}:enable='${enable}'`);
-	}
-
-	const filter = filterParts.join(",");
-
 	const showPct = totalDuration !== undefined && totalDuration > 0;
 	const labelBits = (["light", "medium", "heavy"] as const)
 		.filter((l) => counts[l] > 0)
@@ -261,11 +264,246 @@ export async function buildAutoDenoiseFilter(
 			}
 			return `${counts[l]}×${l}`;
 		});
-	const label = `Auto denoise (${labelBits.join(" + ")}, CPU)`;
 
 	const denoisedSeconds = plan.reduce((s, r) => s + (r.end - r.start), 0);
 
-	return { filter, preInputArgs: [], isGpu: false, gpuBackend: null, label, denoisedSeconds };
+	// GPU path: probe the requested backend(s); on success, defer to the
+	// segmented stage. On failure, fall through to CPU.
+	if (useGpu) {
+		const probeResult = await probeGpuBackendForAutoDenoise(backend, gpuDevice);
+
+		if (probeResult) {
+			const tag = probeResult.backend === "vulkan" ? "GPU/Vulkan" : "GPU/OpenCL";
+			Logger.info(`[auto-denoise] ${tag} verified on device ${probeResult.deviceId}; ` + `deferring ${plan.length} ranges to segmented pass`);
+
+			return {
+				filter: "",
+				preInputArgs: [],
+				isGpu: true,
+				gpuBackend: probeResult.backend,
+				label: `Auto denoise (${labelBits.join(" + ")}, ${tag})`,
+				denoisedSeconds,
+				deferredPlan: plan,
+				deferredBackend: probeResult.backend,
+				deferredGpuDevice: probeResult.deviceId,
+			};
+		}
+
+		Logger.warn(
+			`[auto-denoise] GPU backend (${backend}) requested but probe failed ` +
+				`(gpuDevice=${gpuDevice ?? "default"}); falling back to CPU nlmeans with enable= gating`,
+		);
+	}
+
+	// CPU path: single filter graph with per-level enable= timeline expressions.
+	const filterParts: string[] = [];
+	for (const level of ["light", "medium", "heavy"] as const) {
+		const ranges = byLevel.get(level);
+		if (!ranges || ranges.length === 0) continue;
+		const params = NLMEANS_PARAMS[level]!;
+		const enable = ranges.map((r) => `between(t,${r.start.toFixed(3)},${r.end.toFixed(3)})`).join("+");
+		filterParts.push(`nlmeans=${params}:enable='${enable}'`);
+	}
+
+	return {
+		filter: filterParts.join(","),
+		preInputArgs: [],
+		isGpu: false,
+		gpuBackend: null,
+		label: `Auto denoise (${labelBits.join(" + ")}, CPU)`,
+		denoisedSeconds,
+	};
+}
+
+/**
+ * Probe the requested GPU backend(s) and return the first one that works.
+ * Mirrors the resolution logic in buildDenoiseConfig but returns the resolved
+ * device id so the segmented pass can re-use it across N ffmpeg invocations
+ * without re-probing each time.
+ *
+ *   - backend = "opencl": probe OpenCL only.
+ *   - backend = "vulkan": probe Vulkan only.
+ *   - backend = "auto"  : probe Vulkan first, then OpenCL.
+ */
+async function probeGpuBackendForAutoDenoise(backend: GpuBackend, gpuDevice?: string): Promise<{ backend: "opencl" | "vulkan"; deviceId: string } | null> {
+	const tryVulkan = async (): Promise<{ backend: "vulkan"; deviceId: string } | null> => {
+		const deviceId = gpuDevice ?? defaultDeviceFor("vulkan");
+		if (await isVulkanAvailable(deviceId)) return { backend: "vulkan", deviceId };
+		return null;
+	};
+
+	const tryOpenCl = async (): Promise<{ backend: "opencl"; deviceId: string } | null> => {
+		const deviceId = gpuDevice ?? defaultDeviceFor("opencl");
+		if (await isOpenClAvailable(deviceId)) return { backend: "opencl", deviceId };
+		return null;
+	};
+
+	if (backend === "vulkan") return tryVulkan();
+	if (backend === "opencl") return tryOpenCl();
+	return (await tryVulkan()) ?? (await tryOpenCl());
+}
+
+/**
+ * Walk the sorted plan and fill gaps with passthrough segments so segments
+ * fully cover [0, totalDuration]. Each plan range becomes one denoise segment;
+ * gaps between/around them become passthrough segments.
+ */
+export function buildSegmentList(plan: DenoisePlan, totalDuration: number): DenoiseSegment[] {
+	const sorted = [...plan].sort((a, b) => a.start - b.start);
+	const out: DenoiseSegment[] = [];
+	let cursor = 0;
+	const EPS = 1e-3;
+
+	for (const r of sorted) {
+		if (r.start > cursor + EPS) {
+			out.push({ start: cursor, end: r.start, level: null });
+		}
+		out.push({ start: r.start, end: r.end, level: r.level });
+		cursor = r.end;
+	}
+	if (cursor < totalDuration - EPS) {
+		out.push({ start: cursor, end: totalDuration, level: null });
+	}
+
+	return out;
+}
+
+/**
+ * Encode a single segment of the source.
+ *
+ * Passthrough segments stream-copy from the FFV1 intermediate. Because every
+ * FFV1 frame is a keyframe, the fast `-ss` seek before `-i` is frame-accurate.
+ *
+ * Denoise segments seek the same way and re-encode through the GPU nlmeans
+ * filter chain into FFV1 with identical container settings, so concat copy
+ * works for the final stitch.
+ */
+async function encodeSegment(
+	inputPath: string,
+	outputPath: string,
+	seg: DenoiseSegment,
+	backend: "opencl" | "vulkan",
+	gpuDevice: string,
+	signal?: AbortSignal,
+): Promise<void> {
+	const ss = seg.start.toFixed(3);
+	const to = seg.end.toFixed(3);
+
+	if (seg.level === null) {
+		const res = await run(["ffmpeg", "-y", "-ss", ss, "-to", to, "-i", inputPath, "-c:v", "copy", "-an", "-sn", outputPath], { signal });
+		if (res.code !== 0) {
+			throw new Error(`Passthrough segment [${ss}–${to}] failed: ${res.stderr.slice(-500)}`);
+		}
+		return;
+	}
+
+	const params = NLMEANS_PARAMS[seg.level]!;
+	const deviceSpec = backend === "vulkan" ? `vulkan=gpu:${gpuDevice}` : `opencl=gpu:${gpuDevice}`;
+	const filter =
+		backend === "vulkan"
+			? `format=yuv420p,hwupload,nlmeans_vulkan=${params}:${NLMEANS_VULKAN_EXTRA},hwdownload,format=yuv420p`
+			: `format=yuv420p,hwupload,nlmeans_opencl=${params},hwdownload,format=yuv420p`;
+
+	const res = await run(
+		[
+			"ffmpeg",
+			"-y",
+			"-init_hw_device",
+			deviceSpec,
+			"-filter_hw_device",
+			"gpu",
+			"-ss",
+			ss,
+			"-to",
+			to,
+			"-i",
+			inputPath,
+			"-vf",
+			filter,
+			"-c:v",
+			"ffv1",
+			"-level",
+			"3",
+			"-threads",
+			"0",
+			"-an",
+			"-sn",
+			outputPath,
+		],
+		{ signal },
+	);
+
+	if (res.code !== 0) {
+		throw new Error(`Denoise segment [${seg.level} ${ss}–${to}] failed: ${res.stderr.slice(-500)}`);
+	}
+}
+
+/**
+ * GPU auto-denoise via segmentation.
+ *
+ * Splits the input into per-range segments (denoised) and gap segments
+ * (passthrough), encodes each independently, and concats them back via the
+ * concat demuxer. The input must be FFV1 (every frame is a keyframe) so that
+ * fast keyframe seeks are frame-accurate and passthrough segments can
+ * stream-copy without re-encoding.
+ */
+export async function runSegmentedAutoDenoiseGpu(
+	inputPath: string,
+	outputPath: string,
+	plan: DenoisePlan,
+	totalDuration: number,
+	backend: GpuBackend,
+	gpuDevice: string,
+	tempDir: string,
+	onProgress: (i: number, n: number, label: string) => void,
+	signal?: AbortSignal,
+): Promise<void> {
+	if (backend === "auto") {
+		throw new Error(`runSegmentedAutoDenoiseGpu requires a resolved backend (opencl|vulkan), got "auto"`);
+	}
+
+	const segments = buildSegmentList(plan, totalDuration);
+	if (segments.length === 0) {
+		throw new Error("Segment list is empty; nothing to denoise");
+	}
+
+	const segDir = join(tempDir, "denoise_segments");
+	mkdirSync(segDir, { recursive: true });
+
+	const segFiles: string[] = [];
+	const listPath = join(segDir, "concat.txt");
+
+	try {
+		for (let i = 0; i < segments.length; i++) {
+			if (signal?.aborted) throw new CancelledError();
+			const seg = segments[i]!;
+			const segFile = join(segDir, `seg_${String(i).padStart(5, "0")}.mkv`);
+			const lvl = seg.level ?? "passthrough";
+			const label = `${lvl} ${seg.start.toFixed(1)}–${seg.end.toFixed(1)}s`;
+
+			onProgress(i, segments.length, label);
+			Logger.debug(`[auto-denoise] Segment ${i + 1}/${segments.length}: ${label}`);
+
+			await encodeSegment(inputPath, segFile, seg, backend, gpuDevice, signal);
+			segFiles.push(segFile);
+		}
+
+		const list = segFiles.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join("\n") + "\n";
+		writeFileSync(listPath, list);
+
+		if (signal?.aborted) throw new CancelledError();
+
+		const res = await run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", "-an", "-sn", outputPath], { signal });
+		if (res.code !== 0) {
+			throw new Error(`Concat failed: ${res.stderr.slice(-500)}`);
+		}
+
+		onProgress(segments.length, segments.length, "Done");
+	} finally {
+		try {
+			rmSync(segDir, { recursive: true, force: true });
+		} catch {}
+	}
 }
 
 /**
