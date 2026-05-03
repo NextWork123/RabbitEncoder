@@ -1,7 +1,9 @@
 export type EncoderQuality = "low" | "medium" | "high";
 export type EncoderSpeed = "slower" | "slow" | "medium" | "fast" | "faster";
-export type DenoiseLevel = "off" | "light" | "medium" | "heavy";
+export type DenoiseLevel = "off" | "light" | "medium" | "heavy" | "auto";
 export type DebandLevel = "off" | "light" | "medium" | "heavy";
+
+export type GpuBackend = "auto" | "vulkan" | "opencl";
 
 export type JobStatus = "queued" | "probing" | "encoding_video" | "encoding_audio" | "muxing" | "done" | "error" | "cancelled";
 
@@ -19,12 +21,20 @@ export interface AudioChannelBitrates {
 	"7.1.4": number;
 }
 
+export interface AutoDenoiseThresholds {
+	light: number;
+	medium: number;
+	heavy: number;
+}
+
 export interface JobSettings {
 	quality: EncoderQuality;
 	finalSpeed: EncoderSpeed;
 	audioBitrates: AudioChannelBitrates;
 	denoise: DenoiseLevel;
+	autoDenoiseThresholds: AutoDenoiseThresholds;
 	denoiseGpu: boolean;
+	gpuBackend: GpuBackend;
 	gpuDevice: string;
 	deband: DebandLevel;
 	downscale: boolean;

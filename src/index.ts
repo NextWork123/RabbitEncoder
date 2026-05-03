@@ -30,6 +30,7 @@ import { join } from "path";
 import { probeFile } from "./probe";
 import { cancelBenchmark, getBenchmarkState, startBenchmark } from "./benchmark";
 import { listOpenClDevices } from "./opencl";
+import { listVulkanDevices } from "./vulkan";
 
 export const config = await loadConfig();
 
@@ -60,6 +61,11 @@ app.use(
 
 app.get("/api/opencl-devices", async (c) => {
 	const devices = await listOpenClDevices();
+	return c.json({ devices });
+});
+
+app.get("/api/vulkan-devices", async (c) => {
+	const devices = await listVulkanDevices();
 	return c.json({ devices });
 });
 
@@ -227,15 +233,16 @@ app.post("/api/queue/resume", (c) => {
 });
 
 app.get("/api/benchmark", async (c) => {
-	return c.json(await getBenchmarkState(config.defaults.gpuDevice));
+	return c.json(await getBenchmarkState(config.defaults.gpuDevice, config.defaults.gpuBackend));
 });
 
 app.post("/api/benchmark", async (c) => {
-	const result = await startBenchmark({ gpuDevice: config.defaults.gpuDevice });
-	if (!result.ok) {
-		return c.json({ error: result.error || "Failed to start benchmark" }, 409);
-	}
-	return c.json(await getBenchmarkState(config.defaults.gpuDevice));
+	const result = await startBenchmark({
+		gpuDevice: config.defaults.gpuDevice,
+		gpuBackend: config.defaults.gpuBackend,
+	});
+	if (!result.ok) return c.json({ error: result.error || "Failed to start benchmark" }, 409);
+	return c.json(await getBenchmarkState(config.defaults.gpuDevice, config.defaults.gpuBackend));
 });
 
 app.delete("/api/benchmark", (c) => {

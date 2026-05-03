@@ -1,38 +1,35 @@
 import { Logger } from "./logger";
-import { isOpenClAvailable, NLMEANS_PARAMS } from "./filters";
+import { isOpenClAvailable, isVulkanAvailable, NLMEANS_PARAMS, defaultDeviceFor } from "./filters";
 import { getAllJobs } from "./store";
 import { getCpuName } from "./system";
-import { listOpenClDevices } from "./opencl";
+import { listOpenClDevices, type OpenClDevice } from "./opencl";
+import { listVulkanDevices, type VulkanDevice } from "./vulkan";
+import type { GpuBackend } from "./types";
 
 const DURATION = 10;
 const SIZE = "1920x1080";
 const RATE = 24;
 const TOTAL_FRAMES = DURATION * RATE;
+const VULKAN_T = "8";
 
 export type BenchmarkLevel = "light" | "medium" | "heavy";
-export type BenchmarkMode = "cpu" | "gpu";
+export type BenchmarkMode = "cpu" | "opencl" | "vulkan";
 export type BenchmarkStatus = "idle" | "running" | "completed" | "failed" | "cancelled";
 
 export interface StartBenchmarkOptions {
 	gpuDevice: string;
+	gpuBackend: GpuBackend;
 }
 
 export interface BenchmarkResult {
 	mode: BenchmarkMode;
 	level: BenchmarkLevel;
-	/** Frames-per-second computed from the wall time reported by ffmpeg's -benchmark. */
 	fps: number | null;
-	/** Last 'fps=' value reported by ffmpeg in its progress lines. */
 	ffmpegFps: number | null;
-	/** Last 'speed=' value (e.g. '1.04x'). */
 	speed: string | null;
-	/** Wall-clock time of the ffmpeg process in seconds. */
 	rtime: number | null;
-	/** User CPU time in seconds. */
 	utime: number | null;
-	/** System CPU time in seconds. */
 	stime: number | null;
-	/** Non-null when this run failed. */
 	error: string | null;
 }
 
@@ -40,32 +37,24 @@ export interface BenchmarkState {
 	status: BenchmarkStatus;
 	startedAt: number | null;
 	completedAt: number | null;
-	/** Synthetic source duration (seconds). */
 	duration: number;
-	/** Synthetic source size, e.g. '1920x1080'. */
 	size: string;
-	/** Synthetic source frame rate. */
 	rate: number;
-	/** Total frames per run (duration * rate). */
 	totalFrames: number;
-	/** Total runs that will be performed (3 if GPU unavailable, 6 otherwise). */
 	totalSteps: number;
-	/** Index (1-based) of the run currently in flight. */
 	currentStep: number;
-	/** Human-readable label for the run currently in flight. */
 	currentLabel: string | null;
-	/** Completed and in-progress results, in execution order. */
 	results: BenchmarkResult[];
-	/** null until the OpenCL probe completes. */
-	gpuAvailable: boolean | null;
-	/** Set when the whole run failed (not when an individual ffmpeg returned non-zero). */
+	openclAvailable: boolean | null;
+	vulkanAvailable: boolean | null;
 	error: string | null;
-	/** CPU model name. */
 	cpuName: string | null;
-	/** GPU model name being (or to be) benchmarked. */
 	gpuName: string | null;
-	/** GPU device id (e.g. "0.0"). */
+	openclName: string | null;
+	vulkanName: string | null;
 	gpuDevice: string | null;
+	gpuBackend: GpuBackend | null;
+	gpuAvailable: boolean | null;
 }
 
 let state: BenchmarkState = newIdleState();
@@ -80,24 +69,58 @@ function newIdleState(): BenchmarkState {
 		size: SIZE,
 		rate: RATE,
 		totalFrames: TOTAL_FRAMES,
-		totalSteps: 6,
+		totalSteps: 9,
 		currentStep: 0,
 		currentLabel: null,
 		results: [],
-		gpuAvailable: null,
+		openclAvailable: null,
+		vulkanAvailable: null,
 		error: null,
 		cpuName: getCpuName(),
 		gpuName: null,
+		openclName: null,
+		vulkanName: null,
 		gpuDevice: null,
+		gpuBackend: null,
+		gpuAvailable: null,
 	};
 }
 
-export async function getBenchmarkState(currentGpuDevice: string): Promise<BenchmarkState> {
+function pickGpuName(
+	backend: GpuBackend,
+	gpuDevice: string,
+	oclDevices: OpenClDevice[],
+	vkDevices: VulkanDevice[],
+): { gpuName: string | null; openclName: string | null; vulkanName: string | null } {
+	const oclMatch = oclDevices.find((d) => d.id === gpuDevice) ?? oclDevices[0] ?? null;
+	const vkMatch = vkDevices.find((d) => d.id === gpuDevice) ?? vkDevices[0] ?? null;
+
+	const openclName = oclMatch?.deviceName ?? null;
+	const vulkanName = vkMatch?.deviceName ?? null;
+
+	let gpuName: string | null;
+	if (backend === "vulkan") {
+		gpuName = vulkanName ?? openclName;
+	} else if (backend === "opencl") {
+		gpuName = openclName ?? vulkanName;
+	} else {
+		gpuName = vulkanName ?? openclName;
+	}
+
+	return { gpuName, openclName, vulkanName };
+}
+
+export async function getBenchmarkState(currentGpuDevice: string, currentGpuBackend: GpuBackend): Promise<BenchmarkState> {
 	if (state.status !== "running") {
 		state.cpuName = getCpuName();
 		state.gpuDevice = currentGpuDevice;
-		const devices = await listOpenClDevices();
-		state.gpuName = devices.find((d) => d.id === currentGpuDevice)?.deviceName ?? null;
+		state.gpuBackend = currentGpuBackend;
+
+		const [oclDevices, vkDevices] = await Promise.all([listOpenClDevices(), listVulkanDevices()]);
+		const names = pickGpuName(currentGpuBackend, currentGpuDevice, oclDevices, vkDevices);
+		state.gpuName = names.gpuName;
+		state.openclName = names.openclName;
+		state.vulkanName = names.vulkanName;
 	}
 	return state;
 }
@@ -110,7 +133,6 @@ function isAnythingEncoding(): boolean {
 	return getAllJobs().some((j) => j.status !== "queued" && j.status !== "done" && j.status !== "error" && j.status !== "cancelled");
 }
 
-/** Last `\d+(\.\d+)?` capture from a /g regex, or null. */
 function findLastNumber(text: string, regex: RegExp): number | null {
 	let last: number | null = null;
 	for (const m of text.matchAll(regex)) {
@@ -120,7 +142,6 @@ function findLastNumber(text: string, regex: RegExp): number | null {
 	return last;
 }
 
-/** Last group-1 capture from a /g regex, or null. */
 function findLastString(text: string, regex: RegExp): string | null {
 	let last: string | null = null;
 	for (const m of text.matchAll(regex)) {
@@ -148,11 +169,8 @@ async function runFfmpeg(args: string[], signal: AbortSignal): Promise<{ code: n
 		}, 3000);
 	};
 
-	if (signal.aborted) {
-		onAbort();
-	} else {
-		signal.addEventListener("abort", onAbort, { once: true });
-	}
+	if (signal.aborted) onAbort();
+	else signal.addEventListener("abort", onAbort, { once: true });
 
 	const [, stderr] = await Promise.all([
 		new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
@@ -165,48 +183,49 @@ async function runFfmpeg(args: string[], signal: AbortSignal): Promise<{ code: n
 	return { code, stderr };
 }
 
-async function runSingle(mode: BenchmarkMode, level: BenchmarkLevel, signal: AbortSignal): Promise<BenchmarkResult> {
+function buildArgs(mode: BenchmarkMode, level: BenchmarkLevel, gpuDevice: string): string[] {
 	const params = NLMEANS_PARAMS[level]!;
+	const common = ["ffmpeg", "-hide_banner", "-benchmark", "-v", "info"];
+	const inputAndOutput = ["-f", "lavfi", "-i", `testsrc2=size=${SIZE}:rate=${RATE}:duration=${DURATION}`];
 
-	const args: string[] =
-		mode === "gpu"
-			? [
-					"ffmpeg",
-					"-hide_banner",
-					"-benchmark",
-					"-v",
-					"info",
-					"-init_hw_device",
-					"opencl=gpu:0.0",
-					"-filter_hw_device",
-					"gpu",
-					"-f",
-					"lavfi",
-					"-i",
-					`testsrc2=size=${SIZE}:rate=${RATE}:duration=${DURATION}`,
-					"-vf",
-					`format=yuv420p,hwupload,nlmeans_opencl=${params},hwdownload,format=yuv420p`,
-					"-f",
-					"null",
-					"-",
-				]
-			: [
-					"ffmpeg",
-					"-hide_banner",
-					"-benchmark",
-					"-v",
-					"info",
-					"-f",
-					"lavfi",
-					"-i",
-					`testsrc2=size=${SIZE}:rate=${RATE}:duration=${DURATION}`,
-					"-vf",
-					`format=yuv420p,nlmeans=${params}`,
-					"-f",
-					"null",
-					"-",
-				];
+	if (mode === "cpu") {
+		return [...common, ...inputAndOutput, "-vf", `format=yuv420p,nlmeans=${params}`, "-f", "null", "-"];
+	}
 
+	if (mode === "opencl") {
+		return [
+			...common,
+			"-init_hw_device",
+			`opencl=gpu:${gpuDevice}`,
+			"-filter_hw_device",
+			"gpu",
+			...inputAndOutput,
+			"-vf",
+			`format=yuv420p,hwupload,nlmeans_opencl=${params},hwdownload,format=yuv420p`,
+			"-f",
+			"null",
+			"-",
+		];
+	}
+
+	// vulkan
+	return [
+		...common,
+		"-init_hw_device",
+		`vulkan=gpu:${gpuDevice}`,
+		"-filter_hw_device",
+		"gpu",
+		...inputAndOutput,
+		"-vf",
+		`format=yuv420p,hwupload,nlmeans_vulkan=${params}:t=${VULKAN_T},hwdownload,format=yuv420p`,
+		"-f",
+		"null",
+		"-",
+	];
+}
+
+async function runSingle(mode: BenchmarkMode, level: BenchmarkLevel, gpuDevice: string, signal: AbortSignal): Promise<BenchmarkResult> {
+	const args = buildArgs(mode, level, gpuDevice);
 	const { code, stderr } = await runFfmpeg(args, signal);
 
 	if (code !== 0) {
@@ -240,17 +259,7 @@ async function runSingle(mode: BenchmarkMode, level: BenchmarkLevel, signal: Abo
 		);
 	}
 
-	return {
-		mode,
-		level,
-		fps,
-		ffmpegFps,
-		speed,
-		rtime,
-		utime,
-		stime,
-		error: null,
-	};
+	return { mode, level, fps, ffmpegFps, speed, rtime, utime, stime, error: null };
 }
 
 export interface StartResult {
@@ -284,19 +293,28 @@ export function cancelBenchmark(): boolean {
 }
 
 async function runBenchmarkAsync(signal: AbortSignal, options: StartBenchmarkOptions): Promise<void> {
-	Logger.info(`[benchmark] Starting denoise benchmark on device ${options.gpuDevice}`);
+	Logger.info(`[benchmark] Starting denoise benchmark (backend=${options.gpuBackend}, device=${options.gpuDevice})`);
 
 	state.cpuName = getCpuName();
 	state.gpuDevice = options.gpuDevice;
-	const devices = await listOpenClDevices();
-	state.gpuName = devices.find((d) => d.id === options.gpuDevice)?.deviceName ?? null;
+	state.gpuBackend = options.gpuBackend;
 
-	state.currentLabel = "Probing OpenCL availability";
-	const gpuAvailable = await isOpenClAvailable();
-	state.gpuAvailable = gpuAvailable;
-	if (!gpuAvailable) {
-		Logger.warn(`[benchmark] OpenCL not available on ${options.gpuDevice}, GPU runs will be skipped`);
-	}
+	const [oclDevices, vkDevices] = await Promise.all([listOpenClDevices(), listVulkanDevices()]);
+	const names = pickGpuName(options.gpuBackend, options.gpuDevice, oclDevices, vkDevices);
+	state.gpuName = names.gpuName;
+	state.openclName = names.openclName;
+	state.vulkanName = names.vulkanName;
+
+	state.currentLabel = "Probing GPU backends";
+	const oclDevice = oclDevices.find((d) => d.id === options.gpuDevice)?.id ?? oclDevices[0]?.id ?? defaultDeviceFor("opencl");
+	const vkDevice = vkDevices.find((d) => d.id === options.gpuDevice)?.id ?? vkDevices[0]?.id ?? defaultDeviceFor("vulkan");
+
+	const [oclOk, vkOk] = await Promise.all([isOpenClAvailable(oclDevice), isVulkanAvailable(vkDevice)]);
+	state.openclAvailable = oclOk;
+	state.vulkanAvailable = vkOk;
+	state.gpuAvailable = oclOk || vkOk;
+	if (!oclOk) Logger.warn(`[benchmark] OpenCL not available on device ${oclDevice}`);
+	if (!vkOk) Logger.warn(`[benchmark] Vulkan not available on device ${vkDevice}`);
 
 	if (signal.aborted) {
 		state.status = "cancelled";
@@ -305,10 +323,14 @@ async function runBenchmarkAsync(signal: AbortSignal, options: StartBenchmarkOpt
 	}
 
 	const levels: BenchmarkLevel[] = ["light", "medium", "heavy"];
-	const modes: BenchmarkMode[] = gpuAvailable ? ["cpu", "gpu"] : ["cpu"];
+	const modes: BenchmarkMode[] = ["cpu"];
+	if (oclOk) modes.push("opencl");
+	if (vkOk) modes.push("vulkan");
+
 	state.totalSteps = levels.length * modes.length;
 
 	for (const mode of modes) {
+		const deviceForMode = mode === "vulkan" ? vkDevice : oclDevice;
 		for (const level of levels) {
 			if (signal.aborted) {
 				state.status = "cancelled";
@@ -317,10 +339,11 @@ async function runBenchmarkAsync(signal: AbortSignal, options: StartBenchmarkOpt
 			}
 
 			state.currentStep++;
-			state.currentLabel = `${mode === "gpu" ? "GPU nlmeans_opencl" : "CPU nlmeans"} - ${level}`;
+			const labelMode = mode === "vulkan" ? "GPU nlmeans_vulkan" : mode === "opencl" ? "GPU nlmeans_opencl" : "CPU nlmeans";
+			state.currentLabel = `${labelMode} - ${level}`;
 			Logger.info(`[benchmark] ${state.currentLabel}`);
 
-			const result = await runSingle(mode, level, signal);
+			const result = await runSingle(mode, level, deviceForMode, signal);
 			state.results.push(result);
 
 			if (result.error) {

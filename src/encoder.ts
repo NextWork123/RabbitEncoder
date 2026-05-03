@@ -19,6 +19,7 @@ import {
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
 import { buildPrepareFilterConfig } from "./filters";
+import { runAnalysisPass, type DenoisePlan } from "./auto-denoise";
 
 export { CancelledError } from "./process";
 
@@ -162,12 +163,29 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		}
 
 		// Prepare filter pass (downscale + deband + denoise)
+		let autoPlan: DenoisePlan | null = null;
+		if (job.settings.denoise === "auto") {
+			checkCancelled();
+			setStep(S_PREPARE, { progress: 2, detail: "Analyzing noise..." });
+			try {
+				autoPlan = await runAnalysisPass(preparedVideo, tempDir, probe.duration, job.settings.autoDenoiseThresholds, signal);
+			} catch (err) {
+				if (err instanceof CancelledError) throw err;
+				Logger.warn(`[auto-denoise] Analysis failed, proceeding without denoise: ${err instanceof Error ? err.message : err}`);
+				autoPlan = null;
+			}
+		}
+
 		const prepareFilter = await buildPrepareFilterConfig(
 			job.settings.downscale,
 			probe.height,
 			job.settings.denoise,
 			job.settings.denoiseGpu,
 			job.settings.deband,
+			job.settings.gpuBackend,
+			job.settings.gpuDevice,
+			autoPlan,
+			probe.duration,
 		);
 
 		if (prepareFilter) {
@@ -175,7 +193,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 			const totalFrames = Math.round(probe.duration * probe.videoStreamFps);
 			setStep(S_PREPARE, { progress: 5, detail: `${prepareFilter.label} — ${fmtFrames(0, totalFrames)}` });
-			Logger.info(`[prepare] Applying filters: ${prepareFilter.filter} (${totalFrames} frames)`);
+			Logger.debug(`[prepare] Applying filters: ${prepareFilter.filter} (${totalFrames} frames)`);
 
 			const filteredVideo = join(tempDir, "source_video_filtered.mkv");
 			const filterStartedAt = Date.now();
@@ -219,18 +237,16 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 			const stderrTask = (async () => {
 				if (!filterProc.stderr) return "";
-
 				const reader = filterProc.stderr.getReader();
 				const decoder = new TextDecoder();
 				let buffer = "";
 				let lastUpdate = 0;
+				const errLines: string[] = [];
 
 				while (true) {
 					const { done, value } = await reader.read();
 					if (done) break;
-
 					buffer += decoder.decode(value, { stream: true });
-
 					const parts = buffer.split(/[\r\n]/);
 					buffer = parts.pop() || "";
 
@@ -239,7 +255,6 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 						if (frameMatch && totalFrames > 0) {
 							const current = parseInt(frameMatch[1]!);
 							const now = Date.now();
-
 							if (now - lastUpdate >= 1000) {
 								lastUpdate = now;
 								const fps = computeFps(current, filterStartedAt);
@@ -249,12 +264,16 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 									detail: `${prepareFilter.label} — ${fmtFrames(current, totalFrames)}${fpsStr}`,
 								});
 							}
+						} else if (part.trim()) {
+							errLines.push(part);
+							if (errLines.length > 200) errLines.shift();
 						}
 					}
 				}
 
 				buffer += decoder.decode();
-				return buffer;
+				if (buffer.trim()) errLines.push(buffer);
+				return errLines.join("\n");
 			})();
 
 			const stdoutTask = new Response(filterProc.stdout).text();

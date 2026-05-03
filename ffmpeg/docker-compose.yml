@@ -1,0 +1,13 @@
+services:
+  ffmpeg-builder:
+    build:
+      context: .
+      args:
+        FFMPEG_REF: n8.1
+        DEB_MULTIMEDIA_KEYRING_VERSION: 2024.9.1
+    container_name: rabbit-ffmpeg-builder
+    volumes:
+      - ./ffmpeg-dist:/out
+    environment:
+      DEBIAN_FRONTEND: noninteractive
+    tty: true

@@ -115,6 +115,12 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 	if (Array.isArray(settings.subtitleLanguages)) {
 		appConfig.defaults.subtitleLanguages = settings.subtitleLanguages.map((s) => String(s).trim()).filter((s) => s.length > 0);
 	}
+	if (settings.autoDenoiseThresholds) {
+		const t = settings.autoDenoiseThresholds;
+		if (typeof t.light === "number" && typeof t.medium === "number" && typeof t.heavy === "number") {
+			appConfig.defaults.autoDenoiseThresholds = { light: t.light, medium: t.medium, heavy: t.heavy };
+		}
+	}
 	if (settings.audioBitrates) {
 		appConfig.defaults.audioBitrates = {
 			...appConfig.defaults.audioBitrates,
@@ -291,6 +297,12 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 	}
 	if (Array.isArray(settings.subtitleLanguages)) {
 		job.settings.subtitleLanguages = settings.subtitleLanguages.map((s) => String(s).trim()).filter((s) => s.length > 0);
+	}
+	if (settings.autoDenoiseThresholds) {
+		const t = settings.autoDenoiseThresholds;
+		if (typeof t.light === "number" && typeof t.medium === "number" && typeof t.heavy === "number") {
+			job.settings.autoDenoiseThresholds = { light: t.light, medium: t.medium, heavy: t.heavy };
+		}
 	}
 	if (settings.audioBitrates) {
 		job.settings.audioBitrates = {

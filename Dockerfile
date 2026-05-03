@@ -1,5 +1,4 @@
 # Build stage
-
 FROM oven/bun:1 AS builder
 
 WORKDIR /app
@@ -16,15 +15,16 @@ RUN bun build src/index.ts --outfile rabbit-encoder --target bun --compile --pro
 FROM debian:13-slim
 
 USER root
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV RUSTICL_ENABLE=radeonsi,iris,nouveau
 
-# Install packages
+# Base packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
-		ca-certificates \
-		curl \
-		gpgv \
-	&& rm -rf /var/lib/apt/lists/*
+	ca-certificates \
+	curl \
+	gpgv \
+ && rm -rf /var/lib/apt/lists/*
 
 # Install deb-multimedia keyring
 RUN curl -fsSLo /tmp/deb-multimedia-keyring.deb \
@@ -41,28 +41,165 @@ Signed-By: /usr/share/keyrings/deb-multimedia-keyring.pgp
 Enabled: yes
 EOF
 
-# Install packages
+# Runtime packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    python3-pip \
-    vapoursynth \
-    python3-vapoursynth-jetpack \
-    vapoursynth-akarin \
-    vapoursynth-ffms2 \
-    ffmpeg \
-    mediainfo \
-    opus-tools \
-    mkvtoolnix \
-		ocl-icd-libopencl1 \
-		mesa-opencl-icd \
-		clinfo \
+	python3 \
+	python3-pip \
+	vapoursynth \
+	python3-vapoursynth-jetpack \
+	vapoursynth-akarin \
+	vapoursynth-ffms2 \
+	ffmpeg \
+	mediainfo \
+	opus-tools \
+	mkvtoolnix \
+	zstd \
+	\
+	# OpenCL
+	ocl-icd-libopencl1 \
+	mesa-opencl-icd \
+	clinfo \
+	\
+	# Vulkan / Mesa
+	libvulkan1 \
+	mesa-vulkan-drivers \
+	vulkan-tools \
+	\
+	# Common custom-FFmpeg runtime dependencies
+	libaom3 \
+	libaribb24-0 \
+	libass9 \
+	libbluray2 \
+	libbs2b0 \
+	libcaca0 \
+	libcdio19 \
+	libcdio-cdda2t64 \
+	libcdio-paranoia2t64 \
+	libchromaprint1 \
+	libcodec2-1.2 \
+	libdav1d7 \
+	libdavs2-16 \
+	libdc1394-25 \
+	libdrm2 \
+	libdvdnav4 \
+	libdvdread8t64 \
+	libfdk-aac2 \
+	flite \
+	libflite1 \
+	libfontconfig1 \
+	libfreetype6 \
+	libfribidi0 \
+	libgcrypt20 \
+	libgme0 \
+	libgsm1 \
+	libharfbuzz0b \
+	libiec61883-0 \
+	libavc1394-0 \
+	libraw1394-11 \
+	libilbc3 \
+	libjack-jackd2-0 \
+	libjxl0.11 \
+	libklvanc0 \
+	libkvazaar7 \
+	libmp3lame0 \
+	libmysofa1 \
+	libopencore-amrnb0 \
+	libopencore-amrwb0 \
+	libopenh264-8 \
+	libopenjp2-7 \
+	libopenmpt0t64 \
+	libopus0 \
+	libplacebo349 \
+	libpulse0 \
+	librabbitmq4 \
+	librist4 \
+	librsvg2-2 \
+	librubberband2 \
+	libshine3 \
+	libsmbclient0 \
+	libsnappy1v5 \
+	libsoxr0 \
+	libspeex1 \
+	libsrt1.5-openssl \
+	libsvtav1enc2 \
+	libtesseract5 \
+	libtheora0 \
+	libtwolame0 \
+	libva2 \
+	libvdpau1 \
+	libvidstab1.1 \
+	libvmaf3 \
+	libvo-amrwbenc0 \
+	libvorbis0a \
+	libvorbisenc2 \
+	libvpl2 \
+	libvpx9 \
+	libshaderc1 \
+	libwebp7 \
+	libwebpmux3 \
+	libx264-164 \
+	libx265-215 \
+	libxavs2-13 \
+	libxml2 \
+	libxvidcore4 \
+	libzimg2 \
+	libzmq5 \
+	libzvbi0t64 \
+	liblilv-0-0 \
+	libopenal1 \
+	libssl3t64 \
+	libgl1 \
+	libegl1 \
+	libgles2 \
+	libglu1-mesa \
  && pip3 install --no-cache-dir --break-system-packages --no-deps vstools \
  && rm -f /etc/OpenCL/vendors/mesa.icd \
  && rm -rf /var/lib/apt/lists/*
 
-# Copy binaries
+# Copy bundled binaries and custom FFmpeg archives
 COPY binaries/ /app/binaries/
-RUN chmod +x /app/binaries/language-detector /app/binaries/x86_64_v2/SvtAv1EncApp /app/binaries/x86_64_v3/SvtAv1EncApp
+
+# Existing custom binaries
+RUN chmod +x \
+	/app/binaries/language-detector \
+	/app/binaries/x86_64_v2/SvtAv1EncApp \
+	/app/binaries/x86_64_v3/SvtAv1EncApp \
+ && if [ -f /app/binaries/x86_64_v4/SvtAv1EncApp ]; then chmod +x /app/binaries/x86_64_v4/SvtAv1EncApp; fi
+
+# Extract custom FFmpeg builds.
+#
+# Expected archive contents:
+#   ffmpeg-x86-64-v2/
+#   ffmpeg-x86-64-v3/
+#   ffmpeg-x86-64-v4/
+#
+# Final locations:
+#   /opt/ffmpeg-x86-64-v2
+#   /opt/ffmpeg-x86-64-v3
+#   /opt/ffmpeg-x86-64-v4
+RUN mkdir -p /opt \
+ && tar --zstd -xpf /app/binaries/x86_64_v2/ffmpeg.tar.zst -C /opt \
+ && tar --zstd -xpf /app/binaries/x86_64_v3/ffmpeg.tar.zst -C /opt \
+ && tar --zstd -xpf /app/binaries/x86_64_v4/ffmpeg.tar.zst -C /opt \
+ && chmod +x \
+	/opt/ffmpeg-x86-64-v2/bin/ffmpeg \
+	/opt/ffmpeg-x86-64-v2/bin/ffprobe \
+	/opt/ffmpeg-x86-64-v3/bin/ffmpeg \
+	/opt/ffmpeg-x86-64-v3/bin/ffprobe \
+	/opt/ffmpeg-x86-64-v4/bin/ffmpeg \
+	/opt/ffmpeg-x86-64-v4/bin/ffprobe
+
+# Verify all custom FFmpeg builds can resolve shared libraries.
+# This catches missing runtime packages during docker build.
+RUN set -eux; \
+	for level in x86-64-v2 x86-64-v3 x86-64-v4; do \
+	echo "Checking /opt/ffmpeg-$level/bin/ffmpeg"; \
+	LD_LIBRARY_PATH="/opt/ffmpeg-$level/lib" ldd "/opt/ffmpeg-$level/bin/ffmpeg" | tee "/tmp/ldd-ffmpeg-$level.txt"; \
+	! grep -q "not found" "/tmp/ldd-ffmpeg-$level.txt"; \
+	echo "Checking /opt/ffmpeg-$level/bin/ffprobe"; \
+	LD_LIBRARY_PATH="/opt/ffmpeg-$level/lib" ldd "/opt/ffmpeg-$level/bin/ffprobe" | tee "/tmp/ldd-ffprobe-$level.txt"; \
+	! grep -q "not found" "/tmp/ldd-ffprobe-$level.txt"; \
+	done
 
 # Entrypoint
 COPY docker/entrypoint.sh /entrypoint.sh
@@ -80,5 +217,6 @@ COPY --from=builder /app/rabbit-encoder /app/
 RUN mkdir -p /data/input /data/output /data/temp
 
 EXPOSE 3000
+
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/app/rabbit-encoder"]

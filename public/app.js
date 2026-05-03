@@ -13,8 +13,10 @@ let benchmarkPollTimer = null;
 
 const QUALITIES = ["low", "medium", "high"];
 const SPEEDS = ["slower", "slow", "medium", "fast", "faster"];
-const DENOISE_LEVELS = ["off", "light", "medium", "heavy"];
+const DENOISE_LEVELS = ["off", "auto", "light", "medium", "heavy"];
 const DEBAND_LEVELS = ["off", "light", "medium", "heavy"];
+
+const GPU_BACKENDS = ["opencl", "vulkan", "auto"];
 
 const CHANNELS = [
 	{ key: "mono", label: "Mono" },
@@ -146,6 +148,19 @@ async function fetchOpenClDevices() {
 		openClDevices = [];
 	}
 	return openClDevices;
+}
+
+let vulkanDevices = null;
+async function fetchVulkanDevices() {
+	if (vulkanDevices !== null) return vulkanDevices;
+	try {
+		const res = await authFetch(`${API}/api/vulkan-devices`);
+		const data = await res.json();
+		vulkanDevices = data.devices || [];
+	} catch {
+		vulkanDevices = [];
+	}
+	return vulkanDevices;
 }
 
 async function fetchJobs() {
@@ -418,6 +433,35 @@ function renderGpuDevicePicker(container, devices, selectedId, onChange) {
 	}
 }
 
+function renderAutoThresholds(container, thresholds, onChange) {
+	container.innerHTML = "";
+	const wrap = document.createElement("div");
+	wrap.className = "auto-threshold-grid";
+	for (const key of ["light", "medium", "heavy"]) {
+		const label = document.createElement("label");
+		label.className = "auto-threshold-row";
+		const span = document.createElement("span");
+		span.textContent = key;
+		const input = document.createElement("input");
+		input.type = "number";
+		input.step = "0.01";
+		input.min = "0";
+		input.max = "1";
+		input.value = thresholds[key];
+		input.onchange = () => {
+			const v = parseFloat(input.value);
+			if (Number.isFinite(v)) {
+				thresholds[key] = v;
+				onChange({ ...thresholds });
+			}
+		};
+		label.appendChild(span);
+		label.appendChild(input);
+		wrap.appendChild(label);
+	}
+	container.appendChild(wrap);
+}
+
 function renderGpuToggle(container, checked, onChange, devicePickerEl) {
 	container.innerHTML = "";
 	const label = document.createElement("label");
@@ -432,7 +476,7 @@ function renderGpuToggle(container, checked, onChange, devicePickerEl) {
 		}
 	};
 	const span = document.createElement("span");
-	span.textContent = "\u00A0Use GPU acceleration (OpenCL)";
+	span.textContent = "\u00A0Use GPU acceleration";
 	label.appendChild(input);
 	label.appendChild(span);
 	container.appendChild(label);
@@ -763,7 +807,7 @@ function renderJobCard(job) {
 
 	let meta = "";
 	if (job.probe) {
-		meta += `<span>${job.probe.width}×${job.probe.height}</span>`;
+		meta += `<span>${job.probe.width}x${job.probe.height}</span>`;
 		meta += `<span>${job.probe.audioLayout}</span>`;
 		if (job.probe.isHDR) meta += `<span>HDR</span>`;
 		if (job.probe.duration) meta += `<span>${formatDuration(job.probe.duration * 1000)}</span>`;
@@ -1241,19 +1285,40 @@ async function openSettings() {
 		audioBitrates: { ...defaults.audioBitrates },
 	};
 
-	const devices = await fetchOpenClDevices();
-	if (!tempDefaults.gpuDevice || !devices.some((d) => d.id === tempDefaults.gpuDevice)) {
-		tempDefaults.gpuDevice = devices[0]?.id || "0.0";
+	const backendEl = document.getElementById("default-gpu-backend");
+	const devicePickerEl = document.getElementById("default-gpu-device");
+
+	async function refreshDevicePicker(backend) {
+		const devices = backend === "vulkan" ? await fetchVulkanDevices() : await fetchOpenClDevices();
+		renderGpuDevicePicker(devicePickerEl, devices, tempDefaults.gpuDevice, (v) => (tempDefaults.gpuDevice = v));
 	}
 
-	const devicePickerEl = document.getElementById("default-gpu-device");
-	renderGpuDevicePicker(devicePickerEl, devices, tempDefaults.gpuDevice, (v) => (tempDefaults.gpuDevice = v));
+	const initialBackend = tempDefaults.gpuBackend || "opencl";
+	renderRadioPills(backendEl, GPU_BACKENDS, tempDefaults.gpuBackend || "opencl", async (v) => {
+		tempDefaults.gpuBackend = v;
+		tempDefaults.gpuDevice = v === "vulkan" ? "0" : "0.0";
+		await refreshDevicePicker(v);
+	});
+	await refreshDevicePicker(initialBackend);
+
 	renderGpuToggle(document.getElementById("default-denoise-gpu"), tempDefaults.denoiseGpu || false, (v) => (tempDefaults.denoiseGpu = v), devicePickerEl);
 
 	renderRadioPills(document.getElementById("default-quality"), QUALITIES, tempDefaults.quality, (v) => (tempDefaults.quality = v));
 	renderRadioPills(document.getElementById("default-speed"), SPEEDS, tempDefaults.finalSpeed, (v) => (tempDefaults.finalSpeed = v));
-	renderRadioPills(document.getElementById("default-denoise"), DENOISE_LEVELS, tempDefaults.denoise || "off", (v) => (tempDefaults.denoise = v));
-	renderGpuToggle(document.getElementById("default-denoise-gpu"), tempDefaults.denoiseGpu || false, (v) => (tempDefaults.denoiseGpu = v));
+	const updateDenoiseThresholdVisibility = (level) => {
+		const el = document.getElementById("default-auto-thresholds");
+		el.style.display = level === "auto" ? "" : "none";
+	};
+	renderRadioPills(document.getElementById("default-denoise"), DENOISE_LEVELS, tempDefaults.denoise || "off", (v) => {
+		tempDefaults.denoise = v;
+		updateDenoiseThresholdVisibility(v);
+	});
+	renderAutoThresholds(
+		document.getElementById("default-auto-thresholds"),
+		tempDefaults.autoDenoiseThresholds || { light: 0.35, medium: 0.45, heavy: 0.55 },
+		(v) => (tempDefaults.autoDenoiseThresholds = v),
+	);
+	updateDenoiseThresholdVisibility(tempDefaults.denoise);
 	renderRadioPills(document.getElementById("default-deband"), DEBAND_LEVELS, tempDefaults.deband || "off", (v) => (tempDefaults.deband = v));
 	renderDownscaleToggle(document.getElementById("default-downscale"), tempDefaults.downscale || false, (v) => (tempDefaults.downscale = v));
 	renderSkipBoostingToggle(document.getElementById("default-skip-boosting"), tempDefaults.skipBoosting || false, (v) => (tempDefaults.skipBoosting = v));
@@ -1305,82 +1370,104 @@ function classifySpeedup(x) {
 
 function renderBenchmarkResults(state) {
 	const container = document.getElementById("benchmark-results");
-	const hasGpu = state.gpuAvailable === true;
 	const levels = ["light", "medium", "heavy"];
 
 	const cpuMap = new Map();
-	const gpuMap = new Map();
+	const oclMap = new Map();
+	const vkMap = new Map();
 	for (const r of state.results) {
-		(r.mode === "gpu" ? gpuMap : cpuMap).set(r.level, r);
+		const target = r.mode === "vulkan" ? vkMap : r.mode === "opencl" ? oclMap : cpuMap;
+		target.set(r.level, r);
 	}
 
 	if (state.results.length === 0 && state.status !== "completed") {
 		container.style.display = "none";
 		return;
 	}
+	const showOcl = state.openclAvailable === true || oclMap.size > 0;
+	const showVk = state.vulkanAvailable === true || vkMap.size > 0;
 
-	let speedupSum = 0;
-	let speedupCount = 0;
+	const cell = (entry, fps) => {
+		if (!entry) return `<td class="numeric cell-empty">—</td>`;
+		if (entry.error) return `<td class="numeric cell-failed" title="${escapeHtml(entry.error)}">failed</td>`;
+		if (fps === null || fps === undefined) return `<td class="numeric cell-empty">—</td>`;
+		const speed = entry.speed ? ` <span class="cell-empty">(${escapeHtml(entry.speed)})</span>` : "";
+		return `<td class="numeric">${fps.toFixed(2)}${speed}</td>`;
+	};
+
+	let oclSum = 0,
+		oclCount = 0;
+	let vkSum = 0,
+		vkCount = 0;
+
 	const rows = levels
 		.map((level) => {
 			const cpu = cpuMap.get(level);
-			const gpu = gpuMap.get(level);
+			const ocl = oclMap.get(level);
+			const vk = vkMap.get(level);
 			const cpuFps = cpu && !cpu.error ? cpu.fps : null;
-			const gpuFps = gpu && !gpu.error ? gpu.fps : null;
-			const speedup = cpuFps && gpuFps ? gpuFps / cpuFps : null;
-			if (speedup !== null) {
-				speedupSum += speedup;
-				speedupCount++;
+			const oclFps = ocl && !ocl.error ? ocl.fps : null;
+			const vkFps = vk && !vk.error ? vk.fps : null;
+
+			const oclSpeedup = cpuFps && oclFps ? oclFps / cpuFps : null;
+			const vkSpeedup = cpuFps && vkFps ? vkFps / cpuFps : null;
+			if (oclSpeedup !== null) {
+				oclSum += oclSpeedup;
+				oclCount++;
+			}
+			if (vkSpeedup !== null) {
+				vkSum += vkSpeedup;
+				vkCount++;
 			}
 
-			const cell = (entry, fps) => {
-				if (!entry) return `<td class="numeric cell-empty">—</td>`;
-				if (entry.error) return `<td class="numeric cell-failed" title="${escapeHtml(entry.error)}">failed</td>`;
-				if (fps === null || fps === undefined) return `<td class="numeric cell-empty">—</td>`;
-				const speed = entry.speed ? ` <span class="cell-empty">(${escapeHtml(entry.speed)})</span>` : "";
-				return `<td class="numeric">${fps.toFixed(2)}${speed}</td>`;
-			};
+			const best = vkSpeedup !== null && (oclSpeedup === null || vkSpeedup > oclSpeedup) ? vkSpeedup : oclSpeedup;
+			const speedupCell = best !== null ? `<td class="numeric ${classifySpeedup(best)}">${best.toFixed(2)}x</td>` : `<td class="numeric cell-empty">—</td>`;
 
-			const speedupCell =
-				speedup !== null ? `<td class="numeric ${classifySpeedup(speedup)}">${speedup.toFixed(2)}x</td>` : `<td class="numeric cell-empty">—</td>`;
-
-			return (
-				`<tr>` +
-				`<td class="level-cell">${level}</td>` +
-				cell(cpu, cpuFps) +
-				(hasGpu ? cell(gpu, gpuFps) : `<td class="numeric cell-empty">—</td>`) +
-				speedupCell +
-				`</tr>`
-			);
+			return `<tr>
+				<td class="level-cell">${level}</td>
+				${cell(cpu, cpuFps)}
+				${showOcl ? cell(ocl, oclFps) : ""}
+				${showVk ? cell(vk, vkFps) : ""}
+				${speedupCell}
+			</tr>`;
 		})
 		.join("");
 
-	container.innerHTML = `
-		<table>
-			<thead>
-				<tr>
-					<th>Level</th>
-					<th class="numeric">CPU fps</th>
-					<th class="numeric">GPU fps</th>
-					<th class="numeric">Speedup</th>
-				</tr>
-			</thead>
-			<tbody>${rows}</tbody>
-		</table>
-	`;
+	const headers = [
+		`<th>Level</th>`,
+		`<th class="numeric">CPU fps</th>`,
+		showOcl ? `<th class="numeric">OpenCL fps</th>` : "",
+		showVk ? `<th class="numeric">Vulkan fps</th>` : "",
+		`<th class="numeric">Best speedup</th>`,
+	]
+		.filter(Boolean)
+		.join("");
+
+	container.innerHTML = `<table>
+		<thead><tr>${headers}</tr></thead>
+		<tbody>${rows}</tbody>
+	</table>`;
 
 	if (state.status === "completed") {
-		const avgSpeedup = speedupCount > 0 ? speedupSum / speedupCount : null;
+		const oclAvg = oclCount > 0 ? oclSum / oclCount : null;
+		const vkAvg = vkCount > 0 ? vkSum / vkCount : null;
 		let recHtml = "";
-		if (state.gpuAvailable === false) {
-			recHtml = `<div class="benchmark-recommendation meh">No OpenCL device detected - denoising will run on CPU.</div>`;
-		} else if (avgSpeedup !== null && avgSpeedup >= 2) {
-			recHtml = `<div class="benchmark-recommendation good">GPU is ${avgSpeedup.toFixed(1)}x faster on average - keep <code>ENCODER_DENOISE_GPU=true</code>.</div>`;
-		} else if (avgSpeedup !== null && avgSpeedup >= 1.2) {
-			recHtml = `<div class="benchmark-recommendation meh">GPU is only ${avgSpeedup.toFixed(1)}x faster - modest gain, GPU is still recommended.</div>`;
-		} else if (avgSpeedup !== null) {
-			recHtml = `<div class="benchmark-recommendation bad">GPU is not faster than CPU here (${avgSpeedup.toFixed(2)}x). CPU denoise may be the better choice.</div>`;
+
+		if (state.openclAvailable === false && state.vulkanAvailable === false) {
+			recHtml = `<div class="benchmark-recommendation meh">No GPU backend available — denoising will run on CPU.</div>`;
+		} else if (vkAvg !== null && oclAvg !== null) {
+			const winner = vkAvg > oclAvg ? "vulkan" : "opencl";
+			const winnerSpeed = Math.max(vkAvg, oclAvg);
+			const cls = winnerSpeed >= 2 ? "good" : winnerSpeed >= 1.2 ? "meh" : "bad";
+			recHtml = `<div class="benchmark-recommendation ${cls}">Vulkan ${vkAvg.toFixed(1)}x · OpenCL ${oclAvg.toFixed(1)}x vs CPU — set <code>ENCODER_GPU_BACKEND=${winner}</code>.</div>`;
+		} else if (vkAvg !== null) {
+			const cls = vkAvg >= 2 ? "good" : vkAvg >= 1.2 ? "meh" : "bad";
+			recHtml = `<div class="benchmark-recommendation ${cls}">Vulkan is ${vkAvg.toFixed(1)}x faster than CPU.</div>`;
+		} else if (oclAvg !== null) {
+			const cls = oclAvg >= 2 ? "good" : oclAvg >= 1.2 ? "meh" : "bad";
+			recHtml = `<div class="benchmark-recommendation ${cls}">OpenCL is ${oclAvg.toFixed(1)}x faster than CPU.</div>`;
 		}
+
 		container.insertAdjacentHTML("beforeend", recHtml);
 	}
 
@@ -1565,21 +1652,42 @@ async function openJobSettings(jobId) {
 		audioBitrates: { ...job.settings.audioBitrates },
 	};
 
-	const devices = await fetchOpenClDevices();
-	if (!tempSettings.gpuDevice || !devices.some((d) => d.id === tempSettings.gpuDevice)) {
-		tempSettings.gpuDevice = devices[0]?.id || "0.0";
-	}
-
 	window._tempJobSettings = tempSettings;
 
+	const backendEl = document.getElementById("job-gpu-backend");
 	const devicePickerEl = document.getElementById("job-gpu-device");
-	renderGpuDevicePicker(devicePickerEl, devices, tempSettings.gpuDevice, (v) => (tempSettings.gpuDevice = v));
+
+	async function refreshDevicePicker(backend) {
+		const devices = backend === "vulkan" ? await fetchVulkanDevices() : await fetchOpenClDevices();
+		renderGpuDevicePicker(devicePickerEl, devices, tempSettings.gpuDevice, (v) => (tempSettings.gpuDevice = v));
+	}
+
+	const initialBackend = tempSettings.gpuBackend || "opencl";
+	renderRadioPills(backendEl, GPU_BACKENDS, tempSettings.gpuBackend || "opencl", async (v) => {
+		tempSettings.gpuBackend = v;
+		tempSettings.gpuDevice = v === "vulkan" ? "0" : "0.0";
+		await refreshDevicePicker(v);
+	});
+	await refreshDevicePicker(initialBackend);
+
 	renderGpuToggle(document.getElementById("job-denoise-gpu"), tempSettings.denoiseGpu || false, (v) => (tempSettings.denoiseGpu = v), devicePickerEl);
 
 	renderRadioPills(document.getElementById("job-quality"), QUALITIES, tempSettings.quality, (v) => (tempSettings.quality = v));
 	renderRadioPills(document.getElementById("job-speed"), SPEEDS, tempSettings.finalSpeed, (v) => (tempSettings.finalSpeed = v));
-	renderRadioPills(document.getElementById("job-denoise"), DENOISE_LEVELS, tempSettings.denoise || "off", (v) => (tempSettings.denoise = v));
-	renderGpuToggle(document.getElementById("job-denoise-gpu"), tempSettings.denoiseGpu || false, (v) => (tempSettings.denoiseGpu = v));
+	const updateDenoiseThresholdVisibility = (level) => {
+		const el = document.getElementById("job-auto-thresholds");
+		el.style.display = level === "auto" ? "" : "none";
+	};
+	renderRadioPills(document.getElementById("job-denoise"), DENOISE_LEVELS, tempSettings.denoise || "off", (v) => {
+		tempSettings.denoise = v;
+		updateDenoiseThresholdVisibility(v);
+	});
+	renderAutoThresholds(
+		document.getElementById("job-auto-thresholds"),
+		tempSettings.autoDenoiseThresholds || { light: 0.35, medium: 0.45, heavy: 0.55 },
+		(v) => (tempSettings.autoDenoiseThresholds = v),
+	);
+	updateDenoiseThresholdVisibility(tempSettings.denoise);
 	renderRadioPills(document.getElementById("job-deband"), DEBAND_LEVELS, tempSettings.deband || "off", (v) => (tempSettings.deband = v));
 	renderDownscaleToggle(document.getElementById("job-downscale"), tempSettings.downscale || false, (v) => (tempSettings.downscale = v));
 	renderSkipBoostingToggle(document.getElementById("job-skip-boosting"), tempSettings.skipBoosting || false, (v) => (tempSettings.skipBoosting = v));
@@ -1902,24 +2010,6 @@ function updateLibraryFooter() {
 		note.textContent = "Select folders or files to encode";
 		encodeBtn.disabled = true;
 	}
-}
-
-function renderGpuToggle(container, checked, onChange) {
-	container.innerHTML = "";
-	const label = document.createElement("label");
-	label.className = "toggle-label";
-
-	const input = document.createElement("input");
-	input.type = "checkbox";
-	input.checked = checked;
-	input.onchange = () => onChange(input.checked);
-
-	const span = document.createElement("span");
-	span.textContent = "\u00A0Use GPU acceleration (OpenCL)";
-
-	label.appendChild(input);
-	label.appendChild(span);
-	container.appendChild(label);
 }
 
 function renderDownscaleToggle(container, checked, onChange) {

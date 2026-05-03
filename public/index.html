@@ -110,7 +110,16 @@
 							<label>Denoise</label>
 							<div class="radio-group" id="default-denoise"></div>
 							<div class="toggle-group" id="default-denoise-gpu"></div>
+							<div class="radio-group" id="default-gpu-backend" style="display: none"></div>
 							<div class="radio-group radio-group-stacked" id="default-gpu-device" style="display: none"></div>
+						</div>
+						<div class="setting-group" id="default-auto-thresholds-group" style="display: none">
+							<label>Auto Denoise Thresholds (Y bitplane-4)</label>
+							<div id="default-auto-thresholds"></div>
+							<div class="lang-filter-hint">
+								Scenes with median Y bitplane-4 ≥ each threshold get the corresponding denoise level. Run an analysis on a known clean and known grainy file to
+								calibrate.
+							</div>
 						</div>
 						<div class="setting-group">
 							<label>Deband</label>
@@ -171,7 +180,16 @@
 							<label>Denoise</label>
 							<div class="radio-group" id="job-denoise"></div>
 							<div class="toggle-group" id="job-denoise-gpu"></div>
+							<div class="radio-group" id="job-gpu-backend" style="display: none"></div>
 							<div class="radio-group radio-group-stacked" id="job-gpu-device" style="display: none"></div>
+						</div>
+						<div class="setting-group" id="job-auto-thresholds-group" style="display: none">
+							<label>Auto Denoise Thresholds (Y bitplane-4)</label>
+							<div id="job-auto-thresholds"></div>
+							<div class="lang-filter-hint">
+								Scenes with median Y bitplane-4 ≥ each threshold get the corresponding denoise level. Run an analysis on a known clean and known grainy file to
+								calibrate.
+							</div>
 						</div>
 						<div class="setting-group">
 							<label>Deband</label>

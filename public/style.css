@@ -1378,7 +1378,7 @@ code {
 }
 
 .benchmark-modal {
-	width: min(560px, calc(100vw - 32px));
+	width: min(700px, calc(100vw - 32px));
 }
 
 .benchmark-intro {
@@ -1614,4 +1614,29 @@ code {
 	margin-top: 6px;
 	font-size: 0.7rem;
 	color: var(--text-2);
+}
+
+.auto-threshold-grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 8px;
+}
+.auto-threshold-row {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 0.75rem;
+	color: var(--text-2);
+}
+.auto-threshold-row input {
+	font-family: var(--font-mono);
+	padding: 6px 8px;
+	background: var(--bg-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--text-0);
+}
+.auto-threshold-row input:focus {
+	outline: none;
+	border-color: var(--accent);
 }

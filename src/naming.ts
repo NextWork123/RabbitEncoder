@@ -167,7 +167,7 @@ export const LANG_ALIASES: Record<string, string> = {
  * Infer an optical-disc source tag from the video stream's codec and resolution.
  * Returns null when the stream doesn't match any known disc format.
  *
- *   VCD:  MPEG-1, 352×240 (NTSC) / 352×288 (PAL)
+ *   VCD:  MPEG-1, 352x240 (NTSC) / 352x288 (PAL)
  *   SVCD: MPEG-2, ≤480 wide, SD height
  *   DVD:  MPEG-2, >480 wide (720/704), SD height
  */

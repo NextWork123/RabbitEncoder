@@ -1,5 +1,6 @@
-import type { DenoiseLevel, DebandLevel } from "./types";
+import type { DenoiseLevel, DebandLevel, GpuBackend } from "./types";
 import { Logger } from "./logger";
+import { buildAutoDenoiseFilter, type DenoisePlan } from "./auto-denoise";
 
 /** CPU/GPU nlmeans filter parameters for each denoise level. */
 export const NLMEANS_PARAMS: Record<string, string> = {
@@ -7,6 +8,8 @@ export const NLMEANS_PARAMS: Record<string, string> = {
 	medium: "s=2:p=5:r=9",
 	heavy: "s=3:p=7:r=11",
 };
+
+const NLMEANS_VULKAN_EXTRA = "t=8";
 
 /**
  * gradfun parameters for each deband level.
@@ -23,20 +26,31 @@ export const GRADFUN_PARAMS: Record<string, string> = {
 	heavy: "strength=2.8:radius=24",
 };
 
-const OPENCL_DEVICE_NAME = "gpu";
-const DEFAULT_DEVICE_ID = "0.0";
+const HW_DEVICE_NAME = "gpu";
+const DEFAULT_OPENCL_DEVICE_ID = "0.0";
+const DEFAULT_VULKAN_DEVICE_ID = "0";
 
-function buildDeviceSpec(deviceId: string): string {
-	return `opencl=${OPENCL_DEVICE_NAME}:${deviceId}`;
+export function defaultDeviceFor(backend: GpuBackend): string {
+	return backend === "vulkan" ? DEFAULT_VULKAN_DEVICE_ID : DEFAULT_OPENCL_DEVICE_ID;
+}
+
+function buildOpenClDeviceSpec(deviceId: string): string {
+	return `opencl=${HW_DEVICE_NAME}:${deviceId}`;
+}
+
+function buildVulkanDeviceSpec(deviceId: string): string {
+	return `vulkan=${HW_DEVICE_NAME}:${deviceId}`;
 }
 
 export interface DenoiseConfig {
 	/** The -vf filter string to pass to FFmpeg. */
 	filter: string;
-	/** Extra args to insert before -i (e.g. OpenCL hw device init). */
+	/** Extra args to insert before -i (e.g. hw device init). */
 	preInputArgs: string[];
 	/** Whether this config uses GPU acceleration. */
 	isGpu: boolean;
+	/** Which backend was actually selected (null when running on CPU). */
+	gpuBackend: GpuBackend | null;
 }
 
 export interface DebandConfig {
@@ -53,36 +67,49 @@ export interface PrepareFilterConfig {
 	label: string;
 }
 
-/**
- * Probe whether FFmpeg can actually run the OpenCL nlmeans path.
- */
-export async function isOpenClAvailable(deviceId: string = DEFAULT_DEVICE_ID): Promise<boolean> {
-	try {
-		const proc = Bun.spawn(
-			[
-				"ffmpeg",
-				"-hide_banner",
-				"-v",
-				"error",
-				"-init_hw_device",
-				buildDeviceSpec(deviceId),
-				"-filter_hw_device",
-				OPENCL_DEVICE_NAME,
-				"-f",
-				"lavfi",
-				"-i",
-				"testsrc2=size=64x64:rate=1:duration=1",
-				"-vf",
-				"format=yuv420p,hwupload,nlmeans_opencl=s=1:p=3:r=7,hwdownload,format=yuv420p",
-				"-frames:v",
-				"1",
-				"-f",
-				"null",
-				"-",
-			],
-			{ stdout: "ignore", stderr: "pipe" },
-		);
+export async function isOpenClAvailable(deviceId: string = DEFAULT_OPENCL_DEVICE_ID): Promise<boolean> {
+	return runProbe([
+		"-init_hw_device",
+		buildOpenClDeviceSpec(deviceId),
+		"-filter_hw_device",
+		HW_DEVICE_NAME,
+		"-f",
+		"lavfi",
+		"-i",
+		"testsrc2=size=64x64:rate=1:duration=1",
+		"-vf",
+		`format=yuv420p,hwupload,nlmeans_opencl=${NLMEANS_PARAMS.light},hwdownload,format=yuv420p`,
+		"-frames:v",
+		"1",
+		"-f",
+		"null",
+		"-",
+	]);
+}
 
+export async function isVulkanAvailable(deviceId: string = DEFAULT_VULKAN_DEVICE_ID): Promise<boolean> {
+	return runProbe([
+		"-init_hw_device",
+		buildVulkanDeviceSpec(deviceId),
+		"-filter_hw_device",
+		HW_DEVICE_NAME,
+		"-f",
+		"lavfi",
+		"-i",
+		"testsrc2=size=64x64:rate=1:duration=1",
+		"-vf",
+		`format=yuv420p,hwupload,nlmeans_vulkan=${NLMEANS_PARAMS.light}:${NLMEANS_VULKAN_EXTRA},hwdownload,format=yuv420p`,
+		"-frames:v",
+		"1",
+		"-f",
+		"null",
+		"-",
+	]);
+}
+
+async function runProbe(extraArgs: string[]): Promise<boolean> {
+	try {
+		const proc = Bun.spawn(["ffmpeg", "-hide_banner", "-v", "error", ...extraArgs], { stdout: "ignore", stderr: "pipe" });
 		const code = await proc.exited;
 		return code === 0;
 	} catch {
@@ -90,32 +117,95 @@ export async function isOpenClAvailable(deviceId: string = DEFAULT_DEVICE_ID): P
 	}
 }
 
-/**
- * Build the DenoiseConfig for a given level and GPU preference.
- *
- * When `useGpu` is true, probes the actual OpenCL nlmeans filter path first.
- * Falls back to CPU nlmeans transparently if OpenCL filtering is not available.
- */
-export async function buildDenoiseConfig(level: DenoiseLevel, useGpu: boolean, gpuDevice: string = DEFAULT_DEVICE_ID): Promise<DenoiseConfig | null> {
-	const params = NLMEANS_PARAMS[level];
-	if (!params) return null;
+interface BackendBuild {
+	filter: string;
+	preInputArgs: string[];
+}
 
-	if (useGpu) {
-		if (await isOpenClAvailable(gpuDevice)) {
-			Logger.info(`[denoise] OpenCL nlmeans verified on device ${gpuDevice}, using nlmeans_opencl`);
-			return {
-				filter: `format=yuv420p,hwupload,nlmeans_opencl=${params},hwdownload,format=yuv420p`,
-				preInputArgs: ["-init_hw_device", buildDeviceSpec(gpuDevice), "-filter_hw_device", OPENCL_DEVICE_NAME],
-				isGpu: true,
-			};
+function buildOpenClChunk(level: DenoiseLevel, deviceId: string): BackendBuild {
+	const params = NLMEANS_PARAMS[level]!;
+	return {
+		filter: `format=yuv420p,hwupload,nlmeans_opencl=${params},hwdownload,format=yuv420p`,
+		preInputArgs: ["-init_hw_device", buildOpenClDeviceSpec(deviceId), "-filter_hw_device", HW_DEVICE_NAME],
+	};
+}
+
+function buildVulkanChunk(level: DenoiseLevel, deviceId: string): BackendBuild {
+	const params = NLMEANS_PARAMS[level]!;
+	return {
+		filter: `format=yuv420p,hwupload,nlmeans_vulkan=${params}:${NLMEANS_VULKAN_EXTRA},hwdownload,format=yuv420p`,
+		preInputArgs: ["-init_hw_device", buildVulkanDeviceSpec(deviceId), "-filter_hw_device", HW_DEVICE_NAME],
+	};
+}
+
+/**
+ * Build the DenoiseConfig for a given level, GPU preference, and backend.
+ *
+ * Probes the requested backend(s) and falls back to CPU nlmeans transparently
+ * if no GPU path is usable.
+ *
+ *   - backend = "opencl": probe OpenCL only.
+ *   - backend = "vulkan": probe Vulkan only.
+ *   - backend = "auto"  : probe Vulkan first, then OpenCL, then CPU.
+ *
+ * `gpuDevice` is interpreted per-backend; if omitted, the backend default is
+ * used ("0.0" for OpenCL, "0" for Vulkan).
+ */
+export async function buildDenoiseConfig(
+	level: DenoiseLevel,
+	useGpu: boolean,
+	backend: GpuBackend = "opencl",
+	gpuDevice?: string,
+): Promise<DenoiseConfig | null> {
+	if (!NLMEANS_PARAMS[level]) return null;
+
+	if (!useGpu) return cpuFallback(level);
+
+	const tryVulkan = async (): Promise<DenoiseConfig | null> => {
+		const deviceId = gpuDevice ?? DEFAULT_VULKAN_DEVICE_ID;
+		if (await isVulkanAvailable(deviceId)) {
+			Logger.info(`[denoise] Vulkan nlmeans verified on device ${deviceId}, using nlmeans_vulkan`);
+			const part = buildVulkanChunk(level, deviceId);
+			return { ...part, isGpu: true, gpuBackend: "vulkan" };
 		}
-		Logger.warn(`[denoise] GPU denoise on device ${gpuDevice} failed probe, falling back to CPU nlmeans`);
+		Logger.warn(`[denoise] Vulkan probe failed on device ${deviceId}`);
+		return null;
+	};
+
+	const tryOpenCl = async (): Promise<DenoiseConfig | null> => {
+		const deviceId = gpuDevice ?? DEFAULT_OPENCL_DEVICE_ID;
+		if (await isOpenClAvailable(deviceId)) {
+			Logger.info(`[denoise] OpenCL nlmeans verified on device ${deviceId}, using nlmeans_opencl`);
+			const part = buildOpenClChunk(level, deviceId);
+			return { ...part, isGpu: true, gpuBackend: "opencl" };
+		}
+		Logger.warn(`[denoise] OpenCL probe failed on device ${deviceId}`);
+		return null;
+	};
+
+	let result: DenoiseConfig | null = null;
+	if (backend === "vulkan") {
+		result = await tryVulkan();
+	} else if (backend === "opencl") {
+		result = await tryOpenCl();
+	} else {
+		result = (await tryVulkan()) ?? (await tryOpenCl());
 	}
 
+	if (result) return result;
+
+	Logger.warn(`[denoise] No GPU backend available (requested: ${backend}), falling back to CPU nlmeans`);
+	return cpuFallback(level);
+}
+
+function cpuFallback(level: DenoiseLevel): DenoiseConfig | null {
+	const params = NLMEANS_PARAMS[level];
+	if (!params) return null;
 	return {
 		filter: `nlmeans=${params}`,
 		preInputArgs: [],
 		isGpu: false,
+		gpuBackend: null,
 	};
 }
 
@@ -152,37 +242,57 @@ export async function buildPrepareFilterConfig(
 	denoise: DenoiseLevel,
 	useGpuDenoise: boolean,
 	deband: DebandLevel,
-	gpuDevice: string = DEFAULT_DEVICE_ID,
+	backend: GpuBackend = "opencl",
+	gpuDevice?: string,
+	autoPlan: DenoisePlan | null = null,
+	totalDuration?: number,
 ): Promise<PrepareFilterConfig | null> {
 	const needsScale = downscale && sourceHeight > 1080;
 	const scaleFilter = "scale=-2:1080:flags=lanczos";
 
 	const debandConfig = buildDebandConfig(deband);
-	const denoiseConfig = await buildDenoiseConfig(denoise, useGpuDenoise, gpuDevice);
 
-	if (!needsScale && !debandConfig && !denoiseConfig) return null;
+	let denoiseFilter: string | null = null;
+	let denoisePreInputArgs: string[] = [];
+	let denoiseLabel: string | null = null;
+
+	if (denoise === "auto") {
+		if (autoPlan && autoPlan.length > 0) {
+			const auto = await buildAutoDenoiseFilter(autoPlan, useGpuDenoise, backend, gpuDevice, totalDuration);
+			if (auto) {
+				denoiseFilter = auto.filter;
+				denoisePreInputArgs = auto.preInputArgs;
+				denoiseLabel = auto.label;
+			}
+		}
+	} else {
+		const denoiseConfig = await buildDenoiseConfig(denoise, useGpuDenoise, backend, gpuDevice);
+		if (denoiseConfig) {
+			denoiseFilter = denoiseConfig.filter;
+			denoisePreInputArgs = denoiseConfig.preInputArgs;
+			const tag = denoiseConfig.gpuBackend === "vulkan" ? " [GPU/Vulkan]" : denoiseConfig.gpuBackend === "opencl" ? " [GPU/OpenCL]" : " [CPU]";
+			denoiseLabel = `Denoising (${denoise}${tag})`;
+		}
+	}
+
+	if (!needsScale && !debandConfig && !denoiseFilter) return null;
 
 	const parts: string[] = [];
 	const preInputArgs: string[] = [];
 	const labelParts: string[] = [];
 
 	if (needsScale) {
-		// Scale must come before GPU upload
 		parts.push(scaleFilter);
 		labelParts.push("Downscaling");
 	}
-
 	if (debandConfig) {
 		parts.push(debandConfig.filter);
 		labelParts.push(`Debanding (${deband})`);
 	}
-
-	if (denoiseConfig) {
-		parts.push(denoiseConfig.filter);
-		preInputArgs.push(...denoiseConfig.preInputArgs);
-
-		const gpuLabel = denoiseConfig.isGpu ? " [GPU]" : " [CPU]";
-		labelParts.push(`Denoising (${denoise}${gpuLabel})`);
+	if (denoiseFilter) {
+		parts.push(denoiseFilter);
+		preInputArgs.push(...denoisePreInputArgs);
+		labelParts.push(denoiseLabel!);
 	}
 
 	return {
