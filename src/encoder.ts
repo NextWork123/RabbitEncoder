@@ -19,7 +19,7 @@ import {
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
 import { buildPrepareFilterConfig } from "./filters";
-import { runAnalysisPass, runSegmentedAutoDenoiseGpu, type DenoisePlan } from "./auto-denoise";
+import { FFV1_ENCODE_ARGS, runAnalysisPass, runSegmentedAutoDenoiseGpu, type DenoisePlan } from "./auto-denoise";
 
 export { CancelledError } from "./process";
 
@@ -202,7 +202,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			if (prepareFilter.filter) {
 				filterArgs.push("-vf", prepareFilter.filter);
 			}
-			filterArgs.push("-c:v", "ffv1", "-level", "3", "-threads", "0", "-an", "-sn", filteredVideo);
+			filterArgs.push(...FFV1_ENCODE_ARGS, "-an", "-sn", filteredVideo);
 
 			const filterProc = Bun.spawn(filterArgs, {
 				stdout: "pipe",

@@ -19,6 +19,67 @@ export interface DenoiseRange {
 	level: "light" | "medium" | "heavy";
 }
 
+export const FFV1_ENCODE_ARGS = ["-c:v", "ffv1", "-level", "3", "-coder", "1", "-context", "1", "-g", "1", "-slices", "24", "-slicecrc", "1", "-threads", "0"];
+
+interface StreamFormat {
+	pixFmt: string;
+	colorRange?: string;
+	colorPrimaries?: string;
+	colorTrc?: string;
+	colorSpace?: string;
+}
+
+async function probeStreamFormat(inputPath: string): Promise<StreamFormat> {
+	const proc = Bun.spawn(
+		[
+			"ffprobe",
+			"-v",
+			"error",
+			"-select_streams",
+			"v:0",
+			"-show_entries",
+			"stream=pix_fmt,color_range,color_primaries,color_trc,color_space",
+			"-of",
+			"json",
+			inputPath,
+		],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	const out = await new Response(proc.stdout).text();
+	await proc.exited;
+
+	let s: any = {};
+	try {
+		s = JSON.parse(out)?.streams?.[0] ?? {};
+	} catch {
+		// fall through with defaults
+	}
+
+	const clean = (v: unknown): string | undefined => {
+		if (typeof v !== "string") return undefined;
+		const t = v.trim();
+		if (!t || t === "unknown" || t === "N/A") return undefined;
+		return t;
+	};
+
+	return {
+		pixFmt: clean(s.pix_fmt) ?? "yuv420p",
+		colorRange: clean(s.color_range),
+		colorPrimaries: clean(s.color_primaries),
+		colorTrc: clean(s.color_trc),
+		colorSpace: clean(s.color_space),
+	};
+}
+
+function isHighBitDepth(pixFmt: string): boolean {
+	return /(?:p10|p12|p14|p16)(?:le|be)?$/.test(pixFmt);
+}
+
+function getEffectivePixFmt(sourcePixFmt: string, backend: "opencl" | "vulkan"): string {
+	if (!isHighBitDepth(sourcePixFmt)) return sourcePixFmt;
+	return sourcePixFmt;
+}
+
 export type DenoisePlan = DenoiseRange[];
 
 export interface AutoDenoiseConfig {
@@ -65,6 +126,39 @@ const MIN_SCENE_DURATION = 1.0;
 
 /** Vulkan-only nlmeans tuning param (mirrors the constant in filters.ts). */
 const NLMEANS_VULKAN_EXTRA = "t=8";
+
+function buildDenoiseSegmentFilter(level: DenoiseRange["level"], backend: "opencl" | "vulkan", pixFmt: string): string {
+	const params = NLMEANS_PARAMS[level]!;
+
+	if (backend === "vulkan") {
+		// Vulkan can hold 10-bit YUV in hwframes -> pass pixFmt straight through.
+		return `format=${pixFmt},hwupload,nlmeans_vulkan=${params}:${NLMEANS_VULKAN_EXTRA},hwdownload,format=${pixFmt}`;
+	}
+
+	// OpenCL: kernel only supports 8-bit. If the chain is 10-bit, downconvert
+	// for the kernel and convert back so passthrough segments align.
+	if (isHighBitDepth(pixFmt)) {
+		return `format=yuv420p,hwupload,nlmeans_opencl=${params},hwdownload,format=${pixFmt}`;
+	}
+	return `format=${pixFmt},hwupload,nlmeans_opencl=${params},hwdownload,format=${pixFmt}`;
+}
+
+function buildColorArgs(fmt: StreamFormat): string[] {
+	const args: string[] = [];
+	if (fmt.colorRange) args.push("-color_range", fmt.colorRange);
+	if (fmt.colorPrimaries) args.push("-color_primaries", fmt.colorPrimaries);
+	if (fmt.colorTrc) args.push("-color_trc", fmt.colorTrc);
+	if (fmt.colorSpace) args.push("-colorspace", fmt.colorSpace);
+	return args;
+}
+
+async function normalizeSourceFormat(inputPath: string, outputPath: string, pixFmt: string, colorArgs: string[], signal?: AbortSignal): Promise<void> {
+	const args = ["ffmpeg", "-y", "-i", inputPath, "-vf", `format=${pixFmt}`, ...FFV1_ENCODE_ARGS, ...colorArgs, "-an", "-sn", outputPath];
+	const res = await run(args, { signal });
+	if (res.code !== 0) {
+		throw new Error(`Source normalization failed: ${res.stderr.slice(-500)}`);
+	}
+}
 
 /**
  * Parse three threshold env vars into an AutoDenoiseThresholds.
@@ -384,6 +478,8 @@ async function encodeSegment(
 	seg: DenoiseSegment,
 	backend: "opencl" | "vulkan",
 	gpuDevice: string,
+	pixFmt: string,
+	colorArgs: string[],
 	signal?: AbortSignal,
 ): Promise<void> {
 	const ss = seg.start.toFixed(3);
@@ -397,12 +493,8 @@ async function encodeSegment(
 		return;
 	}
 
-	const params = NLMEANS_PARAMS[seg.level]!;
 	const deviceSpec = backend === "vulkan" ? `vulkan=gpu:${gpuDevice}` : `opencl=gpu:${gpuDevice}`;
-	const filter =
-		backend === "vulkan"
-			? `format=yuv420p,hwupload,nlmeans_vulkan=${params}:${NLMEANS_VULKAN_EXTRA},hwdownload,format=yuv420p`
-			: `format=yuv420p,hwupload,nlmeans_opencl=${params},hwdownload,format=yuv420p`;
+	const filter = buildDenoiseSegmentFilter(seg.level, backend, pixFmt);
 
 	const res = await run(
 		[
@@ -420,12 +512,8 @@ async function encodeSegment(
 			inputPath,
 			"-vf",
 			filter,
-			"-c:v",
-			"ffv1",
-			"-level",
-			"3",
-			"-threads",
-			"0",
+			...FFV1_ENCODE_ARGS,
+			...colorArgs,
 			"-an",
 			"-sn",
 			outputPath,
@@ -467,11 +555,27 @@ export async function runSegmentedAutoDenoiseGpu(
 		throw new Error("Segment list is empty; nothing to denoise");
 	}
 
+	const sourceFmt = await probeStreamFormat(inputPath);
+	const effectivePixFmt = getEffectivePixFmt(sourceFmt.pixFmt, backend);
+	const colorArgs = buildColorArgs(sourceFmt);
+
+	if (backend === "opencl" && isHighBitDepth(sourceFmt.pixFmt)) {
+		Logger.warn(
+			`[auto-denoise] Source is ${sourceFmt.pixFmt} but OpenCL nlmeans only supports 8-bit. ` +
+				`The denoise kernel will run at 8-bit precision; segment streams stay at ${effectivePixFmt}. ` +
+				`Switch to backend=vulkan for full-precision 10-bit denoising.`,
+		);
+	}
+
 	const segDir = join(tempDir, "denoise_segments");
 	mkdirSync(segDir, { recursive: true });
 
 	const segFiles: string[] = [];
 	const listPath = join(segDir, "concat.txt");
+
+	const normalizedInput = join(segDir, "_normalized.mkv");
+	Logger.info(`[auto-denoise] Normalizing source format (${sourceFmt.pixFmt} → ${effectivePixFmt}, pinned FFV1)`);
+	await normalizeSourceFormat(inputPath, normalizedInput, effectivePixFmt, colorArgs, signal);
 
 	try {
 		for (let i = 0; i < segments.length; i++) {
@@ -484,7 +588,7 @@ export async function runSegmentedAutoDenoiseGpu(
 			onProgress(i, segments.length, label);
 			Logger.debug(`[auto-denoise] Segment ${i + 1}/${segments.length}: ${label}`);
 
-			await encodeSegment(inputPath, segFile, seg, backend, gpuDevice, signal);
+			await encodeSegment(normalizedInput, segFile, seg, backend, gpuDevice, effectivePixFmt, colorArgs, signal);
 			segFiles.push(segFile);
 		}
 
