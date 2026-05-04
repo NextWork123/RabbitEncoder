@@ -2,8 +2,8 @@ import { join } from "path";
 import { readFileSync, existsSync, unlinkSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { Logger } from "./logger";
 import { CancelledError, run } from "./process";
-import { NLMEANS_PARAMS, isOpenClAvailable, isVulkanAvailable, defaultDeviceFor } from "./filters";
-import type { AutoDenoiseThresholds, GpuBackend } from "./types";
+import { formatNlmeansParams, isOpenClAvailable, isVulkanAvailable, defaultDeviceFor } from "./filters";
+import type { AutoDenoiseThresholds, DenoiseBackend, GpuBackend, NlmeansLevelParams } from "./types";
 
 export const DEFAULT_AUTO_THRESHOLDS: AutoDenoiseThresholds = {
 	light: 0.4,
@@ -126,12 +126,12 @@ const SCDET_THRESHOLD = 10;
 const SCENE_DETECT_HEIGHT = 480;
 const MIN_SCENE_DURATION = 1.0;
 
-function buildDenoiseSegmentFilter(level: DenoiseRange["level"], backend: "opencl" | "vulkan", pixFmt: string): string {
-	const params = NLMEANS_PARAMS[level]!;
+function buildDenoiseSegmentFilter(level: DenoiseRange["level"], backend: "opencl" | "vulkan", pixFmt: string, params: NlmeansLevelParams): string {
+	const formatted = formatNlmeansParams(params[level]);
 	if (backend === "vulkan") {
-		return `format=${pixFmt},hwupload,nlmeans_vulkan=${params},hwdownload,format=${pixFmt}`;
+		return `format=${pixFmt},hwupload,nlmeans_vulkan=${formatted},hwdownload,format=${pixFmt}`;
 	}
-	return `format=${pixFmt},hwupload,nlmeans_opencl=${params},hwdownload,format=${pixFmt}`;
+	return `format=${pixFmt},hwupload,nlmeans_opencl=${formatted},hwdownload,format=${pixFmt}`;
 }
 
 function buildColorArgs(fmt: StreamFormat): string[] {
@@ -280,7 +280,6 @@ export async function runAnalysisPass(
 			`${totalDenoised.toFixed(1)}s denoised (${pct.toFixed(1)}% of ${totalDuration.toFixed(1)}s)`,
 	);
 
-	// Cleanup the log files; we no longer need them.
 	for (const p of [scenesLog, noiseLog]) {
 		try {
 			unlinkSync(p);
@@ -291,28 +290,27 @@ export async function runAnalysisPass(
 }
 
 /**
- * Build a DenoiseConfig-shaped object from a plan.
+ * Build a DenoiseConfig-shaped object from a plan with user-supplied params.
  *
  * CPU path: chains one nlmeans per level, each gated by FFmpeg's `enable=`
- * timeline expression. When a frame is outside `enable`, the filter framework
- * skips invocation entirely — pass-through cost only.
+ * timeline expression.
  *
  * GPU path: nlmeans_vulkan and nlmeans_opencl don't honor `enable=`, so
- * per-range gating doesn't work in a single filter graph. When `useGpu` is
- * true and the requested backend probes successfully, this function returns
- * a config with `filter: ""` and `deferredPlan` set — the prepare stage
- * detects this and runs `runSegmentedAutoDenoiseGpu` after the scale/deband
- * pass to cut, denoise, and concat segments back together.
+ * per-range gating doesn't work in a single filter graph. When `backend` is
+ * a GPU backend that probes successfully, this returns a config with
+ * `filter: ""` and `deferredPlan` set — the prepare stage detects this and
+ * runs `runSegmentedAutoDenoiseGpu` after the scale/deband pass.
  *
- * If the GPU probe fails, falls back to CPU `enable=` gating.
+ * If the GPU probe fails (or backend === "cpu"), falls back to CPU `enable=`
+ * gating.
  *
  * Returns null if plan is empty (no scenes need denoising).
  */
 export async function buildAutoDenoiseFilter(
 	plan: DenoisePlan,
-	useGpu: boolean,
-	backend: GpuBackend = "opencl",
-	gpuDevice?: string,
+	backend: DenoiseBackend,
+	gpuDevice: string | undefined,
+	nlmeansParams: NlmeansLevelParams,
 	totalDuration?: number,
 ): Promise<AutoDenoiseConfig | null> {
 	if (plan.length === 0) return null;
@@ -346,7 +344,7 @@ export async function buildAutoDenoiseFilter(
 
 	// GPU path: probe the requested backend(s); on success, defer to the
 	// segmented stage. On failure, fall through to CPU.
-	if (useGpu) {
+	if (backend !== "cpu") {
 		const probeResult = await probeGpuBackendForAutoDenoise(backend, gpuDevice);
 
 		if (probeResult) {
@@ -377,9 +375,9 @@ export async function buildAutoDenoiseFilter(
 	for (const level of ["light", "medium", "heavy"] as const) {
 		const ranges = byLevel.get(level);
 		if (!ranges || ranges.length === 0) continue;
-		const params = NLMEANS_PARAMS[level]!;
+		const formatted = formatNlmeansParams(nlmeansParams[level]);
 		const enable = ranges.map((r) => `between(t,${r.start.toFixed(3)},${r.end.toFixed(3)})`).join("+");
-		filterParts.push(`nlmeans=${params}:enable='${enable}'`);
+		filterParts.push(`nlmeans=${formatted}:enable='${enable}'`);
 	}
 
 	return {
@@ -394,15 +392,14 @@ export async function buildAutoDenoiseFilter(
 
 /**
  * Probe the requested GPU backend(s) and return the first one that works.
- * Mirrors the resolution logic in buildDenoiseConfig but returns the resolved
- * device id so the segmented pass can re-use it across N ffmpeg invocations
- * without re-probing each time.
- *
  *   - backend = "opencl": probe OpenCL only.
  *   - backend = "vulkan": probe Vulkan only.
  *   - backend = "auto"  : probe Vulkan first, then OpenCL.
+ *   - backend = "cpu"   : returns null (caller should already short-circuit).
  */
-async function probeGpuBackendForAutoDenoise(backend: GpuBackend, gpuDevice?: string): Promise<{ backend: "opencl" | "vulkan"; deviceId: string } | null> {
+async function probeGpuBackendForAutoDenoise(backend: DenoiseBackend, gpuDevice?: string): Promise<{ backend: "opencl" | "vulkan"; deviceId: string } | null> {
+	if (backend === "cpu") return null;
+
 	const tryVulkan = async (): Promise<{ backend: "vulkan"; deviceId: string } | null> => {
 		const deviceId = gpuDevice ?? defaultDeviceFor("vulkan");
 		if (await isVulkanAvailable(deviceId)) return { backend: "vulkan", deviceId };
@@ -453,6 +450,7 @@ async function encodeSegment(
 	gpuDevice: string,
 	pixFmt: string,
 	colorArgs: string[],
+	nlmeansParams: NlmeansLevelParams,
 	signal?: AbortSignal,
 ): Promise<void> {
 	const ss = seg.start.toFixed(3);
@@ -470,7 +468,7 @@ async function encodeSegment(
 	}
 
 	const deviceSpec = backend === "vulkan" ? `vulkan=gpu:${gpuDevice}` : `opencl=gpu:${gpuDevice}`;
-	const filter = buildDenoiseSegmentFilter(seg.level, backend, pixFmt);
+	const filter = buildDenoiseSegmentFilter(seg.level, backend, pixFmt, nlmeansParams);
 
 	const res = await run(
 		[
@@ -519,6 +517,7 @@ export async function runSegmentedAutoDenoiseGpu(
 	backend: GpuBackend,
 	gpuDevice: string,
 	tempDir: string,
+	nlmeansParams: NlmeansLevelParams,
 	onProgress: (i: number, n: number, label: string) => void,
 	signal?: AbortSignal,
 ): Promise<void> {
@@ -556,7 +555,7 @@ export async function runSegmentedAutoDenoiseGpu(
 			onProgress(i, segments.length, label);
 			Logger.debug(`[auto-denoise] Segment ${i + 1}/${segments.length}: ${label}`);
 
-			await encodeSegment(inputPath, segFile, seg, backend, gpuDevice, effectivePixFmt, colorArgs, signal);
+			await encodeSegment(inputPath, segFile, seg, backend, gpuDevice, effectivePixFmt, colorArgs, nlmeansParams, signal);
 			segFiles.push(segFile);
 		}
 
@@ -580,17 +579,6 @@ export async function runSegmentedAutoDenoiseGpu(
 
 /**
  * Build the per-scene plan from raw samples and cut times.
- *
- * Steps:
- *   1. Build scene boundaries [0, cut₁, cut₂, ..., totalDuration].
- *   2. For each scene, compute median Y bitplane-4 of contained samples
- *      and classify against thresholds. Empty scenes inherit from the
- *      previous scene's level.
- *   3. Short scenes (< MIN_SCENE_DURATION) inherit their level from the
- *      longer neighbor -> avoids filter thrashing on rapid cuts where the
- *      noise estimate is unreliable anyway.
- *   4. Drop 'off' scenes and merge consecutive same-level scenes into
- *      contiguous ranges.
  */
 export function buildPlan(samples: NoiseSample[], cuts: number[], totalDuration: number, thresholds: AutoDenoiseThresholds): DenoisePlan {
 	if (totalDuration <= 0) return [];
@@ -677,8 +665,6 @@ function parseSceneCuts(path: string): number[] {
 	if (!existsSync(path)) return [];
 	const text = readFileSync(path, "utf8");
 	const cuts: number[] = [];
-	// scdet only emits scd.time when a cut is actually detected, so every
-	// match here is a real cut. (Other lavfi.* keys appear on every frame.)
 	const re = /lavfi\.scd\.time=(\S+)/g;
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(text)) !== null) {
@@ -692,8 +678,6 @@ function parseNoiseSamples(path: string): NoiseSample[] {
 	if (!existsSync(path)) return [];
 	const text = readFileSync(path, "utf8");
 	const samples: NoiseSample[] = [];
-	// pts_time is on the `frame:` header line, bitplanenoise.0.4 follows it
-	// later. The DOTALL-ish window between them is bounded by the next frame.
 	const re = /pts_time:(\S+)[^]*?lavfi\.bitplanenoise\.0\.4=(\S+)/g;
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(text)) !== null) {

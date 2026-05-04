@@ -176,17 +176,18 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			}
 		}
 
-		const prepareFilter = await buildPrepareFilterConfig(
-			job.settings.downscale,
-			probe.height,
-			job.settings.denoise,
-			job.settings.denoiseGpu,
-			job.settings.deband,
-			job.settings.gpuBackend,
-			job.settings.gpuDevice,
+		const prepareFilter = await buildPrepareFilterConfig({
+			downscale: job.settings.downscale,
+			sourceHeight: probe.height,
+			denoise: job.settings.denoise,
+			denoiseBackend: job.settings.denoiseBackend,
+			deband: job.settings.deband,
+			gpuDevice: job.settings.gpuDevice,
+			nlmeansParams: job.settings.nlmeansParams,
+			gradfunParams: job.settings.gradfunParams,
 			autoPlan,
-			probe.duration,
-		);
+			totalDuration: probe.duration,
+		});
 
 		if (prepareFilter) {
 			checkCancelled();
@@ -280,7 +281,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		if (prepareFilter?.deferredAutoDenoise) {
 			checkCancelled();
-			const { plan, backend, gpuDevice } = prepareFilter.deferredAutoDenoise;
+			const { plan, backend, gpuDevice, nlmeansParams } = prepareFilter.deferredAutoDenoise;
 			const denoisedVideo = join(tempDir, "source_video_denoised.mkv");
 
 			Logger.info(`[prepare] Running segmented GPU auto-denoise (${plan.length} ranges, ${backend} on device ${gpuDevice})`);
@@ -293,6 +294,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				backend,
 				gpuDevice,
 				tempDir,
+				nlmeansParams,
 				(i, n, label) => {
 					setStep(S_PREPARE, {
 						progress: 5 + (95 * i) / n,

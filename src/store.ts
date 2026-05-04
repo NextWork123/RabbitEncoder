@@ -1,9 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { resolve, dirname, join, extname, relative, basename } from "path";
-import { type Job, type JobSettings, type AppConfig, MEDIA_EXTENSIONS } from "./types";
+import { type Job, type JobSettings, type AppConfig, type DenoiseBackend, MEDIA_EXTENSIONS } from "./types";
 import { encodeJob, CancelledError } from "./encoder";
 import { isAlreadyEncoded } from "./library";
 import { Logger } from "./logger";
+import { DEFAULT_NLMEANS_PARAMS, DEFAULT_GRADFUN_PARAMS, normalizeNlmeansLevelParams, normalizeGradfunLevelParams } from "./filters";
 
 const jobs = new Map<string, Job>();
 let paused = false;
@@ -13,6 +14,63 @@ let appConfig: AppConfig;
 let queueFile = "";
 let activeAbortController: AbortController | null = null;
 let activeJobId: string | null = null;
+
+const VALID_DENOISE_BACKENDS: DenoiseBackend[] = ["cpu", "auto", "vulkan", "opencl"];
+
+/**
+ * Migrate legacy job settings shape to the new one.
+ *
+ *   - Old: denoiseGpu: boolean + gpuBackend: "auto"|"vulkan"|"opencl"
+ *   - New: denoiseBackend: "cpu"|"auto"|"vulkan"|"opencl"
+ *
+ *   - Old: NLMEANS_PARAMS / GRADFUN_PARAMS were globals
+ *   - New: nlmeansParams / gradfunParams on the settings
+ */
+function migrateJobSettings(s: any, defaults: JobSettings): JobSettings {
+	const out: JobSettings = { ...defaults, ...s };
+
+	// denoiseBackend migration
+	if (typeof s?.denoiseBackend === "string" && VALID_DENOISE_BACKENDS.includes(s.denoiseBackend)) {
+		out.denoiseBackend = s.denoiseBackend;
+	} else if (s && (typeof s.denoiseGpu === "boolean" || typeof s.gpuBackend === "string")) {
+		const gpu = s.denoiseGpu === true;
+		const oldBackend = typeof s.gpuBackend === "string" ? s.gpuBackend.toLowerCase() : "auto";
+		if (!gpu) {
+			out.denoiseBackend = "cpu";
+		} else if (oldBackend === "vulkan" || oldBackend === "opencl" || oldBackend === "auto") {
+			out.denoiseBackend = oldBackend;
+		} else {
+			out.denoiseBackend = "auto";
+		}
+	} else {
+		out.denoiseBackend = defaults.denoiseBackend;
+	}
+	// strip the old fields if present (defensive)
+	delete (out as any).denoiseGpu;
+	delete (out as any).gpuBackend;
+
+	// gpuDevice fallback
+	if (typeof out.gpuDevice !== "string" || out.gpuDevice.length === 0) {
+		out.gpuDevice = defaults.gpuDevice;
+	}
+
+	// Filter params
+	out.nlmeansParams = normalizeNlmeansLevelParams(s?.nlmeansParams, defaults.nlmeansParams ?? DEFAULT_NLMEANS_PARAMS);
+	out.gradfunParams = normalizeGradfunLevelParams(s?.gradfunParams, defaults.gradfunParams ?? DEFAULT_GRADFUN_PARAMS);
+
+	// Auto thresholds: keep the defaults if missing/malformed
+	const t = s?.autoDenoiseThresholds;
+	if (t && typeof t.light === "number" && typeof t.medium === "number" && typeof t.heavy === "number") {
+		out.autoDenoiseThresholds = { light: t.light, medium: t.medium, heavy: t.heavy };
+	} else {
+		out.autoDenoiseThresholds = { ...defaults.autoDenoiseThresholds };
+	}
+
+	// Audio bitrates merge
+	out.audioBitrates = { ...defaults.audioBitrates, ...(s?.audioBitrates ?? {}) };
+
+	return out;
+}
 
 export function initStore(config: AppConfig) {
 	appConfig = config;
@@ -80,6 +138,11 @@ function loadQueue(): void {
 				Logger.info(`[store] Skipping restored job ${raw.id}: input file missing`);
 				continue;
 			}
+
+			// Migrate the persisted settings (handles old denoiseGpu/gpuBackend shape and
+			// missing nlmeansParams/gradfunParams).
+			raw.settings = migrateJobSettings(raw.settings ?? {}, appConfig.defaults);
+
 			jobs.set(raw.id, raw as Job);
 			if (raw.queueOrder > orderCounter) {
 				orderCounter = raw.queueOrder;
@@ -103,7 +166,14 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 	if (settings.quality) appConfig.defaults.quality = settings.quality;
 	if (settings.finalSpeed) appConfig.defaults.finalSpeed = settings.finalSpeed;
 	if (settings.denoise) appConfig.defaults.denoise = settings.denoise;
-	if (typeof settings.denoiseGpu === "boolean") appConfig.defaults.denoiseGpu = settings.denoiseGpu;
+
+	if (settings.denoiseBackend && VALID_DENOISE_BACKENDS.includes(settings.denoiseBackend)) {
+		appConfig.defaults.denoiseBackend = settings.denoiseBackend;
+	}
+	if (typeof settings.gpuDevice === "string" && settings.gpuDevice.length > 0) {
+		appConfig.defaults.gpuDevice = settings.gpuDevice;
+	}
+
 	if (settings.deband) appConfig.defaults.deband = settings.deband;
 	if (typeof settings.downscale === "boolean") appConfig.defaults.downscale = settings.downscale;
 	if (typeof settings.skipBoosting === "boolean") appConfig.defaults.skipBoosting = settings.skipBoosting;
@@ -120,6 +190,12 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 		if (typeof t.light === "number" && typeof t.medium === "number" && typeof t.heavy === "number") {
 			appConfig.defaults.autoDenoiseThresholds = { light: t.light, medium: t.medium, heavy: t.heavy };
 		}
+	}
+	if (settings.nlmeansParams) {
+		appConfig.defaults.nlmeansParams = normalizeNlmeansLevelParams(settings.nlmeansParams, appConfig.defaults.nlmeansParams);
+	}
+	if (settings.gradfunParams) {
+		appConfig.defaults.gradfunParams = normalizeGradfunLevelParams(settings.gradfunParams, appConfig.defaults.gradfunParams);
 	}
 	if (settings.audioBitrates) {
 		appConfig.defaults.audioBitrates = {
@@ -176,6 +252,17 @@ export function addJob(filename: string, inputPath: string, relativePath: string
 		settings: {
 			...appConfig.defaults,
 			audioBitrates: { ...appConfig.defaults.audioBitrates },
+			autoDenoiseThresholds: { ...appConfig.defaults.autoDenoiseThresholds },
+			nlmeansParams: {
+				light: { ...appConfig.defaults.nlmeansParams.light },
+				medium: { ...appConfig.defaults.nlmeansParams.medium },
+				heavy: { ...appConfig.defaults.nlmeansParams.heavy },
+			},
+			gradfunParams: {
+				light: { ...appConfig.defaults.gradfunParams.light },
+				medium: { ...appConfig.defaults.gradfunParams.medium },
+				heavy: { ...appConfig.defaults.gradfunParams.heavy },
+			},
 		},
 		replaceSource,
 	};
@@ -241,9 +328,6 @@ export function scanLibraryFolder(folderPath: string): { added: number; skipped:
 	return { added, skipped, alreadyEncoded };
 }
 
-/**
- * Encode a single path. Either a folder (recursive) or an individual file.
- */
 export function scanLibraryPath(targetPath: string): { added: number; skipped: number; alreadyEncoded: number } {
 	const resolved = resolve(targetPath);
 
@@ -286,7 +370,14 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 	if (settings.quality) job.settings.quality = settings.quality;
 	if (settings.finalSpeed) job.settings.finalSpeed = settings.finalSpeed;
 	if (settings.denoise) job.settings.denoise = settings.denoise;
-	if (typeof settings.denoiseGpu === "boolean") job.settings.denoiseGpu = settings.denoiseGpu;
+
+	if (settings.denoiseBackend && VALID_DENOISE_BACKENDS.includes(settings.denoiseBackend)) {
+		job.settings.denoiseBackend = settings.denoiseBackend;
+	}
+	if (typeof settings.gpuDevice === "string" && settings.gpuDevice.length > 0) {
+		job.settings.gpuDevice = settings.gpuDevice;
+	}
+
 	if (settings.deband) job.settings.deband = settings.deband;
 	if (typeof settings.downscale === "boolean") job.settings.downscale = settings.downscale;
 	if (typeof settings.skipBoosting === "boolean") job.settings.skipBoosting = settings.skipBoosting;
@@ -303,6 +394,12 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 		if (typeof t.light === "number" && typeof t.medium === "number" && typeof t.heavy === "number") {
 			job.settings.autoDenoiseThresholds = { light: t.light, medium: t.medium, heavy: t.heavy };
 		}
+	}
+	if (settings.nlmeansParams) {
+		job.settings.nlmeansParams = normalizeNlmeansLevelParams(settings.nlmeansParams, job.settings.nlmeansParams);
+	}
+	if (settings.gradfunParams) {
+		job.settings.gradfunParams = normalizeGradfunLevelParams(settings.gradfunParams, job.settings.gradfunParams);
 	}
 	if (settings.audioBitrates) {
 		job.settings.audioBitrates = {
@@ -421,7 +518,6 @@ async function processQueue() {
 	} catch (err: any) {
 		if (err instanceof CancelledError) {
 			if (paused) {
-				// Re-queue instead of deleting (the job stays in the queue)
 				next.status = "queued";
 				next.progress = 0;
 				next.currentStage = "Waiting in queue";

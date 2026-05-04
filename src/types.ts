@@ -3,6 +3,16 @@ export type EncoderSpeed = "slower" | "slow" | "medium" | "fast" | "faster";
 export type DenoiseLevel = "off" | "light" | "medium" | "heavy" | "auto";
 export type DebandLevel = "off" | "light" | "medium" | "heavy";
 
+/**
+ * Backend used for the nlmeans denoise filter.
+ *
+ *   - "cpu"    : never use GPU; run nlmeans on CPU.
+ *   - "auto"   : probe Vulkan first, then OpenCL; fall back to CPU.
+ *   - "vulkan" : use nlmeans_vulkan (falls back to CPU if probe fails).
+ *   - "opencl" : use nlmeans_opencl (falls back to CPU if probe fails).
+ */
+export type DenoiseBackend = "cpu" | "auto" | "vulkan" | "opencl";
+
 export type GpuBackend = "auto" | "vulkan" | "opencl";
 
 export type JobStatus = "queued" | "probing" | "encoding_video" | "encoding_audio" | "muxing" | "done" | "error" | "cancelled";
@@ -27,14 +37,55 @@ export interface AutoDenoiseThresholds {
 	heavy: number;
 }
 
+/**
+ * Parameters for FFmpeg's nlmeans / nlmeans_opencl / nlmeans_vulkan filter.
+ *
+ *   s : denoising strength    [1.0 – 30.0]
+ *   p : patch size (odd)      [0 – 99]
+ *   r : research size (odd)   [0 – 99]
+ */
+export interface NlmeansParams {
+	s: number;
+	p: number;
+	r: number;
+}
+
+export interface NlmeansLevelParams {
+	light: NlmeansParams;
+	medium: NlmeansParams;
+	heavy: NlmeansParams;
+}
+
+/**
+ * Parameters for FFmpeg's gradfun deband filter.
+ *
+ *   strength : max change per pixel / flatness threshold [0.51 – 64]
+ *   radius   : neighbourhood size                        [8 – 32]
+ */
+export interface GradfunParams {
+	strength: number;
+	radius: number;
+}
+
+export interface GradfunLevelParams {
+	light: GradfunParams;
+	medium: GradfunParams;
+	heavy: GradfunParams;
+}
+
 export interface JobSettings {
 	quality: EncoderQuality;
 	finalSpeed: EncoderSpeed;
 	audioBitrates: AudioChannelBitrates;
 	denoise: DenoiseLevel;
 	autoDenoiseThresholds: AutoDenoiseThresholds;
-	denoiseGpu: boolean;
-	gpuBackend: GpuBackend;
+	/** Filter parameters used for nlmeans at each level. */
+	nlmeansParams: NlmeansLevelParams;
+	/** Filter parameters used for gradfun at each level. */
+	gradfunParams: GradfunLevelParams;
+	/** Backend selection for nlmeans. "cpu" forces CPU; the others may fall back. */
+	denoiseBackend: DenoiseBackend;
+	/** Device id for vulkan/opencl backends (e.g. "0" / "0.0"); ignored for cpu. */
 	gpuDevice: string;
 	deband: DebandLevel;
 	downscale: boolean;

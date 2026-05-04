@@ -1,27 +1,24 @@
-import type { DenoiseLevel, DebandLevel, GpuBackend } from "./types";
+import type { DenoiseLevel, DebandLevel, GpuBackend, DenoiseBackend, NlmeansParams, NlmeansLevelParams, GradfunParams, GradfunLevelParams } from "./types";
 import { Logger } from "./logger";
 import { buildAutoDenoiseFilter, type DenoisePlan } from "./auto-denoise";
 
-/** CPU/GPU nlmeans filter parameters for each denoise level. */
-export const NLMEANS_PARAMS: Record<string, string> = {
-	light: "s=1.0:p=3:r=7",
-	medium: "s=1.5:p=3:r=9",
-	heavy: "s=2.0:p=3:r=11",
+/** Default nlmeans parameters per level. Used when env vars / settings don't override. */
+export const DEFAULT_NLMEANS_PARAMS: NlmeansLevelParams = {
+	light: { s: 1.0, p: 3, r: 7 },
+	medium: { s: 1.5, p: 3, r: 9 },
+	heavy: { s: 2.0, p: 3, r: 11 },
 };
 
 /**
- * gradfun parameters for each deband level.
+ * Default gradfun parameters per level.
  *
  *   strength (0.51 – 64): max change per pixel / flatness threshold. Higher = more smoothing.
  *   radius   (8 – 32)   : neighbourhood size. Larger = smoother gradients, less detail protection.
- *
- * The filter also adds dither, which is why it must come before any denoise pass
- * (denoise would otherwise strip the dither and the bands come back).
  */
-export const GRADFUN_PARAMS: Record<string, string> = {
-	light: "strength=0.8:radius=8",
-	medium: "strength=1.4:radius=16",
-	heavy: "strength=2.8:radius=24",
+export const DEFAULT_GRADFUN_PARAMS: GradfunLevelParams = {
+	light: { strength: 0.8, radius: 8 },
+	medium: { strength: 1.4, radius: 16 },
+	heavy: { strength: 2.8, radius: 24 },
 };
 
 const HW_DEVICE_NAME = "gpu";
@@ -38,6 +35,65 @@ function buildOpenClDeviceSpec(deviceId: string): string {
 
 function buildVulkanDeviceSpec(deviceId: string): string {
 	return `vulkan=${HW_DEVICE_NAME}:${deviceId}`;
+}
+
+function clamp(v: number, min: number, max: number): number {
+	return Math.max(min, Math.min(max, v));
+}
+
+function nearestOdd(v: number, min: number, max: number): number {
+	const clamped = clamp(Math.round(v), min, max);
+	return clamped % 2 === 0 ? clamped + 1 : clamped;
+}
+
+/** Validate & clamp a single nlmeans param triplet to legal ranges. */
+export function normalizeNlmeansParams(p: Partial<NlmeansParams>, fallback: NlmeansParams): NlmeansParams {
+	const sRaw = typeof p.s === "number" && Number.isFinite(p.s) ? p.s : fallback.s;
+	const pRaw = typeof p.p === "number" && Number.isFinite(p.p) ? p.p : fallback.p;
+	const rRaw = typeof p.r === "number" && Number.isFinite(p.r) ? p.r : fallback.r;
+	return {
+		s: clamp(sRaw, 1.0, 30.0),
+		p: nearestOdd(pRaw, 1, 99),
+		r: nearestOdd(rRaw, 1, 99),
+	};
+}
+
+/** Validate & clamp a level-keyed nlmeans param object. */
+export function normalizeNlmeansLevelParams(p: Partial<NlmeansLevelParams> | undefined, fallback: NlmeansLevelParams): NlmeansLevelParams {
+	return {
+		light: normalizeNlmeansParams(p?.light ?? {}, fallback.light),
+		medium: normalizeNlmeansParams(p?.medium ?? {}, fallback.medium),
+		heavy: normalizeNlmeansParams(p?.heavy ?? {}, fallback.heavy),
+	};
+}
+
+/** Validate & clamp a single gradfun param pair to legal ranges. */
+export function normalizeGradfunParams(p: Partial<GradfunParams>, fallback: GradfunParams): GradfunParams {
+	const strengthRaw = typeof p.strength === "number" && Number.isFinite(p.strength) ? p.strength : fallback.strength;
+	const radiusRaw = typeof p.radius === "number" && Number.isFinite(p.radius) ? p.radius : fallback.radius;
+	return {
+		strength: clamp(strengthRaw, 0.51, 64),
+		radius: clamp(Math.round(radiusRaw), 8, 32),
+	};
+}
+
+/** Validate & clamp a level-keyed gradfun param object. */
+export function normalizeGradfunLevelParams(p: Partial<GradfunLevelParams> | undefined, fallback: GradfunLevelParams): GradfunLevelParams {
+	return {
+		light: normalizeGradfunParams(p?.light ?? {}, fallback.light),
+		medium: normalizeGradfunParams(p?.medium ?? {}, fallback.medium),
+		heavy: normalizeGradfunParams(p?.heavy ?? {}, fallback.heavy),
+	};
+}
+
+/** Format an nlmeans param triplet as the `s=...:p=...:r=...` string passed to FFmpeg. */
+export function formatNlmeansParams(p: NlmeansParams): string {
+	return `s=${p.s}:p=${p.p}:r=${p.r}`;
+}
+
+/** Format a gradfun param pair as the `strength=...:radius=...` string passed to FFmpeg. */
+export function formatGradfunParams(p: GradfunParams): string {
+	return `strength=${p.strength}:radius=${p.radius}`;
 }
 
 export interface DenoiseConfig {
@@ -68,10 +124,12 @@ export interface PrepareFilterConfig {
 		plan: DenoisePlan;
 		backend: GpuBackend;
 		gpuDevice: string;
+		nlmeansParams: NlmeansLevelParams;
 	};
 }
 
 export async function isOpenClAvailable(deviceId: string = DEFAULT_OPENCL_DEVICE_ID): Promise<boolean> {
+	const probeParams = formatNlmeansParams(DEFAULT_NLMEANS_PARAMS.light);
 	return runProbe([
 		"-init_hw_device",
 		buildOpenClDeviceSpec(deviceId),
@@ -82,7 +140,7 @@ export async function isOpenClAvailable(deviceId: string = DEFAULT_OPENCL_DEVICE
 		"-i",
 		"testsrc2=size=64x64:rate=1:duration=1",
 		"-vf",
-		`format=yuv420p,hwupload,nlmeans_opencl=${NLMEANS_PARAMS.light},hwdownload,format=yuv420p`,
+		`format=yuv420p,hwupload,nlmeans_opencl=${probeParams},hwdownload,format=yuv420p`,
 		"-frames:v",
 		"1",
 		"-f",
@@ -92,6 +150,7 @@ export async function isOpenClAvailable(deviceId: string = DEFAULT_OPENCL_DEVICE
 }
 
 export async function isVulkanAvailable(deviceId: string = DEFAULT_VULKAN_DEVICE_ID): Promise<boolean> {
+	const probeParams = formatNlmeansParams(DEFAULT_NLMEANS_PARAMS.light);
 	return runProbe([
 		"-init_hw_device",
 		buildVulkanDeviceSpec(deviceId),
@@ -102,7 +161,7 @@ export async function isVulkanAvailable(deviceId: string = DEFAULT_VULKAN_DEVICE
 		"-i",
 		"testsrc2=size=64x64:rate=1:duration=1",
 		"-vf",
-		`format=yuv420p,hwupload,nlmeans_vulkan=${NLMEANS_PARAMS.light},hwdownload,format=yuv420p`,
+		`format=yuv420p,hwupload,nlmeans_vulkan=${probeParams},hwdownload,format=yuv420p`,
 		"-frames:v",
 		"1",
 		"-f",
@@ -126,50 +185,63 @@ interface BackendBuild {
 	preInputArgs: string[];
 }
 
-function buildOpenClChunk(level: DenoiseLevel, deviceId: string): BackendBuild {
-	const params = NLMEANS_PARAMS[level]!;
+function buildOpenClChunk(level: DenoiseLevel, deviceId: string, params: NlmeansLevelParams): BackendBuild {
+	const lvl = params[level as keyof NlmeansLevelParams];
+	const formatted = formatNlmeansParams(lvl);
 	return {
-		filter: `format=yuv420p,hwupload,nlmeans_opencl=${params},hwdownload,format=yuv420p`,
+		filter: `format=yuv420p,hwupload,nlmeans_opencl=${formatted},hwdownload,format=yuv420p`,
 		preInputArgs: ["-init_hw_device", buildOpenClDeviceSpec(deviceId), "-filter_hw_device", HW_DEVICE_NAME],
 	};
 }
 
-function buildVulkanChunk(level: DenoiseLevel, deviceId: string): BackendBuild {
-	const params = NLMEANS_PARAMS[level]!;
+function buildVulkanChunk(level: DenoiseLevel, deviceId: string, params: NlmeansLevelParams): BackendBuild {
+	const lvl = params[level as keyof NlmeansLevelParams];
+	const formatted = formatNlmeansParams(lvl);
 	return {
-		filter: `format=yuv420p,hwupload,nlmeans_vulkan=${params},hwdownload,format=yuv420p`,
+		filter: `format=yuv420p,hwupload,nlmeans_vulkan=${formatted},hwdownload,format=yuv420p`,
 		preInputArgs: ["-init_hw_device", buildVulkanDeviceSpec(deviceId), "-filter_hw_device", HW_DEVICE_NAME],
 	};
 }
 
+function cpuFallback(level: DenoiseLevel, params: NlmeansLevelParams): DenoiseConfig | null {
+	const lvl = params[level as keyof NlmeansLevelParams];
+	if (!lvl) return null;
+	return {
+		filter: `nlmeans=${formatNlmeansParams(lvl)}`,
+		preInputArgs: [],
+		isGpu: false,
+		gpuBackend: null,
+	};
+}
+
 /**
- * Build the DenoiseConfig for a given level, GPU preference, and backend.
+ * Build the DenoiseConfig for a given level and backend.
  *
- * Probes the requested backend(s) and falls back to CPU nlmeans transparently
- * if no GPU path is usable.
- *
- *   - backend = "opencl": probe OpenCL only.
- *   - backend = "vulkan": probe Vulkan only.
- *   - backend = "auto"  : probe Vulkan first, then OpenCL, then CPU.
+ * The backend semantics:
+ *   - "cpu"    : never probe, always run on CPU.
+ *   - "auto"   : probe Vulkan, then OpenCL, then fall back to CPU.
+ *   - "vulkan" : probe Vulkan only; fall back to CPU on failure.
+ *   - "opencl" : probe OpenCL only; fall back to CPU on failure.
  *
  * `gpuDevice` is interpreted per-backend; if omitted, the backend default is
  * used ("0.0" for OpenCL, "0" for Vulkan).
  */
 export async function buildDenoiseConfig(
 	level: DenoiseLevel,
-	useGpu: boolean,
-	backend: GpuBackend = "opencl",
-	gpuDevice?: string,
+	backend: DenoiseBackend,
+	gpuDevice: string | undefined,
+	nlmeansParams: NlmeansLevelParams,
 ): Promise<DenoiseConfig | null> {
-	if (!NLMEANS_PARAMS[level]) return null;
+	if (level === "off" || level === "auto") return null;
+	if (!nlmeansParams[level as keyof NlmeansLevelParams]) return null;
 
-	if (!useGpu) return cpuFallback(level);
+	if (backend === "cpu") return cpuFallback(level, nlmeansParams);
 
 	const tryVulkan = async (): Promise<DenoiseConfig | null> => {
 		const deviceId = gpuDevice ?? DEFAULT_VULKAN_DEVICE_ID;
 		if (await isVulkanAvailable(deviceId)) {
 			Logger.info(`[denoise] Vulkan nlmeans verified on device ${deviceId}, using nlmeans_vulkan`);
-			const part = buildVulkanChunk(level, deviceId);
+			const part = buildVulkanChunk(level, deviceId, nlmeansParams);
 			return { ...part, isGpu: true, gpuBackend: "vulkan" };
 		}
 		Logger.warn(`[denoise] Vulkan probe failed on device ${deviceId}`);
@@ -180,7 +252,7 @@ export async function buildDenoiseConfig(
 		const deviceId = gpuDevice ?? DEFAULT_OPENCL_DEVICE_ID;
 		if (await isOpenClAvailable(deviceId)) {
 			Logger.info(`[denoise] OpenCL nlmeans verified on device ${deviceId}, using nlmeans_opencl`);
-			const part = buildOpenClChunk(level, deviceId);
+			const part = buildOpenClChunk(level, deviceId, nlmeansParams);
 			return { ...part, isGpu: true, gpuBackend: "opencl" };
 		}
 		Logger.warn(`[denoise] OpenCL probe failed on device ${deviceId}`);
@@ -193,38 +265,29 @@ export async function buildDenoiseConfig(
 	} else if (backend === "opencl") {
 		result = await tryOpenCl();
 	} else {
+		// auto
 		result = (await tryVulkan()) ?? (await tryOpenCl());
 	}
 
 	if (result) return result;
 
 	Logger.warn(`[denoise] No GPU backend available (requested: ${backend}), falling back to CPU nlmeans`);
-	return cpuFallback(level);
-}
-
-function cpuFallback(level: DenoiseLevel): DenoiseConfig | null {
-	const params = NLMEANS_PARAMS[level];
-	if (!params) return null;
-	return {
-		filter: `nlmeans=${params}`,
-		preInputArgs: [],
-		isGpu: false,
-		gpuBackend: null,
-	};
+	return cpuFallback(level, nlmeansParams);
 }
 
 /**
- * Build the DebandConfig for a given level.
+ * Build the DebandConfig for a given level using user-supplied gradfun params.
  *
- * Uses FFmpeg's native `gradfun` filter. gradfun has no OpenCL variant, so this
+ * Uses FFmpeg's native `gradfun` filter. gradfun has no GPU variant, so this
  * is CPU-only. It's light enough that this is rarely a bottleneck.
  */
-export function buildDebandConfig(level: DebandLevel): DebandConfig | null {
-	const params = GRADFUN_PARAMS[level];
-	if (!params) return null;
+export function buildDebandConfig(level: DebandLevel, params: GradfunLevelParams): DebandConfig | null {
+	if (level === "off") return null;
+	const lvl = params[level as keyof GradfunLevelParams];
+	if (!lvl) return null;
 
 	return {
-		filter: `gradfun=${params}`,
+		filter: `gradfun=${formatGradfunParams(lvl)}`,
 	};
 }
 
@@ -247,21 +310,26 @@ export function buildDebandConfig(level: DebandLevel): DebandConfig | null {
  * filter graph and surfaces deferredAutoDenoise on the returned config; the
  * encoder then runs runSegmentedAutoDenoiseGpu after the filter pass.
  */
-export async function buildPrepareFilterConfig(
-	downscale: boolean,
-	sourceHeight: number,
-	denoise: DenoiseLevel,
-	useGpuDenoise: boolean,
-	deband: DebandLevel,
-	backend: GpuBackend = "opencl",
-	gpuDevice?: string,
-	autoPlan: DenoisePlan | null = null,
-	totalDuration?: number,
-): Promise<PrepareFilterConfig | null> {
+export interface PrepareFilterInput {
+	downscale: boolean;
+	sourceHeight: number;
+	denoise: DenoiseLevel;
+	denoiseBackend: DenoiseBackend;
+	deband: DebandLevel;
+	gpuDevice: string;
+	nlmeansParams: NlmeansLevelParams;
+	gradfunParams: GradfunLevelParams;
+	autoPlan?: DenoisePlan | null;
+	totalDuration?: number;
+}
+
+export async function buildPrepareFilterConfig(input: PrepareFilterInput): Promise<PrepareFilterConfig | null> {
+	const { downscale, sourceHeight, denoise, denoiseBackend, deband, gpuDevice, nlmeansParams, gradfunParams, autoPlan = null, totalDuration } = input;
+
 	const needsScale = downscale && sourceHeight > 1080;
 	const scaleFilter = "scale=-2:1080:flags=lanczos";
 
-	const debandConfig = buildDebandConfig(deband);
+	const debandConfig = buildDebandConfig(deband, gradfunParams);
 
 	let denoiseFilter: string | null = null;
 	let denoisePreInputArgs: string[] = [];
@@ -270,7 +338,7 @@ export async function buildPrepareFilterConfig(
 
 	if (denoise === "auto") {
 		if (autoPlan && autoPlan.length > 0) {
-			const auto = await buildAutoDenoiseFilter(autoPlan, useGpuDenoise, backend, gpuDevice, totalDuration);
+			const auto = await buildAutoDenoiseFilter(autoPlan, denoiseBackend, gpuDevice, nlmeansParams, totalDuration);
 			if (auto) {
 				denoiseLabel = auto.label;
 
@@ -280,6 +348,7 @@ export async function buildPrepareFilterConfig(
 						plan: auto.deferredPlan,
 						backend: auto.deferredBackend,
 						gpuDevice: auto.deferredGpuDevice,
+						nlmeansParams,
 					};
 				} else {
 					// CPU path: inline filter with enable= timeline expressions.
@@ -288,8 +357,8 @@ export async function buildPrepareFilterConfig(
 				}
 			}
 		}
-	} else {
-		const denoiseConfig = await buildDenoiseConfig(denoise, useGpuDenoise, backend, gpuDevice);
+	} else if (denoise !== "off") {
+		const denoiseConfig = await buildDenoiseConfig(denoise, denoiseBackend, gpuDevice, nlmeansParams);
 		if (denoiseConfig) {
 			denoiseFilter = denoiseConfig.filter;
 			denoisePreInputArgs = denoiseConfig.preInputArgs;

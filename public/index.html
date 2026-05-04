@@ -109,17 +109,6 @@
 						<div class="setting-group">
 							<label>Denoise</label>
 							<div class="radio-group" id="default-denoise"></div>
-							<div class="toggle-group" id="default-denoise-gpu"></div>
-							<div class="radio-group" id="default-gpu-backend" style="display: none"></div>
-							<div class="radio-group radio-group-stacked" id="default-gpu-device" style="display: none"></div>
-						</div>
-						<div class="setting-group" id="default-auto-thresholds-group" style="display: none">
-							<label>Auto Denoise Thresholds (Y bitplane-4)</label>
-							<div id="default-auto-thresholds"></div>
-							<div class="lang-filter-hint">
-								Scenes with median Y bitplane-4 ≥ each threshold get the corresponding denoise level. Run an analysis on a known clean and known grainy file to
-								calibrate.
-							</div>
 						</div>
 						<div class="setting-group">
 							<label>Deband</label>
@@ -155,6 +144,7 @@
 						</div>
 					</div>
 					<div class="modal-footer">
+						<button class="btn btn-ghost" id="open-default-advanced-btn">Advanced…</button>
 						<button class="btn btn-primary" id="save-settings-btn">Save</button>
 					</div>
 				</div>
@@ -179,17 +169,6 @@
 						<div class="setting-group">
 							<label>Denoise</label>
 							<div class="radio-group" id="job-denoise"></div>
-							<div class="toggle-group" id="job-denoise-gpu"></div>
-							<div class="radio-group" id="job-gpu-backend" style="display: none"></div>
-							<div class="radio-group radio-group-stacked" id="job-gpu-device" style="display: none"></div>
-						</div>
-						<div class="setting-group" id="job-auto-thresholds-group" style="display: none">
-							<label>Auto Denoise Thresholds (Y bitplane-4)</label>
-							<div id="job-auto-thresholds"></div>
-							<div class="lang-filter-hint">
-								Scenes with median Y bitplane-4 ≥ each threshold get the corresponding denoise level. Run an analysis on a known clean and known grainy file to
-								calibrate.
-							</div>
 						</div>
 						<div class="setting-group">
 							<label>Deband</label>
@@ -225,7 +204,65 @@
 						</div>
 					</div>
 					<div class="modal-footer">
+						<button class="btn btn-ghost" id="open-job-advanced-btn">Advanced…</button>
 						<button class="btn btn-primary" id="save-job-settings-btn">Save</button>
+					</div>
+				</div>
+			</div>
+
+			<!-- Advanced Settings Modal -->
+			<div id="advanced-modal" class="modal-overlay" style="display: none">
+				<div class="modal modal-wide">
+					<div class="modal-header">
+						<h2 id="advanced-modal-title">Advanced Settings</h2>
+						<button class="btn-close" id="close-advanced-modal-btn">&times;</button>
+					</div>
+					<div class="modal-body">
+						<!-- Denoise backend (cpu / auto / vulkan / opencl) -->
+						<div class="setting-group">
+							<label>Denoise Backend</label>
+							<div class="radio-group" id="advanced-denoise-backend"></div>
+							<div class="lang-filter-hint">
+								<code>cpu</code> forces software nlmeans. <code>auto</code> probes Vulkan first, then OpenCL, falling back to CPU. <code>vulkan</code> /
+								<code>opencl</code> force that backend (still falls back to CPU if probe fails).
+							</div>
+						</div>
+
+						<!-- GPU device picker (hidden when backend === "cpu") -->
+						<div class="setting-group" id="advanced-gpu-device-group">
+							<label>GPU Device</label>
+							<div class="radio-group radio-group-stacked" id="advanced-gpu-device"></div>
+						</div>
+
+						<!-- Auto-denoise thresholds -->
+						<div class="setting-group">
+							<label>Auto Denoise Thresholds (Y bitplane-4)</label>
+							<div id="advanced-auto-thresholds"></div>
+							<div class="lang-filter-hint">
+								Scenes with median Y bitplane-4 ≥ each threshold get the corresponding denoise level. Run an analysis on a known clean and known grainy file to
+								calibrate.
+							</div>
+						</div>
+
+						<!-- nlmeans per-level params -->
+						<div class="setting-group">
+							<label>NLMeans Parameters</label>
+							<div id="advanced-nlmeans-params"></div>
+							<div class="lang-filter-hint">
+								<code>s</code> = strength [1.0 – 30.0], <code>p</code> = patch size (odd) [1 – 99], <code>r</code> = research size (odd) [1 – 99]. Larger values
+								denoise more aggressively but cost more time.
+							</div>
+						</div>
+
+						<!-- gradfun (deband) per-level params -->
+						<div class="setting-group">
+							<label>Gradfun (Deband) Parameters</label>
+							<div id="advanced-gradfun-params"></div>
+							<div class="lang-filter-hint"><code>strength</code> = max change per pixel [0.51 – 64], <code>radius</code> = neighbourhood size [8 – 32].</div>
+						</div>
+					</div>
+					<div class="modal-footer">
+						<button class="btn btn-primary" id="close-advanced-done-btn">Done</button>
 					</div>
 				</div>
 			</div>

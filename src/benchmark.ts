@@ -1,10 +1,10 @@
 import { Logger } from "./logger";
-import { isOpenClAvailable, isVulkanAvailable, NLMEANS_PARAMS, defaultDeviceFor } from "./filters";
+import { isOpenClAvailable, isVulkanAvailable, DEFAULT_NLMEANS_PARAMS, formatNlmeansParams, defaultDeviceFor } from "./filters";
 import { getAllJobs } from "./store";
 import { getCpuName } from "./system";
 import { listOpenClDevices, type OpenClDevice } from "./opencl";
 import { listVulkanDevices, type VulkanDevice } from "./vulkan";
-import type { GpuBackend } from "./types";
+import type { DenoiseBackend } from "./types";
 
 const DURATION = 10;
 const SIZE = "1920x1080";
@@ -18,7 +18,7 @@ export type BenchmarkStatus = "idle" | "running" | "completed" | "failed" | "can
 
 export interface StartBenchmarkOptions {
 	gpuDevice: string;
-	gpuBackend: GpuBackend;
+	denoiseBackend: DenoiseBackend;
 }
 
 export interface BenchmarkResult {
@@ -53,7 +53,7 @@ export interface BenchmarkState {
 	openclName: string | null;
 	vulkanName: string | null;
 	gpuDevice: string | null;
-	gpuBackend: GpuBackend | null;
+	denoiseBackend: DenoiseBackend | null;
 	gpuAvailable: boolean | null;
 }
 
@@ -81,13 +81,17 @@ function newIdleState(): BenchmarkState {
 		openclName: null,
 		vulkanName: null,
 		gpuDevice: null,
-		gpuBackend: null,
+		denoiseBackend: null,
 		gpuAvailable: null,
 	};
 }
 
+/**
+ * Bench picks a GPU label given the user's chosen backend; for `cpu` we just
+ * surface the available device names so the user knows what's there.
+ */
 function pickGpuName(
-	backend: GpuBackend,
+	backend: DenoiseBackend,
 	gpuDevice: string,
 	oclDevices: OpenClDevice[],
 	vkDevices: VulkanDevice[],
@@ -104,20 +108,21 @@ function pickGpuName(
 	} else if (backend === "opencl") {
 		gpuName = openclName ?? vulkanName;
 	} else {
+		// auto / cpu — show whatever we have
 		gpuName = vulkanName ?? openclName;
 	}
 
 	return { gpuName, openclName, vulkanName };
 }
 
-export async function getBenchmarkState(currentGpuDevice: string, currentGpuBackend: GpuBackend): Promise<BenchmarkState> {
+export async function getBenchmarkState(currentGpuDevice: string, currentBackend: DenoiseBackend): Promise<BenchmarkState> {
 	if (state.status !== "running") {
 		state.cpuName = getCpuName();
 		state.gpuDevice = currentGpuDevice;
-		state.gpuBackend = currentGpuBackend;
+		state.denoiseBackend = currentBackend;
 
 		const [oclDevices, vkDevices] = await Promise.all([listOpenClDevices(), listVulkanDevices()]);
-		const names = pickGpuName(currentGpuBackend, currentGpuDevice, oclDevices, vkDevices);
+		const names = pickGpuName(currentBackend, currentGpuDevice, oclDevices, vkDevices);
 		state.gpuName = names.gpuName;
 		state.openclName = names.openclName;
 		state.vulkanName = names.vulkanName;
@@ -184,7 +189,8 @@ async function runFfmpeg(args: string[], signal: AbortSignal): Promise<{ code: n
 }
 
 function buildArgs(mode: BenchmarkMode, level: BenchmarkLevel, gpuDevice: string): string[] {
-	const params = NLMEANS_PARAMS[level]!;
+	// Use the defaults so benchmark numbers are comparable across installations regardless of user-supplied param overrides.
+	const params = formatNlmeansParams(DEFAULT_NLMEANS_PARAMS[level]);
 	const common = ["ffmpeg", "-hide_banner", "-benchmark", "-v", "info"];
 	const inputAndOutput = ["-f", "lavfi", "-i", `testsrc2=size=${SIZE}:rate=${RATE}:duration=${DURATION}`];
 
@@ -293,14 +299,14 @@ export function cancelBenchmark(): boolean {
 }
 
 async function runBenchmarkAsync(signal: AbortSignal, options: StartBenchmarkOptions): Promise<void> {
-	Logger.info(`[benchmark] Starting denoise benchmark (backend=${options.gpuBackend}, device=${options.gpuDevice})`);
+	Logger.info(`[benchmark] Starting denoise benchmark (backend=${options.denoiseBackend}, device=${options.gpuDevice})`);
 
 	state.cpuName = getCpuName();
 	state.gpuDevice = options.gpuDevice;
-	state.gpuBackend = options.gpuBackend;
+	state.denoiseBackend = options.denoiseBackend;
 
 	const [oclDevices, vkDevices] = await Promise.all([listOpenClDevices(), listVulkanDevices()]);
-	const names = pickGpuName(options.gpuBackend, options.gpuDevice, oclDevices, vkDevices);
+	const names = pickGpuName(options.denoiseBackend, options.gpuDevice, oclDevices, vkDevices);
 	state.gpuName = names.gpuName;
 	state.openclName = names.openclName;
 	state.vulkanName = names.vulkanName;

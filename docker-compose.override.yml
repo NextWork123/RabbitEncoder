@@ -37,17 +37,46 @@ services:
       - ENCODER_DENOISE_AUTO_LIGHT=0.4
       - ENCODER_DENOISE_AUTO_MEDIUM=0.55
       - ENCODER_DENOISE_AUTO_HEAVY=0.77
-      # GPU-accelerated denoising via OpenCL (true/false)
-      # Falls back to CPU automatically if no OpenCL device is found
-      - ENCODER_DENOISE_GPU=true
-      # GPU backend for nlmeans denoising: auto, vulkan, opencl
-      - ENCODER_GPU_BACKEND=vulkan
-      # Device id format depends on backend:
+
+      # Backend used for the nlmeans denoise filter:
+      #   cpu    - never use GPU (software nlmeans)
+      #   auto   - probe Vulkan, then OpenCL, fall back to CPU
+      #   vulkan - force nlmeans_vulkan (falls back to CPU if probe fails)
+      #   opencl - force nlmeans_opencl (falls back to CPU if probe fails)
+      - ENCODER_DENOISE_BACKEND=auto
+      # GPU device id (ignored when ENCODER_DENOISE_BACKEND=cpu).
+      # Format depends on the backend chosen:
       #   opencl: <platform>.<device>  (e.g. 0.0)  - run `clinfo -l` to list
       #   vulkan: <device>             (e.g. 0)    - run `vulkaninfo --summary` to list
-      - ENCODER_GPU_DEVICE=0
+      - ENCODER_DENOISE_GPU_DEVICE=0
+
+      # NLMeans filter parameters per intensity level.
+      # All can be overridden per-job in the dashboard's "Advanced" panel.
+      #   s (strength)    : float [1.0 - 30.0]
+      #   p (patch size)  : odd int [1 - 99]
+      #   r (research sz) : odd int [1 - 99]
+      - ENCODER_DENOISE_LIGHT_S=1.0
+      - ENCODER_DENOISE_LIGHT_P=3
+      - ENCODER_DENOISE_LIGHT_R=7
+      - ENCODER_DENOISE_MEDIUM_S=1.5
+      - ENCODER_DENOISE_MEDIUM_P=3
+      - ENCODER_DENOISE_MEDIUM_R=9
+      - ENCODER_DENOISE_HEAVY_S=2.0
+      - ENCODER_DENOISE_HEAVY_P=3
+      - ENCODER_DENOISE_HEAVY_R=11
+
       # Deband level: off, light, medium, heavy
       - ENCODER_DEBAND=off
+      # Gradfun (deband) filter parameters per intensity level.
+      #   strength : float [0.51 - 64]
+      #   radius   : int   [8 - 32]
+      - ENCODER_DEBAND_LIGHT_STRENGTH=0.8
+      - ENCODER_DEBAND_LIGHT_RADIUS=8
+      - ENCODER_DEBAND_MEDIUM_STRENGTH=1.4
+      - ENCODER_DEBAND_MEDIUM_RADIUS=16
+      - ENCODER_DEBAND_HEAVY_STRENGTH=2.8
+      - ENCODER_DEBAND_HEAVY_RADIUS=24
+
       # Downscale 4K sources to 1080p before encoding
       - ENCODER_DOWNSCALE=false
       # Skip boosting (bypass per-scene CRF zone analysis, encode directly)

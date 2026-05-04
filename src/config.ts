@@ -1,8 +1,19 @@
 import { parseAutoThresholds } from "./auto-denoise";
+import { DEFAULT_NLMEANS_PARAMS, DEFAULT_GRADFUN_PARAMS, normalizeNlmeansLevelParams, normalizeGradfunLevelParams } from "./filters";
 import { Logger } from "./logger";
 import { isValidDeviceSpec } from "./opencl";
 import { run } from "./process";
-import type { AppConfig, AudioChannelBitrates, DebandLevel, DenoiseLevel, EncoderQuality, EncoderSpeed, GpuBackend } from "./types";
+import type {
+	AppConfig,
+	AudioChannelBitrates,
+	DebandLevel,
+	DenoiseBackend,
+	DenoiseLevel,
+	EncoderQuality,
+	EncoderSpeed,
+	GradfunLevelParams,
+	NlmeansLevelParams,
+} from "./types";
 import { isValidVulkanDeviceSpec } from "./vulkan";
 
 const DEFAULT_BITRATES: AudioChannelBitrates = {
@@ -26,33 +37,86 @@ export async function getLanguageDetectorVersion(): Promise<string | null> {
 	return res.stdout.replace("Language Detector", "").trim();
 }
 
-function parseGpuBackend(raw: string | undefined): GpuBackend {
-	const v = (raw || "opencl").trim().toLowerCase();
-	if (v === "vulkan" || v === "auto" || v === "opencl") return v;
-	Logger.warn(`[config] Unrecognized ENCODER_GPU_BACKEND="${raw}", falling back to "opencl"`);
-	return "opencl";
+function parseDenoiseBackend(raw: string | undefined): DenoiseBackend {
+	const v = (raw || "auto").trim().toLowerCase();
+	if (v === "cpu" || v === "vulkan" || v === "auto" || v === "opencl") return v;
+	Logger.warn(`[config] Unrecognized ENCODER_DENOISE_BACKEND="${raw}", falling back to "auto"`);
+	return "auto";
 }
 
-function normalizeGpuDevice(rawSpec: string, backend: GpuBackend): string {
+function normalizeGpuDevice(rawSpec: string, backend: DenoiseBackend): string {
 	const trimmed = rawSpec.trim();
+	if (backend === "cpu") {
+		return trimmed || "0";
+	}
 	if (backend === "vulkan") {
 		if (isValidVulkanDeviceSpec(trimmed)) return trimmed;
-		Logger.warn(`[config] ENCODER_GPU_DEVICE="${rawSpec}" is not a valid Vulkan device id (expected single integer), defaulting to "0"`);
+		Logger.warn(`[config] ENCODER_DENOISE_GPU_DEVICE="${rawSpec}" is not a valid Vulkan device id (expected single integer), defaulting to "0"`);
 		return "0";
 	}
 	if (isValidDeviceSpec(trimmed) || isValidVulkanDeviceSpec(trimmed)) return trimmed;
-	Logger.warn(`[config] ENCODER_GPU_DEVICE="${rawSpec}" is not a valid device id, defaulting to "0.0"`);
+	Logger.warn(`[config] ENCODER_DENOISE_GPU_DEVICE="${rawSpec}" is not a valid device id, defaulting to "0.0"`);
 	return "0.0";
+}
+
+/**
+ * Parse a numeric env var (returns the fallback if missing/NaN).
+ */
+function envNum(name: string, fallback: number): number {
+	const raw = process.env[name];
+	if (raw === undefined || raw.trim() === "") return fallback;
+	const v = parseFloat(raw);
+	return Number.isFinite(v) ? v : fallback;
+}
+
+function readNlmeansParamsFromEnv(): NlmeansLevelParams {
+	const raw: NlmeansLevelParams = {
+		light: {
+			s: envNum("ENCODER_DENOISE_LIGHT_S", DEFAULT_NLMEANS_PARAMS.light.s),
+			p: envNum("ENCODER_DENOISE_LIGHT_P", DEFAULT_NLMEANS_PARAMS.light.p),
+			r: envNum("ENCODER_DENOISE_LIGHT_R", DEFAULT_NLMEANS_PARAMS.light.r),
+		},
+		medium: {
+			s: envNum("ENCODER_DENOISE_MEDIUM_S", DEFAULT_NLMEANS_PARAMS.medium.s),
+			p: envNum("ENCODER_DENOISE_MEDIUM_P", DEFAULT_NLMEANS_PARAMS.medium.p),
+			r: envNum("ENCODER_DENOISE_MEDIUM_R", DEFAULT_NLMEANS_PARAMS.medium.r),
+		},
+		heavy: {
+			s: envNum("ENCODER_DENOISE_HEAVY_S", DEFAULT_NLMEANS_PARAMS.heavy.s),
+			p: envNum("ENCODER_DENOISE_HEAVY_P", DEFAULT_NLMEANS_PARAMS.heavy.p),
+			r: envNum("ENCODER_DENOISE_HEAVY_R", DEFAULT_NLMEANS_PARAMS.heavy.r),
+		},
+	};
+	return normalizeNlmeansLevelParams(raw, DEFAULT_NLMEANS_PARAMS);
+}
+
+function readGradfunParamsFromEnv(): GradfunLevelParams {
+	const raw: GradfunLevelParams = {
+		light: {
+			strength: envNum("ENCODER_DEBAND_LIGHT_STRENGTH", DEFAULT_GRADFUN_PARAMS.light.strength),
+			radius: envNum("ENCODER_DEBAND_LIGHT_RADIUS", DEFAULT_GRADFUN_PARAMS.light.radius),
+		},
+		medium: {
+			strength: envNum("ENCODER_DEBAND_MEDIUM_STRENGTH", DEFAULT_GRADFUN_PARAMS.medium.strength),
+			radius: envNum("ENCODER_DEBAND_MEDIUM_RADIUS", DEFAULT_GRADFUN_PARAMS.medium.radius),
+		},
+		heavy: {
+			strength: envNum("ENCODER_DEBAND_HEAVY_STRENGTH", DEFAULT_GRADFUN_PARAMS.heavy.strength),
+			radius: envNum("ENCODER_DEBAND_HEAVY_RADIUS", DEFAULT_GRADFUN_PARAMS.heavy.radius),
+		},
+	};
+	return normalizeGradfunLevelParams(raw, DEFAULT_GRADFUN_PARAMS);
 }
 
 export async function loadConfig(): Promise<AppConfig> {
 	const quality = (process.env.ENCODER_QUALITY || "medium") as EncoderQuality;
 	const finalSpeed = (process.env.ENCODER_SPEED || "slow") as EncoderSpeed;
 	const denoise = (process.env.ENCODER_DENOISE || "off") as DenoiseLevel;
-	const denoiseGpu = ["true", "1", "yes"].includes((process.env.ENCODER_DENOISE_GPU || "").toLowerCase());
-	const gpuBackend = parseGpuBackend(process.env.ENCODER_GPU_BACKEND);
-	const rawGpuDevice = (process.env.ENCODER_GPU_DEVICE || (gpuBackend === "vulkan" ? "0" : "0.0")).trim();
-	const gpuDevice = normalizeGpuDevice(rawGpuDevice, gpuBackend);
+
+	const denoiseBackend = parseDenoiseBackend(process.env.ENCODER_DENOISE_BACKEND);
+	const rawGpuDevice = (process.env.ENCODER_DENOISE_GPU_DEVICE || (denoiseBackend === "vulkan" ? "0" : "0.0")).trim();
+	const gpuDevice = normalizeGpuDevice(rawGpuDevice, denoiseBackend);
+
 	const deband = (process.env.ENCODER_DEBAND || "off") as DebandLevel;
 	const downscale = ["true", "1", "yes"].includes((process.env.ENCODER_DOWNSCALE || "").toLowerCase());
 	const skipBoosting = ["true", "1", "yes"].includes((process.env.ENCODER_SKIP_BOOSTING || "").toLowerCase());
@@ -80,10 +144,13 @@ export async function loadConfig(): Promise<AppConfig> {
 	};
 
 	const autoDenoiseThresholds = parseAutoThresholds(
-		process.env.ENCODER_DENOISE_AUTO_LIGHT,
-		process.env.ENCODER_DENOISE_AUTO_MEDIUM,
-		process.env.ENCODER_DENOISE_AUTO_HEAVY,
+		process.env.ENCODER_DENOISE_AUTO_THRESHOLD_LIGHT,
+		process.env.ENCODER_DENOISE_AUTO_THRESHOLD_MEDIUM,
+		process.env.ENCODER_DENOISE_AUTO_THRESHOLD_HEAVY,
 	);
+
+	const nlmeansParams = readNlmeansParamsFromEnv();
+	const gradfunParams = readGradfunParamsFromEnv();
 
 	const libraryDirs = (process.env.LIBRARY_DIRS || "")
 		.split(",")
@@ -108,8 +175,9 @@ export async function loadConfig(): Promise<AppConfig> {
 			audioBitrates: bitrates,
 			denoise,
 			autoDenoiseThresholds,
-			denoiseGpu,
-			gpuBackend,
+			nlmeansParams,
+			gradfunParams,
+			denoiseBackend,
 			gpuDevice,
 			deband,
 			downscale,

@@ -16,7 +16,19 @@ const SPEEDS = ["slower", "slow", "medium", "fast", "faster"];
 const DENOISE_LEVELS = ["off", "auto", "light", "medium", "heavy"];
 const DEBAND_LEVELS = ["off", "light", "medium", "heavy"];
 
-const GPU_BACKENDS = ["opencl", "vulkan", "auto"];
+const DENOISE_BACKENDS = ["cpu", "auto", "vulkan", "opencl"];
+
+const DEFAULT_NLMEANS_PARAMS = {
+	light: { s: 1.0, p: 3, r: 7 },
+	medium: { s: 1.5, p: 3, r: 9 },
+	heavy: { s: 2.0, p: 3, r: 11 },
+};
+const DEFAULT_GRADFUN_PARAMS = {
+	light: { strength: 0.8, radius: 8 },
+	medium: { strength: 1.4, radius: 16 },
+	heavy: { strength: 2.8, radius: 24 },
+};
+const DEFAULT_AUTO_THRESHOLDS = { light: 0.4, medium: 0.55, heavy: 0.75 };
 
 const CHANNELS = [
 	{ key: "mono", label: "Mono" },
@@ -462,29 +474,6 @@ function renderAutoThresholds(container, thresholds, onChange) {
 	container.appendChild(wrap);
 }
 
-function renderGpuToggle(container, checked, onChange, devicePickerEl) {
-	container.innerHTML = "";
-	const label = document.createElement("label");
-	label.className = "toggle-label";
-	const input = document.createElement("input");
-	input.type = "checkbox";
-	input.checked = checked;
-	input.onchange = () => {
-		onChange(input.checked);
-		if (devicePickerEl) {
-			devicePickerEl.style.display = input.checked ? "" : "none";
-		}
-	};
-	const span = document.createElement("span");
-	span.textContent = "\u00A0Use GPU acceleration";
-	label.appendChild(input);
-	label.appendChild(span);
-	container.appendChild(label);
-	if (devicePickerEl) {
-		devicePickerEl.style.display = checked ? "" : "none";
-	}
-}
-
 function renderBitrateInputs(container, bitrates, onChange) {
 	container.innerHTML = "";
 	CHANNELS.forEach((ch) => {
@@ -537,6 +526,22 @@ function formatDurationShort(ms) {
 	if (h > 0) return `${h}h ${m}m`;
 	if (m > 0) return `${m}m ${s}s`;
 	return `${s}s`;
+}
+
+function clampInt(v, min, max) {
+	const n = Math.round(Number(v));
+	if (!Number.isFinite(n)) return min;
+	return Math.max(min, Math.min(max, n));
+}
+
+function forceOdd(n) {
+	return n % 2 === 0 ? n + 1 : n;
+}
+
+function clampFloat(v, min, max) {
+	const n = Number(v);
+	if (!Number.isFinite(n)) return min;
+	return Math.max(min, Math.min(max, n));
 }
 
 function computeStepElapsed(step) {
@@ -1283,42 +1288,16 @@ async function openSettings() {
 	const tempDefaults = {
 		...defaults,
 		audioBitrates: { ...defaults.audioBitrates },
+		// Deep-clone nested objects so cancel actually cancels.
+		autoDenoiseThresholds: { ...(defaults.autoDenoiseThresholds || DEFAULT_AUTO_THRESHOLDS) },
+		nlmeansParams: defaults.nlmeansParams ? JSON.parse(JSON.stringify(defaults.nlmeansParams)) : JSON.parse(JSON.stringify(DEFAULT_NLMEANS_PARAMS)),
+		gradfunParams: defaults.gradfunParams ? JSON.parse(JSON.stringify(defaults.gradfunParams)) : JSON.parse(JSON.stringify(DEFAULT_GRADFUN_PARAMS)),
 	};
-
-	const backendEl = document.getElementById("default-gpu-backend");
-	const devicePickerEl = document.getElementById("default-gpu-device");
-
-	async function refreshDevicePicker(backend) {
-		const devices = backend === "vulkan" ? await fetchVulkanDevices() : await fetchOpenClDevices();
-		renderGpuDevicePicker(devicePickerEl, devices, tempDefaults.gpuDevice, (v) => (tempDefaults.gpuDevice = v));
-	}
-
-	const initialBackend = tempDefaults.gpuBackend || "opencl";
-	renderRadioPills(backendEl, GPU_BACKENDS, tempDefaults.gpuBackend || "opencl", async (v) => {
-		tempDefaults.gpuBackend = v;
-		tempDefaults.gpuDevice = v === "vulkan" ? "0" : "0.0";
-		await refreshDevicePicker(v);
-	});
-	await refreshDevicePicker(initialBackend);
-
-	renderGpuToggle(document.getElementById("default-denoise-gpu"), tempDefaults.denoiseGpu || false, (v) => (tempDefaults.denoiseGpu = v), devicePickerEl);
+	window._tempDefaults = tempDefaults;
 
 	renderRadioPills(document.getElementById("default-quality"), QUALITIES, tempDefaults.quality, (v) => (tempDefaults.quality = v));
 	renderRadioPills(document.getElementById("default-speed"), SPEEDS, tempDefaults.finalSpeed, (v) => (tempDefaults.finalSpeed = v));
-	const updateDenoiseThresholdVisibility = (level) => {
-		const el = document.getElementById("default-auto-thresholds");
-		el.style.display = level === "auto" ? "" : "none";
-	};
-	renderRadioPills(document.getElementById("default-denoise"), DENOISE_LEVELS, tempDefaults.denoise || "off", (v) => {
-		tempDefaults.denoise = v;
-		updateDenoiseThresholdVisibility(v);
-	});
-	renderAutoThresholds(
-		document.getElementById("default-auto-thresholds"),
-		tempDefaults.autoDenoiseThresholds || { light: 0.35, medium: 0.45, heavy: 0.55 },
-		(v) => (tempDefaults.autoDenoiseThresholds = v),
-	);
-	updateDenoiseThresholdVisibility(tempDefaults.denoise);
+	renderRadioPills(document.getElementById("default-denoise"), DENOISE_LEVELS, tempDefaults.denoise || "off", (v) => (tempDefaults.denoise = v));
 	renderRadioPills(document.getElementById("default-deband"), DEBAND_LEVELS, tempDefaults.deband || "off", (v) => (tempDefaults.deband = v));
 	renderDownscaleToggle(document.getElementById("default-downscale"), tempDefaults.downscale || false, (v) => (tempDefaults.downscale = v));
 	renderSkipBoostingToggle(document.getElementById("default-skip-boosting"), tempDefaults.skipBoosting || false, (v) => (tempDefaults.skipBoosting = v));
@@ -1336,7 +1315,6 @@ async function openSettings() {
 	);
 	renderBitrateInputs(document.getElementById("default-bitrates"), tempDefaults.audioBitrates, (ch, val) => (tempDefaults.audioBitrates[ch] = val));
 
-	window._tempDefaults = tempDefaults;
 	document.getElementById("settings-modal").style.display = "";
 }
 
@@ -1352,6 +1330,72 @@ function closeSettings() {
 
 function closeSettingsIfOutside(e) {
 	if (e.target === e.currentTarget) closeSettings();
+}
+
+async function openAdvancedModal(target /* "default" | "job" */) {
+	const settings = target === "default" ? window._tempDefaults : window._tempJobSettings;
+	if (!settings) return;
+
+	// Seed any missing fields from defaults (covers older queue.json entries
+	// that haven't been migrated by the backend yet).
+	if (!settings.nlmeansParams) {
+		settings.nlmeansParams = JSON.parse(JSON.stringify(DEFAULT_NLMEANS_PARAMS));
+	}
+	if (!settings.gradfunParams) {
+		settings.gradfunParams = JSON.parse(JSON.stringify(DEFAULT_GRADFUN_PARAMS));
+	}
+	if (!settings.autoDenoiseThresholds) {
+		settings.autoDenoiseThresholds = { ...DEFAULT_AUTO_THRESHOLDS };
+	}
+	if (!settings.denoiseBackend) settings.denoiseBackend = "auto";
+	if (settings.gpuDevice === undefined || settings.gpuDevice === null) {
+		settings.gpuDevice = settings.denoiseBackend === "vulkan" ? "0" : "0.0";
+	}
+
+	const titleEl = document.getElementById("advanced-modal-title");
+	titleEl.textContent = target === "default" ? "Advanced Default Settings" : "Advanced Job Settings";
+
+	const backendEl = document.getElementById("advanced-denoise-backend");
+	const deviceGroupEl = document.getElementById("advanced-gpu-device-group");
+	const devicePickerEl = document.getElementById("advanced-gpu-device");
+
+	async function refreshDevicePicker(backend) {
+		if (backend === "cpu") {
+			deviceGroupEl.style.display = "none";
+			return;
+		}
+		deviceGroupEl.style.display = "";
+		const devices = backend === "vulkan" ? await fetchVulkanDevices() : await fetchOpenClDevices();
+		// "auto" probes vulkan first; show vulkan devices for that case.
+		renderGpuDevicePicker(devicePickerEl, devices, settings.gpuDevice, (v) => (settings.gpuDevice = v));
+	}
+
+	renderRadioPills(backendEl, DENOISE_BACKENDS, settings.denoiseBackend, async (v) => {
+		const prev = settings.denoiseBackend;
+		settings.denoiseBackend = v;
+		// Reset gpuDevice format only when crossing the vulkan/opencl divide.
+		if (v === "vulkan" && prev !== "vulkan") settings.gpuDevice = "0";
+		else if (v === "opencl" && prev !== "opencl") settings.gpuDevice = "0.0";
+		else if (v === "auto" && (prev === "cpu" || !settings.gpuDevice)) settings.gpuDevice = "0";
+		await refreshDevicePicker(v);
+	});
+	await refreshDevicePicker(settings.denoiseBackend);
+
+	renderAutoThresholds(document.getElementById("advanced-auto-thresholds"), settings.autoDenoiseThresholds, (v) => (settings.autoDenoiseThresholds = v));
+
+	renderNlmeansParamsEditor(document.getElementById("advanced-nlmeans-params"), settings.nlmeansParams, (v) => (settings.nlmeansParams = v));
+
+	renderGradfunParamsEditor(document.getElementById("advanced-gradfun-params"), settings.gradfunParams, (v) => (settings.gradfunParams = v));
+
+	document.getElementById("advanced-modal").style.display = "";
+}
+
+function closeAdvancedModal() {
+	document.getElementById("advanced-modal").style.display = "none";
+}
+
+function closeAdvancedModalIfOutside(e) {
+	if (e.target === e.currentTarget) closeAdvancedModal();
 }
 
 function formatElapsed(ms) {
@@ -1650,44 +1694,15 @@ async function openJobSettings(jobId) {
 	const tempSettings = {
 		...job.settings,
 		audioBitrates: { ...job.settings.audioBitrates },
+		autoDenoiseThresholds: { ...(job.settings.autoDenoiseThresholds || DEFAULT_AUTO_THRESHOLDS) },
+		nlmeansParams: job.settings.nlmeansParams ? JSON.parse(JSON.stringify(job.settings.nlmeansParams)) : JSON.parse(JSON.stringify(DEFAULT_NLMEANS_PARAMS)),
+		gradfunParams: job.settings.gradfunParams ? JSON.parse(JSON.stringify(job.settings.gradfunParams)) : JSON.parse(JSON.stringify(DEFAULT_GRADFUN_PARAMS)),
 	};
-
 	window._tempJobSettings = tempSettings;
-
-	const backendEl = document.getElementById("job-gpu-backend");
-	const devicePickerEl = document.getElementById("job-gpu-device");
-
-	async function refreshDevicePicker(backend) {
-		const devices = backend === "vulkan" ? await fetchVulkanDevices() : await fetchOpenClDevices();
-		renderGpuDevicePicker(devicePickerEl, devices, tempSettings.gpuDevice, (v) => (tempSettings.gpuDevice = v));
-	}
-
-	const initialBackend = tempSettings.gpuBackend || "opencl";
-	renderRadioPills(backendEl, GPU_BACKENDS, tempSettings.gpuBackend || "opencl", async (v) => {
-		tempSettings.gpuBackend = v;
-		tempSettings.gpuDevice = v === "vulkan" ? "0" : "0.0";
-		await refreshDevicePicker(v);
-	});
-	await refreshDevicePicker(initialBackend);
-
-	renderGpuToggle(document.getElementById("job-denoise-gpu"), tempSettings.denoiseGpu || false, (v) => (tempSettings.denoiseGpu = v), devicePickerEl);
 
 	renderRadioPills(document.getElementById("job-quality"), QUALITIES, tempSettings.quality, (v) => (tempSettings.quality = v));
 	renderRadioPills(document.getElementById("job-speed"), SPEEDS, tempSettings.finalSpeed, (v) => (tempSettings.finalSpeed = v));
-	const updateDenoiseThresholdVisibility = (level) => {
-		const el = document.getElementById("job-auto-thresholds");
-		el.style.display = level === "auto" ? "" : "none";
-	};
-	renderRadioPills(document.getElementById("job-denoise"), DENOISE_LEVELS, tempSettings.denoise || "off", (v) => {
-		tempSettings.denoise = v;
-		updateDenoiseThresholdVisibility(v);
-	});
-	renderAutoThresholds(
-		document.getElementById("job-auto-thresholds"),
-		tempSettings.autoDenoiseThresholds || { light: 0.35, medium: 0.45, heavy: 0.55 },
-		(v) => (tempSettings.autoDenoiseThresholds = v),
-	);
-	updateDenoiseThresholdVisibility(tempSettings.denoise);
+	renderRadioPills(document.getElementById("job-denoise"), DENOISE_LEVELS, tempSettings.denoise || "off", (v) => (tempSettings.denoise = v));
 	renderRadioPills(document.getElementById("job-deband"), DEBAND_LEVELS, tempSettings.deband || "off", (v) => (tempSettings.deband = v));
 	renderDownscaleToggle(document.getElementById("job-downscale"), tempSettings.downscale || false, (v) => (tempSettings.downscale = v));
 	renderSkipBoostingToggle(document.getElementById("job-skip-boosting"), tempSettings.skipBoosting || false, (v) => (tempSettings.skipBoosting = v));
@@ -2134,6 +2149,127 @@ function renderLanguageFilterInput(container, value, onChange) {
 	container.appendChild(hint);
 }
 
+function renderNlmeansParamsEditor(container, params, onChange) {
+	container.innerHTML = "";
+	const grid = document.createElement("div");
+	grid.className = "nlmeans-params-grid";
+
+	// Header row
+	for (const label of ["", "s (strength)", "p (patch)", "r (research)"]) {
+		const cell = document.createElement("div");
+		cell.className = "nlmeans-params-header";
+		cell.textContent = label;
+		grid.appendChild(cell);
+	}
+
+	for (const level of ["light", "medium", "heavy"]) {
+		const labelCell = document.createElement("div");
+		labelCell.className = "nlmeans-params-label";
+		labelCell.textContent = level;
+		grid.appendChild(labelCell);
+
+		// s : float [1.0, 30.0]
+		const sInput = document.createElement("input");
+		sInput.type = "number";
+		sInput.step = "0.1";
+		sInput.min = "1";
+		sInput.max = "30";
+		sInput.value = params[level].s;
+		sInput.onchange = () => {
+			const v = clampFloat(sInput.value, 1.0, 30.0);
+			params[level].s = v;
+			sInput.value = v;
+			onChange(params);
+		};
+		grid.appendChild(sInput);
+
+		// p : odd int [1, 99]
+		const pInput = document.createElement("input");
+		pInput.type = "number";
+		pInput.step = "2";
+		pInput.min = "1";
+		pInput.max = "99";
+		pInput.value = params[level].p;
+		pInput.onchange = () => {
+			const v = forceOdd(clampInt(pInput.value, 1, 99));
+			params[level].p = v;
+			pInput.value = v;
+			onChange(params);
+		};
+		grid.appendChild(pInput);
+
+		// r : odd int [1, 99]
+		const rInput = document.createElement("input");
+		rInput.type = "number";
+		rInput.step = "2";
+		rInput.min = "1";
+		rInput.max = "99";
+		rInput.value = params[level].r;
+		rInput.onchange = () => {
+			const v = forceOdd(clampInt(rInput.value, 1, 99));
+			params[level].r = v;
+			rInput.value = v;
+			onChange(params);
+		};
+		grid.appendChild(rInput);
+	}
+
+	container.appendChild(grid);
+}
+
+function renderGradfunParamsEditor(container, params, onChange) {
+	container.innerHTML = "";
+	const grid = document.createElement("div");
+	grid.className = "gradfun-params-grid";
+
+	// Header row
+	for (const label of ["", "strength", "radius"]) {
+		const cell = document.createElement("div");
+		cell.className = "gradfun-params-header";
+		cell.textContent = label;
+		grid.appendChild(cell);
+	}
+
+	for (const level of ["light", "medium", "heavy"]) {
+		const labelCell = document.createElement("div");
+		labelCell.className = "gradfun-params-label";
+		labelCell.textContent = level;
+		grid.appendChild(labelCell);
+
+		// strength : float [0.51, 64]
+		const sInput = document.createElement("input");
+		sInput.type = "number";
+		sInput.step = "0.1";
+		sInput.min = "0.51";
+		sInput.max = "64";
+		sInput.value = params[level].strength;
+		sInput.onchange = () => {
+			const v = clampFloat(sInput.value, 0.51, 64);
+			params[level].strength = v;
+			sInput.value = v;
+			onChange(params);
+		};
+		grid.appendChild(sInput);
+
+		// radius : int [8, 32]
+		const rInput = document.createElement("input");
+		rInput.type = "number";
+		rInput.step = "1";
+		rInput.min = "8";
+		rInput.max = "32";
+		rInput.value = params[level].radius;
+		rInput.onchange = () => {
+			const v = clampInt(rInput.value, 8, 32);
+			params[level].radius = v;
+			rInput.value = v;
+			onChange(params);
+		};
+		grid.appendChild(rInput);
+	}
+
+	container.appendChild(grid);
+}
+
 async function openLibrary() {
 	const modal = document.getElementById("library-modal");
 	const content = document.getElementById("library-content");
@@ -2205,9 +2341,17 @@ function initEventListeners() {
 	document.getElementById("close-settings-btn").addEventListener("click", closeSettings);
 	document.getElementById("save-settings-btn").addEventListener("click", saveSettings);
 	document.getElementById("settings-modal").addEventListener("click", closeSettingsIfOutside);
+
 	document.getElementById("close-job-modal-btn").addEventListener("click", closeJobModal);
 	document.getElementById("job-modal").addEventListener("click", closeJobModalIfOutside);
 	document.getElementById("save-job-settings-btn").addEventListener("click", saveJobSettings);
+
+	document.getElementById("open-default-advanced-btn").addEventListener("click", () => openAdvancedModal("default"));
+	document.getElementById("open-job-advanced-btn").addEventListener("click", () => openAdvancedModal("job"));
+	document.getElementById("close-advanced-modal-btn").addEventListener("click", closeAdvancedModal);
+	document.getElementById("close-advanced-done-btn").addEventListener("click", closeAdvancedModal);
+	document.getElementById("advanced-modal").addEventListener("click", closeAdvancedModalIfOutside);
+
 	document.getElementById("sub-preview-modal").addEventListener("click", closeSubPreviewIfOutside);
 	document.getElementById("logout-btn").addEventListener("click", logout);
 

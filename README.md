@@ -34,36 +34,49 @@ cp movie.mkv input/
 
 All settings are configurable via environment variables in `docker-compose.yml`:
 
-| Variable                   | Default         | Description                                                         |
-| -------------------------- | --------------- | ------------------------------------------------------------------- |
-| `PORT`                     | `3000`          | Web dashboard port                                                  |
-| `PASSWORD`                 | `rabbitencoder` | Password to access web dashboard                                    |
-| `FILE_COOLDOWN`            | `30`            | Seconds the file size must stay unchanged before encoding starts    |
-| `ENCODER_QUALITY`          | `medium`        | Default video quality (`low`, `medium`, `high`)                     |
-| `ENCODER_SPEED`            | `slow`          | Default encode speed (`slower`, `slow`, `medium`, `fast`, `faster`) |
-| `ENCODER_DENOISE`          | `off`           | Default denoise level (`off`, `auto`, `light`, `medium`, `heavy`)   |
-| `ENCODER_DENOISE_GPU`      | `true`          | Enable GPU accelerated denoising (`true`/`false`)                   |
-| `ENCODER_GPU_BACKEND`      | `opencl`        | GPU backend: `opencl`, `vulkan`, or `auto`                          |
-| `ENCODER_GPU_DEVICE`       | `0.0`           | Device id - `<platform>.<device>` for OpenCL, `<index>` for Vulkan  |
-| `ENCODER_DEBAND`           | `off`           | Default deband level (`off`, `light`, `medium`, `heavy`)            |
-| `ENCODER_DOWNSCALE`        | `false`         | Downscale 4K sources to 1080p before encoding (`true`/`false`)      |
-| `ENCODER_SKIP_BOOSTING`    | `false`         | Skip per-scene CRF boosting, encode directly with SvtAv1EncApp      |
-| `ENCODER_DEDUPE_SUBTITLES` | `false`         | Keep only one subtitle per language and type                        |
-| `AUDIO_LANGUAGES`          | _(empty)_       | Comma-separated audio languages to keep (empty = keep all)          |
-| `SUBTITLE_LANGUAGES`       | _(empty)_       | Comma-separated subtitle languages to keep (empty = keep all)       |
-| `AUDIO_NO_PHASE_INV`       | `false`         | Disable phase inversion in Opus encoder (`true`/`false`)            |
-| `AUDIO_BITRATE_MONO`       | `64`            | Opus bitrate for mono audio (kbps)                                  |
-| `AUDIO_BITRATE_STEREO`     | `128`           | Opus bitrate for stereo audio (kbps)                                |
-| `AUDIO_BITRATE_2_1`        | `160`           | Opus bitrate for 2.1 audio (kbps)                                   |
-| `AUDIO_BITRATE_5_1`        | `256`           | Opus bitrate for 5.1 audio (kbps)                                   |
-| `AUDIO_BITRATE_6_1`        | `320`           | Opus bitrate for 6.1 audio (kbps)                                   |
-| `AUDIO_BITRATE_7_1`        | `384`           | Opus bitrate for 7.1 audio (kbps)                                   |
-| `AUDIO_BITRATE_7_1_4`      | `512`           | Opus bitrate for 7.1.4 Atmos audio (kbps)                           |
-| `ORGANIZATION`             | `RabbitCompany` | Organization tag in output filenames                                |
-| `INPUT_DIR`                | `/data/input`   | Directory to watch for new media files                              |
-| `OUTPUT_DIR`               | `/data/output`  | Directory for encoded output files                                  |
-| `TEMP_DIR`                 | `/data/temp`    | Temporary working directory for encoding                            |
-| `LIBRARY_DIRS`             | _(empty)_       | Comma-separated paths to media library folders (see below)          |
+| Variable                                | Default         | Description                                                                                            |
+| --------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------ |
+| `PORT`                                  | `3000`          | Web dashboard port                                                                                     |
+| `PASSWORD`                              | `rabbitencoder` | Password to access web dashboard                                                                       |
+| `FILE_COOLDOWN`                         | `30`            | Seconds the file size must stay unchanged before encoding starts                                       |
+| `ENCODER_QUALITY`                       | `medium`        | Default video quality (`low`, `medium`, `high`)                                                        |
+| `ENCODER_SPEED`                         | `slow`          | Default encode speed (`slower`, `slow`, `medium`, `fast`, `faster`)                                    |
+| `ENCODER_DENOISE`                       | `off`           | Default denoise level (`off`, `auto`, `light`, `medium`, `heavy`)                                      |
+| `ENCODER_DENOISE_BACKEND`               | `auto`          | Denoise backend: `cpu`, `auto`, `vulkan`, `opencl`. `cpu` forces software nlmeans.                     |
+| `ENCODER_DENOISE_GPU_DEVICE`            | `0.0`           | GPU device id (ignored when backend is `cpu`). `0` for vulkan, `<platform>.<device>` for opencl.       |
+| `ENCODER_DENOISE_AUTO_THRESHOLD_LIGHT`  | `0.4`           | Y bitplane-4 threshold above which scenes get `light` denoise (only used when `ENCODER_DENOISE=auto`). |
+| `ENCODER_DENOISE_AUTO_THRESHOLD_MEDIUM` | `0.55`          | Y bitplane-4 threshold above which scenes get `medium` denoise.                                        |
+| `ENCODER_DENOISE_AUTO_THRESHOLD_HEAVY`  | `0.75`          | Y bitplane-4 threshold above which scenes get `heavy` denoise.                                         |
+| `ENCODER_DENOISE_LIGHT_S`               | `1.0`           | NLMeans strength `s` for `light` level (float [1.0 – 30.0]).                                           |
+| `ENCODER_DENOISE_LIGHT_P`               | `3`             | NLMeans patch size `p` for `light` level (odd int [1 – 99]).                                           |
+| `ENCODER_DENOISE_LIGHT_R`               | `7`             | NLMeans research size `r` for `light` level (odd int [1 – 99]).                                        |
+| `ENCODER_DENOISE_MEDIUM_S`              | `1.5`           | NLMeans `s` for `medium` level.                                                                        |
+| `ENCODER_DENOISE_MEDIUM_P`              | `3`             | NLMeans `p` for `medium` level.                                                                        |
+| `ENCODER_DENOISE_MEDIUM_R`              | `9`             | NLMeans `r` for `medium` level.                                                                        |
+| `ENCODER_DENOISE_HEAVY_S`               | `2.0`           | NLMeans `s` for `heavy` level.                                                                         |
+| `ENCODER_DENOISE_HEAVY_P`               | `3`             | NLMeans `p` for `heavy` level.                                                                         |
+| `ENCODER_DENOISE_HEAVY_R`               | `11`            | NLMeans `r` for `heavy` level.                                                                         |
+| `ENCODER_DEBAND`                        | `off`           | Default deband level (`off`, `light`, `medium`, `heavy`).                                              |
+| `ENCODER_DEBAND_LIGHT_STRENGTH`         | `0.8`           | Gradfun strength for `light` level (float [0.51 – 64]).                                                |
+| `ENCODER_DEBAND_LIGHT_RADIUS`           | `8`             | Gradfun radius for `light` level (int [8 – 32]).                                                       |
+| `ENCODER_DEBAND_MEDIUM_STRENGTH`        | `1.4`           | Gradfun strength for `medium` level.                                                                   |
+| `ENCODER_DEBAND_MEDIUM_RADIUS`          | `16`            | Gradfun radius for `medium` level.                                                                     |
+| `ENCODER_DEBAND_HEAVY_STRENGTH`         | `2.8`           | Gradfun strength for `heavy` level.                                                                    |
+| `ENCODER_DEBAND_HEAVY_RADIUS`           | `24`            | Gradfun radius for `heavy` level.                                                                      |
+| `ENCODER_DOWNSCALE`                     | `false`         | Downscale 4K sources to 1080p before encoding.                                                         |
+| `ENCODER_SKIP_BOOSTING`                 | `false`         | Skip boosting — bypass per-scene CRF zone analysis.                                                    |
+| `ENCODER_DEDUPE_SUBTITLES`              | `false`         | Keep only one subtitle per language + type.                                                            |
+| `ENCODER_NO_PHASE_INV`                  | `false`         | Disable phase inversion (`--no-phase-inv`) for AV1 encoding.                                           |
+| `AUDIO_LANGUAGES`                       | _(empty)_       | Comma-separated audio language codes to keep (empty = keep all).                                       |
+| `SUBTITLE_LANGUAGES`                    | _(empty)_       | Comma-separated subtitle language codes to keep (empty = keep all).                                    |
+| `ORGANIZATION`                          | `RabbitCompany` | Tag appended to encoded filenames (e.g. `-RabbitCompany`).                                             |
+| `AUDIO_BITRATE_MONO`                    | `64`            | Opus bitrate for mono audio (kbps).                                                                    |
+| `AUDIO_BITRATE_STEREO`                  | `128`           | Opus bitrate for stereo audio.                                                                         |
+| `AUDIO_BITRATE_2_1`                     | `160`           | Opus bitrate for 2.1 audio.                                                                            |
+| `AUDIO_BITRATE_5_1`                     | `256`           | Opus bitrate for 5.1 audio.                                                                            |
+| `AUDIO_BITRATE_6_1`                     | `320`           | Opus bitrate for 6.1 audio.                                                                            |
+| `AUDIO_BITRATE_7_1`                     | `384`           | Opus bitrate for 7.1 audio.                                                                            |
+| `AUDIO_BITRATE_7_1_4`                   | `448`           | Opus bitrate for 7.1.4 Atmos audio.                                                                    |
 
 ## Web Dashboard
 

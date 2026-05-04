@@ -1,6 +1,3 @@
-import { NLMEANS_PARAMS } from "./filters";
-import type { DenoiseLevel } from "./types";
-
 export const LANG_ALIASES: Record<string, string> = {
 	// Japanese
 	ja: "jpn",
@@ -238,34 +235,6 @@ export function getResolutionTag(width: number, height: number): string {
 	if (width >= 1000 || height >= 560) return "576p";
 	if (width > 0 && height > 0) return "480p";
 	return "1080p";
-}
-
-/**
- * Return an FFmpeg video filter string for the given denoise level, or null if off.
- * Uses the nlmeans filter which is excellent for film grain and anime.
- */
-export function getDenoiseFilter(level: DenoiseLevel): string | null {
-	const params = NLMEANS_PARAMS[level];
-	if (!params) return null;
-	return `nlmeans=${params}`;
-}
-
-/**
- * Return an FFmpeg video filter string using the OpenCL GPU-accelerated nlmeans.
- * The filter graph uploads frames to the GPU, runs nlmeans_opencl, then downloads back.
- */
-export function getDenoiseFilterGpu(level: DenoiseLevel): string | null {
-	const params = NLMEANS_PARAMS[level];
-	if (!params) return null;
-	return `hwupload,nlmeans_opencl=${params},hwdownload,format=yuv420p`;
-}
-
-/**
- * Build the full FFmpeg argument array for GPU-accelerated denoising.
- * Prepends the OpenCL hardware device init flags before the input.
- */
-export function getDenoiseGpuInitArgs(): string[] {
-	return ["-init_hw_device", "opencl=gpu", "-filter_hw_device", "gpu"];
 }
 
 /**
