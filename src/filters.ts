@@ -4,12 +4,10 @@ import { buildAutoDenoiseFilter, type DenoisePlan } from "./auto-denoise";
 
 /** CPU/GPU nlmeans filter parameters for each denoise level. */
 export const NLMEANS_PARAMS: Record<string, string> = {
-	light: "s=1:p=3:r=7",
-	medium: "s=2:p=5:r=9",
-	heavy: "s=3:p=7:r=11",
+	light: "s=1.0:p=3:r=7",
+	medium: "s=1.5:p=3:r=9",
+	heavy: "s=2.0:p=3:r=11",
 };
-
-const NLMEANS_VULKAN_EXTRA = "t=8";
 
 /**
  * gradfun parameters for each deband level.
@@ -104,7 +102,7 @@ export async function isVulkanAvailable(deviceId: string = DEFAULT_VULKAN_DEVICE
 		"-i",
 		"testsrc2=size=64x64:rate=1:duration=1",
 		"-vf",
-		`format=yuv420p,hwupload,nlmeans_vulkan=${NLMEANS_PARAMS.light}:${NLMEANS_VULKAN_EXTRA},hwdownload,format=yuv420p`,
+		`format=yuv420p,hwupload,nlmeans_vulkan=${NLMEANS_PARAMS.light},hwdownload,format=yuv420p`,
 		"-frames:v",
 		"1",
 		"-f",
@@ -139,7 +137,7 @@ function buildOpenClChunk(level: DenoiseLevel, deviceId: string): BackendBuild {
 function buildVulkanChunk(level: DenoiseLevel, deviceId: string): BackendBuild {
 	const params = NLMEANS_PARAMS[level]!;
 	return {
-		filter: `format=yuv420p,hwupload,nlmeans_vulkan=${params}:${NLMEANS_VULKAN_EXTRA},hwdownload,format=yuv420p`,
+		filter: `format=yuv420p,hwupload,nlmeans_vulkan=${params},hwdownload,format=yuv420p`,
 		preInputArgs: ["-init_hw_device", buildVulkanDeviceSpec(deviceId), "-filter_hw_device", HW_DEVICE_NAME],
 	};
 }

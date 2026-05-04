@@ -22,7 +22,6 @@ import { Web } from "@rabbit-company/web";
 import { cors } from "@rabbit-company/web-middleware/cors";
 import type { JobSettings } from "./types";
 import { Logger } from "./logger";
-import { logger } from "@rabbit-company/web-middleware/logger";
 import indexHtml from "../public/index.html";
 import { bearerAuth } from "@rabbit-company/web-middleware/bearer-auth";
 import { previewAudio, previewSubtitles } from "./tracks";
@@ -45,7 +44,6 @@ initStore(config);
 startWatcher(config.inputDir);
 
 const app = new Web();
-app.use(logger({ logger: Logger }));
 app.use(cors());
 app.use(
 	bearerAuth({

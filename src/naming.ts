@@ -1,3 +1,4 @@
+import { NLMEANS_PARAMS } from "./filters";
 import type { DenoiseLevel } from "./types";
 
 export const LANG_ALIASES: Record<string, string> = {
@@ -238,13 +239,6 @@ export function getResolutionTag(width: number, height: number): string {
 	if (width > 0 && height > 0) return "480p";
 	return "1080p";
 }
-
-/** CPU nlmeans filter parameters for each denoise level. */
-const NLMEANS_PARAMS: Record<string, string> = {
-	light: "s=1:p=3:r=7",
-	medium: "s=2:p=5:r=9",
-	heavy: "s=3:p=7:r=11",
-};
 
 /**
  * Return an FFmpeg video filter string for the given denoise level, or null if off.

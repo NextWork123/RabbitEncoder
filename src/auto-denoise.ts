@@ -6,9 +6,9 @@ import { NLMEANS_PARAMS, isOpenClAvailable, isVulkanAvailable, defaultDeviceFor 
 import type { AutoDenoiseThresholds, GpuBackend } from "./types";
 
 export const DEFAULT_AUTO_THRESHOLDS: AutoDenoiseThresholds = {
-	light: 0.3,
-	medium: 0.5,
-	heavy: 0.7,
+	light: 0.4,
+	medium: 0.55,
+	heavy: 0.75,
 };
 
 export interface DenoiseRange {
@@ -75,9 +75,11 @@ function isHighBitDepth(pixFmt: string): boolean {
 	return /(?:p10|p12|p14|p16)(?:le|be)?$/.test(pixFmt);
 }
 
-function getEffectivePixFmt(sourcePixFmt: string, backend: "opencl" | "vulkan"): string {
+function getEffectivePixFmt(sourcePixFmt: string): string {
 	if (!isHighBitDepth(sourcePixFmt)) return sourcePixFmt;
-	return sourcePixFmt;
+	if (sourcePixFmt.startsWith("yuv444")) return "yuv444p";
+	if (sourcePixFmt.startsWith("gbrp")) return "gbrp";
+	return "yuv420p";
 }
 
 export type DenoisePlan = DenoiseRange[];
@@ -124,21 +126,10 @@ const SCDET_THRESHOLD = 10;
 const SCENE_DETECT_HEIGHT = 480;
 const MIN_SCENE_DURATION = 1.0;
 
-/** Vulkan-only nlmeans tuning param (mirrors the constant in filters.ts). */
-const NLMEANS_VULKAN_EXTRA = "t=8";
-
 function buildDenoiseSegmentFilter(level: DenoiseRange["level"], backend: "opencl" | "vulkan", pixFmt: string): string {
 	const params = NLMEANS_PARAMS[level]!;
-
 	if (backend === "vulkan") {
-		// Vulkan can hold 10-bit YUV in hwframes -> pass pixFmt straight through.
-		return `format=${pixFmt},hwupload,nlmeans_vulkan=${params}:${NLMEANS_VULKAN_EXTRA},hwdownload,format=${pixFmt}`;
-	}
-
-	// OpenCL: kernel only supports 8-bit. If the chain is 10-bit, downconvert
-	// for the kernel and convert back so passthrough segments align.
-	if (isHighBitDepth(pixFmt)) {
-		return `format=yuv420p,hwupload,nlmeans_opencl=${params},hwdownload,format=${pixFmt}`;
+		return `format=${pixFmt},hwupload,nlmeans_vulkan=${params},hwdownload,format=${pixFmt}`;
 	}
 	return `format=${pixFmt},hwupload,nlmeans_opencl=${params},hwdownload,format=${pixFmt}`;
 }
@@ -150,14 +141,6 @@ function buildColorArgs(fmt: StreamFormat): string[] {
 	if (fmt.colorTrc) args.push("-color_trc", fmt.colorTrc);
 	if (fmt.colorSpace) args.push("-colorspace", fmt.colorSpace);
 	return args;
-}
-
-async function normalizeSourceFormat(inputPath: string, outputPath: string, pixFmt: string, colorArgs: string[], signal?: AbortSignal): Promise<void> {
-	const args = ["ffmpeg", "-y", "-i", inputPath, "-vf", `format=${pixFmt}`, ...FFV1_ENCODE_ARGS, ...colorArgs, "-an", "-sn", outputPath];
-	const res = await run(args, { signal });
-	if (res.code !== 0) {
-		throw new Error(`Source normalization failed: ${res.stderr.slice(-500)}`);
-	}
 }
 
 /**
@@ -462,16 +445,6 @@ export function buildSegmentList(plan: DenoisePlan, totalDuration: number): Deno
 	return out;
 }
 
-/**
- * Encode a single segment of the source.
- *
- * Passthrough segments stream-copy from the FFV1 intermediate. Because every
- * FFV1 frame is a keyframe, the fast `-ss` seek before `-i` is frame-accurate.
- *
- * Denoise segments seek the same way and re-encode through the GPU nlmeans
- * filter chain into FFV1 with identical container settings, so concat copy
- * works for the final stitch.
- */
 async function encodeSegment(
 	inputPath: string,
 	outputPath: string,
@@ -486,7 +459,10 @@ async function encodeSegment(
 	const to = seg.end.toFixed(3);
 
 	if (seg.level === null) {
-		const res = await run(["ffmpeg", "-y", "-ss", ss, "-to", to, "-i", inputPath, "-c:v", "copy", "-an", "-sn", outputPath], { signal });
+		const res = await run(
+			["ffmpeg", "-y", "-ss", ss, "-to", to, "-i", inputPath, "-vf", `format=${pixFmt}`, ...FFV1_ENCODE_ARGS, ...colorArgs, "-an", "-sn", outputPath],
+			{ signal },
+		);
 		if (res.code !== 0) {
 			throw new Error(`Passthrough segment [${ss}–${to}] failed: ${res.stderr.slice(-500)}`);
 		}
@@ -556,15 +532,11 @@ export async function runSegmentedAutoDenoiseGpu(
 	}
 
 	const sourceFmt = await probeStreamFormat(inputPath);
-	const effectivePixFmt = getEffectivePixFmt(sourceFmt.pixFmt, backend);
+	const effectivePixFmt = getEffectivePixFmt(sourceFmt.pixFmt);
 	const colorArgs = buildColorArgs(sourceFmt);
 
-	if (backend === "opencl" && isHighBitDepth(sourceFmt.pixFmt)) {
-		Logger.warn(
-			`[auto-denoise] Source is ${sourceFmt.pixFmt} but OpenCL nlmeans only supports 8-bit. ` +
-				`The denoise kernel will run at 8-bit precision; segment streams stay at ${effectivePixFmt}. ` +
-				`Switch to backend=vulkan for full-precision 10-bit denoising.`,
-		);
+	if (isHighBitDepth(sourceFmt.pixFmt)) {
+		Logger.warn(`[auto-denoise] Source is ${sourceFmt.pixFmt}; converting to ${effectivePixFmt} for denoise. Output of the segmented stage will be 8-bit.`);
 	}
 
 	const segDir = join(tempDir, "denoise_segments");
@@ -572,10 +544,6 @@ export async function runSegmentedAutoDenoiseGpu(
 
 	const segFiles: string[] = [];
 	const listPath = join(segDir, "concat.txt");
-
-	const normalizedInput = join(segDir, "_normalized.mkv");
-	Logger.info(`[auto-denoise] Normalizing source format (${sourceFmt.pixFmt} → ${effectivePixFmt}, pinned FFV1)`);
-	await normalizeSourceFormat(inputPath, normalizedInput, effectivePixFmt, colorArgs, signal);
 
 	try {
 		for (let i = 0; i < segments.length; i++) {
@@ -588,7 +556,7 @@ export async function runSegmentedAutoDenoiseGpu(
 			onProgress(i, segments.length, label);
 			Logger.debug(`[auto-denoise] Segment ${i + 1}/${segments.length}: ${label}`);
 
-			await encodeSegment(normalizedInput, segFile, seg, backend, gpuDevice, effectivePixFmt, colorArgs, signal);
+			await encodeSegment(inputPath, segFile, seg, backend, gpuDevice, effectivePixFmt, colorArgs, signal);
 			segFiles.push(segFile);
 		}
 

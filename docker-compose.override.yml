@@ -34,14 +34,14 @@ services:
       # Auto denoise thresholds (Y bitplane-4 medians from FFmpeg's bitplanenoise filter).
       # Only used when ENCODER_DENOISE=auto. Scenes with values >= each threshold get
       # the corresponding denoise level. Must satisfy light <= medium <= heavy.
-      - ENCODER_DENOISE_AUTO_LIGHT=0.3
-      - ENCODER_DENOISE_AUTO_MEDIUM=0.5
-      - ENCODER_DENOISE_AUTO_HEAVY=0.7
+      - ENCODER_DENOISE_AUTO_LIGHT=0.4
+      - ENCODER_DENOISE_AUTO_MEDIUM=0.55
+      - ENCODER_DENOISE_AUTO_HEAVY=0.77
       # GPU-accelerated denoising via OpenCL (true/false)
       # Falls back to CPU automatically if no OpenCL device is found
       - ENCODER_DENOISE_GPU=true
       # GPU backend for nlmeans denoising: auto, vulkan, opencl
-      - ENCODER_GPU_BACKEND=auto
+      - ENCODER_GPU_BACKEND=vulkan
       # Device id format depends on backend:
       #   opencl: <platform>.<device>  (e.g. 0.0)  - run `clinfo -l` to list
       #   vulkan: <device>             (e.g. 0)    - run `vulkaninfo --summary` to list
