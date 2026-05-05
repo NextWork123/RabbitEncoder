@@ -238,3 +238,28 @@ export interface AudioPreviewResult {
 	source: AudioPreviewTrack[];
 	output: AudioPreviewTrack[];
 }
+
+export interface PreviewSample {
+	index: number;
+	timestampSec: number;
+	windowSeconds: number;
+	encodedSizeBytes: number;
+	encodedSizeHuman: string;
+	projectedTotalBytes: number;
+	projectedTotalHuman: string;
+	encodedBitrateKbps: number;
+}
+
+export interface PreviewState {
+	jobId: string;
+	status: "idle" | "running" | "done" | "error" | "cancelled";
+	progress: number;
+	currentDetail: string;
+	samples: PreviewSample[];
+	error?: string;
+	startedAt?: number;
+	finishedAt?: number;
+	settingsFingerprint: string;
+	sampleCount: number;
+	windowSeconds: number;
+}

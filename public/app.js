@@ -44,6 +44,28 @@ const expandedFolders = new Set();
 let libraryDirs = [];
 const libraryNodes = new Map();
 
+let previewPollTimer = null;
+let currentPreviewJobId = null;
+let currentPreviewSettingsFingerprint = "";
+const previewBlobCache = new Map(); // key = `${jobId}:${idx}:${kind}` -> object URL
+let currentPreviewFullscreenCard = null;
+
+function previewSettingsFingerprintFE(s) {
+	return JSON.stringify({
+		quality: s.quality,
+		finalSpeed: s.finalSpeed,
+		denoise: s.denoise,
+		denoiseBackend: s.denoiseBackend,
+		gpuDevice: s.gpuDevice,
+		deband: s.deband,
+		downscale: s.downscale,
+		skipBoosting: s.skipBoosting,
+		nlmeansParams: s.nlmeansParams,
+		gradfunParams: s.gradfunParams,
+		autoDenoiseThresholds: s.autoDenoiseThresholds,
+	});
+}
+
 function createTreeNode(entry, depth, parentPath) {
 	return {
 		path: entry.path,
@@ -251,6 +273,363 @@ async function reorderQueue(orderedIds) {
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ ids: orderedIds }),
 	});
+}
+
+async function fetchPreviewState(jobId) {
+	const res = await authFetch(`${API}/api/jobs/${jobId}/preview`);
+	return res.json();
+}
+
+async function startPreviewRequest(jobId) {
+	const res = await authFetch(`${API}/api/jobs/${jobId}/preview`, { method: "POST" });
+	return res.json();
+}
+
+async function cancelPreviewRequest(jobId) {
+	const res = await authFetch(`${API}/api/jobs/${jobId}/preview`, { method: "DELETE" });
+	return res.json();
+}
+
+async function fetchPreviewArtifactBlob(jobId, idx, kind) {
+	const cacheKey = `${jobId}:${idx}:${kind}`;
+	const cached = previewBlobCache.get(cacheKey);
+	if (cached) return cached;
+	const res = await authFetch(`${API}/api/jobs/${jobId}/preview/sample/${idx}/${kind}`);
+	if (!res.ok) throw new Error(`Failed to load ${kind} (${res.status})`);
+	const blob = await res.blob();
+	const url = URL.createObjectURL(blob);
+	previewBlobCache.set(cacheKey, url);
+	return url;
+}
+
+function clearPreviewBlobCache() {
+	for (const url of previewBlobCache.values()) URL.revokeObjectURL(url);
+	previewBlobCache.clear();
+}
+
+async function openPreviewModal(jobId) {
+	currentPreviewJobId = jobId;
+	clearPreviewBlobCache();
+
+	const jobsList = await fetchJobs();
+	const job = jobsList.find((j) => j.id === jobId);
+	if (!job) return;
+
+	currentPreviewSettingsFingerprint = previewSettingsFingerprintFE(job.settings);
+
+	document.getElementById("preview-modal-title").textContent = `Preview Encode — ${job.filename}`;
+	document.getElementById("preview-modal").style.display = "";
+
+	await refreshPreviewModal();
+}
+
+function closePreviewModal() {
+	document.getElementById("preview-modal").style.display = "none";
+	stopPreviewPolling();
+	currentPreviewJobId = null;
+	clearPreviewBlobCache();
+}
+
+function closePreviewModalIfOutside(e) {
+	if (e.target === e.currentTarget) closePreviewModal();
+}
+
+function startPreviewPolling() {
+	stopPreviewPolling();
+	previewPollTimer = setInterval(refreshPreviewModal, 1000);
+}
+
+function stopPreviewPolling() {
+	if (previewPollTimer) clearInterval(previewPollTimer);
+	previewPollTimer = null;
+}
+
+async function refreshPreviewModal() {
+	if (!currentPreviewJobId) return;
+	try {
+		const state = await fetchPreviewState(currentPreviewJobId);
+		renderPreviewState(state);
+		if (state.status !== "running") stopPreviewPolling();
+	} catch (e) {
+		if (e.message !== "Unauthorized") console.error("Preview poll error:", e);
+	}
+}
+
+function renderPreviewState(state) {
+	const introEl = document.getElementById("preview-intro");
+	const statusEl = document.getElementById("preview-status");
+	const errorEl = document.getElementById("preview-error");
+	const samplesEl = document.getElementById("preview-samples");
+	const staleEl = document.getElementById("preview-stale-banner");
+	const runBtn = document.getElementById("preview-run-btn");
+	const cancelBtn = document.getElementById("preview-cancel-btn");
+	const clearBtn = document.getElementById("preview-clear-btn");
+
+	const status = state?.status || "idle";
+	const isRunning = status === "running";
+	const hasResults = (state?.samples?.length || 0) > 0;
+	const isFinished = status === "done" || status === "error" || status === "cancelled";
+
+	const stale = state?.settingsFingerprint && state.settingsFingerprint !== currentPreviewSettingsFingerprint;
+	staleEl.style.display = stale && hasResults ? "" : "none";
+
+	introEl.style.display = status === "idle" ? "" : "none";
+
+	if (isRunning) {
+		statusEl.style.display = "";
+		const pct = (state.progress || 0).toFixed(1);
+		document.getElementById("preview-status-label").textContent = state.currentDetail || "Encoding…";
+		document.getElementById("preview-status-pct").textContent = `${pct}%`;
+		document.getElementById("preview-progress-fill").style.width = `${pct}%`;
+		document.getElementById("preview-status-detail").textContent = `${state.samples?.length || 0} of ${state.sampleCount} samples done`;
+	} else {
+		statusEl.style.display = "none";
+	}
+
+	if (status === "error" && state.error) {
+		errorEl.textContent = state.error;
+		errorEl.style.display = "";
+	} else {
+		errorEl.style.display = "none";
+	}
+
+	if (hasResults) {
+		samplesEl.style.display = "";
+		renderPreviewSamples(state.jobId, state.samples);
+	} else {
+		samplesEl.style.display = "none";
+	}
+
+	runBtn.disabled = isRunning;
+	runBtn.textContent = isFinished || hasResults ? "Re-run Preview" : "Run Preview";
+	runBtn.style.display = isRunning ? "none" : "";
+	cancelBtn.style.display = isRunning ? "" : "none";
+	clearBtn.style.display = !isRunning && hasResults ? "" : "none";
+}
+
+function renderPreviewSamples(jobId, samples) {
+	const container = document.getElementById("preview-samples");
+
+	const desiredKey = samples.map((s) => s.index).join(",");
+	if (container.dataset.renderedKey === desiredKey) return;
+	container.dataset.renderedKey = desiredKey;
+	container.innerHTML = "";
+
+	for (const sample of samples) {
+		const card = document.createElement("div");
+		card.className = "preview-sample";
+		card.dataset.idx = String(sample.index);
+		card.dataset.viewing = "source";
+
+		const ts = formatTimestamp(sample.timestampSec);
+		const projected = sample.projectedTotalHuman || "—";
+		const sizeStr = sample.encodedSizeHuman || "—";
+		const bitrate = formatBitrate(sample.encodedBitrateKbps);
+
+		card.innerHTML = `
+			<div class="preview-sample-image" data-action="toggle">
+				<div class="preview-img-loading">Loading…</div>
+				<img alt="Preview sample ${sample.index + 1}" style="display: none">
+				<span class="preview-sample-tag is-source">Source</span>
+				<button class="preview-fullscreen-btn" type="button" title="View fullscreen" aria-label="View preview sample fullscreen" data-action="fullscreen">
+					<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+				</button>
+				<span class="preview-sample-hint">Click to toggle</span>
+			</div>
+			<div class="preview-sample-meta">
+				<div class="preview-sample-meta-row">
+					<span class="meta-label">Sample ${sample.index + 1} · ${ts}</span>
+					<span class="meta-value">${bitrate}</span>
+				</div>
+				<div class="preview-sample-meta-row">
+					<span class="meta-label">Clip size</span>
+					<span class="meta-value">${escapeHtml(sizeStr)}</span>
+				</div>
+				<div class="preview-sample-meta-row">
+					<span class="meta-label">Projected total</span>
+					<span class="meta-value">${escapeHtml(projected)}</span>
+				</div>
+				<div class="preview-sample-actions">
+					<button class="btn btn-ghost" data-dl="source">Source PNG</button>
+					<button class="btn btn-ghost" data-dl="encode">Encode PNG</button>
+					<button class="btn btn-ghost" data-dl="clip">Clip MKV</button>
+				</div>
+			</div>`;
+
+		container.appendChild(card);
+
+		(async () => {
+			try {
+				const sourceUrl = await fetchPreviewArtifactBlob(jobId, sample.index, "source");
+				await fetchPreviewArtifactBlob(jobId, sample.index, "encode"); // warm cache
+				const img = card.querySelector("img");
+				img.src = sourceUrl;
+				img.style.display = "";
+				card.querySelector(".preview-img-loading").style.display = "none";
+			} catch (e) {
+				card.querySelector(".preview-img-loading").textContent = `Failed to load: ${e.message || e}`;
+			}
+		})();
+	}
+}
+
+function formatTimestamp(sec) {
+	const total = Math.floor(sec);
+	const h = Math.floor(total / 3600);
+	const m = Math.floor((total % 3600) / 60);
+	const s = total % 60;
+	const pad = (n) => String(n).padStart(2, "0");
+	return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+async function setPreviewSampleView(card, view) {
+	const jobId = currentPreviewJobId;
+	const idx = parseInt(card.dataset.idx, 10);
+	if (!jobId || !Number.isFinite(idx)) return;
+
+	try {
+		const url = await fetchPreviewArtifactBlob(jobId, idx, view);
+		const img = card.querySelector("img");
+
+		if (img) img.src = url;
+		card.dataset.viewing = view;
+
+		const label = view === "source" ? "Source" : "Encode";
+		const tag = card.querySelector(".preview-sample-tag");
+		if (tag) {
+			tag.textContent = label;
+			tag.classList.toggle("is-source", view === "source");
+			tag.classList.toggle("is-encode", view === "encode");
+		}
+
+		if (currentPreviewFullscreenCard === card) {
+			const fsImg = document.getElementById("preview-fullscreen-img");
+			const fsTag = document.getElementById("preview-fullscreen-tag");
+			if (fsImg) fsImg.src = url;
+			if (fsTag) {
+				fsTag.textContent = label;
+				fsTag.classList.toggle("is-source", view === "source");
+				fsTag.classList.toggle("is-encode", view === "encode");
+			}
+		}
+	} catch (e) {
+		console.error("Preview image switch failed:", e);
+	}
+}
+
+async function togglePreviewSampleView(card) {
+	const next = card.dataset.viewing === "source" ? "encode" : "source";
+	await setPreviewSampleView(card, next);
+}
+
+async function openPreviewFullscreen(card) {
+	if (!card) return;
+	currentPreviewFullscreenCard = card;
+	const idx = parseInt(card.dataset.idx, 10);
+	const view = card.dataset.viewing || "source";
+	const modal = document.getElementById("preview-fullscreen-modal");
+	const title = document.getElementById("preview-fullscreen-title");
+	const img = document.getElementById("preview-fullscreen-img");
+	const loading = document.getElementById("preview-fullscreen-loading");
+
+	if (!modal || !title || !img || !loading) return;
+
+	title.textContent = `Preview sample ${idx + 1}`;
+	img.style.display = "none";
+	loading.style.display = "";
+	loading.textContent = "Loading…";
+	modal.style.display = "";
+
+	try {
+		const url = await fetchPreviewArtifactBlob(currentPreviewJobId, idx, view);
+		img.src = url;
+		img.style.display = "";
+		loading.style.display = "none";
+		await setPreviewSampleView(card, view);
+	} catch (e) {
+		loading.textContent = `Failed to load: ${e.message || e}`;
+	}
+}
+
+function closePreviewFullscreen() {
+	const modal = document.getElementById("preview-fullscreen-modal");
+	if (modal) modal.style.display = "none";
+	currentPreviewFullscreenCard = null;
+}
+
+function closePreviewFullscreenIfOutside(e) {
+	if (e.target === e.currentTarget) closePreviewFullscreen();
+}
+
+async function downloadPreviewSampleArtifact(jobId, idx, kind) {
+	try {
+		const url = await fetchPreviewArtifactBlob(jobId, idx, kind);
+		const a = document.createElement("a");
+		a.href = url;
+		const ext = kind === "clip" ? "mkv" : "png";
+		const role = kind === "clip" ? "clip" : `${kind}-frame`;
+		a.download = `preview-${role}-sample${idx + 1}.${ext}`;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+	} catch (e) {
+		console.error("Download failed:", e);
+	}
+}
+
+async function handlePreviewRun() {
+	if (!currentPreviewJobId) return;
+	const runBtn = document.getElementById("preview-run-btn");
+	runBtn.disabled = true;
+	runBtn.textContent = "Starting…";
+	clearPreviewBlobCache();
+	const samplesEl = document.getElementById("preview-samples");
+	if (samplesEl) samplesEl.dataset.renderedKey = "";
+
+	try {
+		const result = await startPreviewRequest(currentPreviewJobId);
+		if (result.error) {
+			document.getElementById("preview-error").textContent = result.error;
+			document.getElementById("preview-error").style.display = "";
+			runBtn.disabled = false;
+			runBtn.textContent = "Run Preview";
+			return;
+		}
+		renderPreviewState(result);
+		startPreviewPolling();
+	} catch (e) {
+		document.getElementById("preview-error").textContent = `Failed to start: ${e.message || e}`;
+		document.getElementById("preview-error").style.display = "";
+		runBtn.disabled = false;
+		runBtn.textContent = "Run Preview";
+	}
+}
+
+async function handlePreviewCancel() {
+	if (!currentPreviewJobId) return;
+	const cancelBtn = document.getElementById("preview-cancel-btn");
+	cancelBtn.disabled = true;
+	try {
+		await cancelPreviewRequest(currentPreviewJobId);
+		await refreshPreviewModal();
+	} catch (e) {
+		console.error("Cancel failed:", e);
+	} finally {
+		cancelBtn.disabled = false;
+	}
+}
+
+async function handlePreviewClear() {
+	if (!currentPreviewJobId) return;
+	try {
+		await cancelPreviewRequest(currentPreviewJobId);
+		clearPreviewBlobCache();
+		const samplesEl = document.getElementById("preview-samples");
+		samplesEl.dataset.renderedKey = "";
+		await refreshPreviewModal();
+	} catch (e) {
+		console.error("Clear failed:", e);
+	}
 }
 
 function getMinQueueOrder(node) {
@@ -690,6 +1069,16 @@ function formatBitrate(raw) {
 	return `${kbps} kbps`;
 }
 
+function formatBitrate2(kbps) {
+	if (!kbps) return "—";
+
+	if (kbps >= 1000) {
+		return `${(kbps / 1000).toFixed(2)} Mbps`;
+	}
+
+	return `${kbps} kbps`;
+}
+
 function renderAudioTrack(track, isOutput) {
 	const badges = [];
 	if (track.isDefault) badges.push('<span class="sub-badge sub-badge-default">Default</span>');
@@ -857,6 +1246,12 @@ function renderJobCard(job) {
     </svg>
   </button>`;
 
+	const previewBtn = `<button class="btn-icon" title="Preview Encode" data-job-id="${job.id}" data-action="preview">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polygon points="5 3 19 12 5 21 5 3"/>
+    </svg>
+  </button>`;
+
 	let actions = "";
 	if (job.status === "queued") {
 		actions = `
@@ -871,6 +1266,7 @@ function renderJobCard(job) {
 			${infoBtn}
 			${audioBtn}
 			${subBtn}
+			${previewBtn}
       <button class="btn-icon" title="Settings" data-job-id="${job.id}" data-action="edit">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
       </button>
@@ -882,6 +1278,7 @@ function renderJobCard(job) {
 			${infoBtn}
 			${audioBtn}
 			${subBtn}
+			${previewBtn}
       <button class="btn-icon btn-cancel" title="Cancel" data-job-id="${job.id}" data-action="cancel">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
       </button>`;
@@ -890,6 +1287,7 @@ function renderJobCard(job) {
 			${infoBtn}
 			${audioBtn}
 			${subBtn}
+			${previewBtn}
       <button class="btn-icon" title="Retry" data-job-id="${job.id}" data-action="retry">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
       </button>
@@ -2366,6 +2764,12 @@ function initEventListeners() {
 	document.getElementById("benchmark-run-btn").addEventListener("click", handleBenchmarkRun);
 	document.getElementById("benchmark-cancel-btn").addEventListener("click", handleBenchmarkCancel);
 
+	document.getElementById("close-preview-modal-btn").addEventListener("click", closePreviewModal);
+	document.getElementById("preview-modal").addEventListener("click", closePreviewModalIfOutside);
+	document.getElementById("preview-run-btn").addEventListener("click", handlePreviewRun);
+	document.getElementById("preview-cancel-btn").addEventListener("click", handlePreviewCancel);
+	document.getElementById("preview-clear-btn").addEventListener("click", handlePreviewClear);
+
 	document.getElementById("login-submit-btn").addEventListener("click", handleLogin);
 	document.getElementById("login-password").addEventListener("keydown", (e) => {
 		if (e.key === "Enter") handleLogin();
@@ -2417,6 +2821,8 @@ function initEventListeners() {
 			doRetry(jobId);
 		} else if (action === "cancel") {
 			cancelJob(jobId).then(() => update());
+		} else if (action === "preview") {
+			openPreviewModal(jobId);
 		} else if (action === "sub-preview") {
 			openSubtitlePreview(jobId);
 		} else if (action === "audio-preview") {
@@ -2424,6 +2830,34 @@ function initEventListeners() {
 		} else if (action === "mediainfo") {
 			openMediaInfo(jobId);
 		}
+	});
+
+	document.getElementById("preview-samples").addEventListener("click", (e) => {
+		const card = e.target.closest(".preview-sample");
+		if (!card) return;
+		const dlBtn = e.target.closest("[data-dl]");
+		if (dlBtn) {
+			e.stopPropagation();
+			downloadPreviewSampleArtifact(currentPreviewJobId, parseInt(card.dataset.idx, 10), dlBtn.dataset.dl);
+			return;
+		}
+		const fullscreenBtn = e.target.closest('[data-action="fullscreen"]');
+		if (fullscreenBtn) {
+			e.stopPropagation();
+			openPreviewFullscreen(card);
+			return;
+		}
+		const toggleHost = e.target.closest('[data-action="toggle"]');
+		if (toggleHost) togglePreviewSampleView(card);
+	});
+
+	document.getElementById("close-preview-fullscreen-btn").addEventListener("click", closePreviewFullscreen);
+	document.getElementById("preview-fullscreen-modal").addEventListener("click", closePreviewFullscreenIfOutside);
+	document.getElementById("preview-fullscreen-stage").addEventListener("click", () => {
+		if (currentPreviewFullscreenCard) togglePreviewSampleView(currentPreviewFullscreenCard);
+	});
+	document.addEventListener("keydown", (e) => {
+		if (e.key === "Escape") closePreviewFullscreen();
 	});
 
 	document.getElementById("open-library-btn").addEventListener("click", openLibrary);

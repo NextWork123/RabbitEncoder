@@ -15,6 +15,10 @@ import {
 	isQueuePaused,
 	pauseQueue,
 	resumeQueue,
+	getPreviewState,
+	startPreview,
+	cancelPreview,
+	clearPreviewFor,
 } from "./store";
 import { startWatcher } from "./watcher";
 import { browseFolder, isPathAllowed } from "./library";
@@ -30,6 +34,7 @@ import { probeFile } from "./probe";
 import { cancelBenchmark, getBenchmarkState, startBenchmark } from "./benchmark";
 import { listOpenClDevices } from "./opencl";
 import { listVulkanDevices } from "./vulkan";
+import { resolvePreviewArtifact } from "./preview-encoder";
 
 export const config = await loadConfig();
 
@@ -202,6 +207,59 @@ app.post("/api/jobs/reorder", async (c) => {
 	}
 	reorderJobs(body.ids);
 	return c.json({ ok: true });
+});
+
+app.get("/api/jobs/:id/preview", (c) => {
+	const state = getPreviewState(c.params.id!);
+	if (!state) return c.json({ status: "idle" });
+	return c.json(state);
+});
+
+app.post("/api/jobs/:id/preview", (c) => {
+	const result = startPreview(c.params.id!);
+	if (!result.ok) return c.json({ error: result.error }, result.status);
+	return c.json(result.state);
+});
+
+app.delete("/api/jobs/:id/preview", (c) => {
+	const cancelled = cancelPreview(c.params.id!);
+	if (!cancelled) {
+		clearPreviewFor(c.params.id!);
+		return c.json({ ok: true, cleared: true });
+	}
+	return c.json({ ok: true, cancelled: true });
+});
+
+app.get("/api/jobs/:id/preview/sample/:index/:kind", (c) => {
+	const jobId = c.params.id!;
+	const idx = parseInt(c.params.index!, 10);
+	const kind = c.params.kind as "source" | "encode" | "clip";
+
+	if (Number.isNaN(idx) || !["source", "encode", "clip"].includes(kind)) {
+		return c.json({ error: "Bad request" }, 400);
+	}
+
+	const path = resolvePreviewArtifact(config, jobId, idx, kind);
+	if (!path) return c.json({ error: "Artifact not found" }, 404);
+
+	const file = Bun.file(path);
+
+	if (kind === "clip") {
+		return new Response(file, {
+			headers: {
+				"Content-Type": "video/x-matroska",
+				"Content-Disposition": `attachment; filename="job_${jobId}_sample_${idx + 1}.mkv"`,
+				"Cache-Control": "private, max-age=0, must-revalidate",
+			},
+		});
+	}
+
+	return new Response(file, {
+		headers: {
+			"Content-Type": "image/png",
+			"Cache-Control": "private, max-age=60",
+		},
+	});
 });
 
 app.get("/api/config", (c) => {

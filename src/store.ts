@@ -1,10 +1,11 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { resolve, dirname, join, extname, relative, basename } from "path";
-import { type Job, type JobSettings, type AppConfig, type DenoiseBackend, MEDIA_EXTENSIONS } from "./types";
+import { type Job, type JobSettings, type AppConfig, type DenoiseBackend, type PreviewState, MEDIA_EXTENSIONS } from "./types";
 import { encodeJob, CancelledError } from "./encoder";
 import { isAlreadyEncoded } from "./library";
 import { Logger } from "./logger";
 import { DEFAULT_NLMEANS_PARAMS, DEFAULT_GRADFUN_PARAMS, normalizeNlmeansLevelParams, normalizeGradfunLevelParams } from "./filters";
+import { runPreviewEncode, deletePreviewDir, previewSettingsFingerprint, DEFAULT_PREVIEW_OPTIONS } from "./preview-encoder";
 
 const jobs = new Map<string, Job>();
 let paused = false;
@@ -14,6 +15,10 @@ let appConfig: AppConfig;
 let queueFile = "";
 let activeAbortController: AbortController | null = null;
 let activeJobId: string | null = null;
+
+const previews = new Map<string, PreviewState>();
+let activePreviewJobId: string | null = null;
+let activePreviewAbort: AbortController | null = null;
 
 const VALID_DENOISE_BACKENDS: DenoiseBackend[] = ["cpu", "auto", "vulkan", "opencl"];
 
@@ -417,6 +422,7 @@ export function removeJob(id: string): boolean {
 	if (!job) return false;
 	if (job.status !== "queued" && job.status !== "done" && job.status !== "error" && job.status !== "cancelled") return false;
 	jobs.delete(id);
+	clearPreviewFor(id);
 	saveQueue();
 	return true;
 }
@@ -501,6 +507,8 @@ async function processQueue() {
 		.sort((a, b) => a.queueOrder - b.queueOrder)[0];
 	if (!next) return;
 
+	clearPreviewFor(next.id);
+
 	processing = true;
 	next.startedAt = Date.now();
 	saveQueue();
@@ -541,4 +549,101 @@ async function processQueue() {
 	processing = false;
 	saveQueue();
 	processQueue();
+}
+
+export function getPreviewState(jobId: string): PreviewState | null {
+	return previews.get(jobId) ?? null;
+}
+
+export function isPreviewRunning(): boolean {
+	return activePreviewJobId !== null;
+}
+
+export type StartPreviewResult = { ok: true; state: PreviewState } | { ok: false; error: string; status: 400 | 404 | 409 };
+
+export function startPreview(jobId: string): StartPreviewResult {
+	if (activePreviewJobId !== null) {
+		return { ok: false, error: `Another preview is already running (job ${activePreviewJobId})`, status: 409 };
+	}
+
+	const job = jobs.get(jobId);
+	if (!job) return { ok: false, error: "Job not found", status: 404 };
+	if (job.status === "done") return { ok: false, error: "Preview only available for unfinished jobs", status: 400 };
+
+	const controller = new AbortController();
+	activePreviewJobId = jobId;
+	activePreviewAbort = controller;
+
+	const state: PreviewState = {
+		jobId,
+		status: "running",
+		progress: 0,
+		currentDetail: "Starting…",
+		samples: [],
+		settingsFingerprint: previewSettingsFingerprint(job.settings),
+		sampleCount: DEFAULT_PREVIEW_OPTIONS.sampleCount,
+		windowSeconds: DEFAULT_PREVIEW_OPTIONS.windowSeconds,
+		startedAt: Date.now(),
+	};
+	previews.set(jobId, state);
+
+	(async () => {
+		try {
+			await runPreviewEncode({
+				job,
+				config: appConfig,
+				signal: controller.signal,
+				onUpdate: (partial) => {
+					const cur = previews.get(jobId);
+					if (cur) Object.assign(cur, partial);
+				},
+			});
+			const cur = previews.get(jobId);
+			if (cur) {
+				cur.status = "done";
+				cur.progress = 100;
+				cur.currentDetail = "Complete";
+				cur.finishedAt = Date.now();
+			}
+			Logger.info(`[preview] Job ${jobId} preview complete`);
+		} catch (err) {
+			const cur = previews.get(jobId);
+			if (cur) {
+				if (err instanceof CancelledError) {
+					cur.status = "cancelled";
+					cur.currentDetail = "Cancelled";
+				} else {
+					cur.status = "error";
+					cur.error = err instanceof Error ? err.message : String(err);
+					cur.currentDetail = "Failed";
+				}
+				cur.finishedAt = Date.now();
+			}
+			Logger.warn(`[preview] Job ${jobId} preview ended: ${err instanceof Error ? err.message : err}`);
+		} finally {
+			if (activePreviewJobId === jobId) {
+				activePreviewJobId = null;
+				activePreviewAbort = null;
+			}
+		}
+	})();
+
+	return { ok: true, state };
+}
+
+export function cancelPreview(jobId: string): boolean {
+	if (activePreviewJobId !== jobId || !activePreviewAbort) return false;
+	Logger.info(`[preview] Cancelling preview for job ${jobId}`);
+	activePreviewAbort.abort();
+	return true;
+}
+
+export function clearPreviewFor(jobId: string): void {
+	if (activePreviewJobId === jobId && activePreviewAbort) {
+		activePreviewAbort.abort();
+		activePreviewJobId = null;
+		activePreviewAbort = null;
+	}
+	previews.delete(jobId);
+	deletePreviewDir(appConfig, jobId);
 }
