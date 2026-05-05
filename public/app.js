@@ -424,7 +424,7 @@ function renderPreviewSamples(jobId, samples) {
 		const ts = formatTimestamp(sample.timestampSec);
 		const projected = sample.projectedTotalHuman || "—";
 		const sizeStr = sample.encodedSizeHuman || "—";
-		const bitrate = formatBitrate(sample.encodedBitrateKbps);
+		const bitrate = formatBitrate2(sample.encodedBitrateKbps);
 
 		card.innerHTML = `
 			<div class="preview-sample-image" data-action="toggle">
@@ -450,9 +450,9 @@ function renderPreviewSamples(jobId, samples) {
 					<span class="meta-value">${escapeHtml(projected)}</span>
 				</div>
 				<div class="preview-sample-actions">
-					<button class="btn btn-ghost" data-dl="source">Source PNG</button>
-					<button class="btn btn-ghost" data-dl="encode">Encode PNG</button>
-					<button class="btn btn-ghost" data-dl="clip">Clip MKV</button>
+					<button class="btn btn-ghost" data-dl="source">Source</button>
+					<button class="btn btn-ghost" data-dl="encode">Encode</button>
+					<button class="btn btn-ghost" data-dl="clip">Clip</button>
 				</div>
 			</div>`;
 
