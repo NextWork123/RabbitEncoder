@@ -6,9 +6,9 @@ import { formatNlmeansParams, isOpenClAvailable, isVulkanAvailable, defaultDevic
 import type { AutoDenoiseThresholds, DenoiseBackend, GpuBackend, NlmeansLevelParams } from "./types";
 
 export const DEFAULT_AUTO_THRESHOLDS: AutoDenoiseThresholds = {
-	light: 0.4,
-	medium: 0.55,
-	heavy: 0.75,
+	light: 0.5,
+	medium: 0.7,
+	heavy: 0.9,
 };
 
 export interface DenoiseRange {

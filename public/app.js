@@ -28,7 +28,7 @@ const DEFAULT_GRADFUN_PARAMS = {
 	medium: { strength: 1.4, radius: 16 },
 	heavy: { strength: 2.8, radius: 24 },
 };
-const DEFAULT_AUTO_THRESHOLDS = { light: 0.4, medium: 0.55, heavy: 0.75 };
+const DEFAULT_AUTO_THRESHOLDS = { light: 0.5, medium: 0.7, heavy: 0.9 };
 
 const CHANNELS = [
 	{ key: "mono", label: "Mono" },

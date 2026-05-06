@@ -34,9 +34,9 @@ services:
       # Auto denoise thresholds (Y bitplane-4 medians from FFmpeg's bitplanenoise filter).
       # Only used when ENCODER_DENOISE=auto. Scenes with values >= each threshold get
       # the corresponding denoise level. Must satisfy light <= medium <= heavy.
-      - ENCODER_DENOISE_AUTO_LIGHT=0.4
-      - ENCODER_DENOISE_AUTO_MEDIUM=0.55
-      - ENCODER_DENOISE_AUTO_HEAVY=0.77
+      - ENCODER_DENOISE_AUTO_LIGHT=0.5
+      - ENCODER_DENOISE_AUTO_MEDIUM=0.7
+      - ENCODER_DENOISE_AUTO_HEAVY=0.9
 
       # Backend used for the nlmeans denoise filter:
       #   cpu    - never use GPU (software nlmeans)
