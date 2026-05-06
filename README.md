@@ -11,7 +11,8 @@ Drop media files into the `input` folder and get optimally encoded MKV files in 
 - **HDR10 metadata** preservation (PQ, BT.2020, mastering display, content light)
 - **Web dashboard** for monitoring progress and configuring per-file settings
 - **File watcher** auto-detects new files in the input directory
-- **Queue system** processes files sequentially
+- **Queue system** processes files sequentially, with drag-and-drop reordering and pause/resume
+- **Preview encoding** generate 6 short comparison clips spread across the source so you can A/B source vs encode before committing the full job
 - **Library encoding** browse mounted media folders from the UI and encode in-place, replacing source files
 - **Jellyfin / Sonarr integration** automatically cleans up `.nfo` and thumbnail files when replacing sources so metadata is regenerated
 - **Smart skip** already-encoded files (detected by `-{ORGANIZATION}` suffix) are recognized and skipped
@@ -44,9 +45,9 @@ All settings are configurable via environment variables in `docker-compose.yml`:
 | `ENCODER_DENOISE`                       | `off`           | Default denoise level (`off`, `auto`, `light`, `medium`, `heavy`)                                      |
 | `ENCODER_DENOISE_BACKEND`               | `auto`          | Denoise backend: `cpu`, `auto`, `vulkan`, `opencl`. `cpu` forces software nlmeans.                     |
 | `ENCODER_DENOISE_GPU_DEVICE`            | `0.0`           | GPU device id (ignored when backend is `cpu`). `0` for vulkan, `<platform>.<device>` for opencl.       |
-| `ENCODER_DENOISE_AUTO_THRESHOLD_LIGHT`  | `0.4`           | Y bitplane-4 threshold above which scenes get `light` denoise (only used when `ENCODER_DENOISE=auto`). |
-| `ENCODER_DENOISE_AUTO_THRESHOLD_MEDIUM` | `0.55`          | Y bitplane-4 threshold above which scenes get `medium` denoise.                                        |
-| `ENCODER_DENOISE_AUTO_THRESHOLD_HEAVY`  | `0.75`          | Y bitplane-4 threshold above which scenes get `heavy` denoise.                                         |
+| `ENCODER_DENOISE_AUTO_THRESHOLD_LIGHT`  | `0.5`           | Y bitplane-4 threshold above which scenes get `light` denoise (only used when `ENCODER_DENOISE=auto`). |
+| `ENCODER_DENOISE_AUTO_THRESHOLD_MEDIUM` | `0.7`           | Y bitplane-4 threshold above which scenes get `medium` denoise.                                        |
+| `ENCODER_DENOISE_AUTO_THRESHOLD_HEAVY`  | `0.9`           | Y bitplane-4 threshold above which scenes get `heavy` denoise.                                         |
 | `ENCODER_DENOISE_LIGHT_S`               | `1.0`           | NLMeans strength `s` for `light` level (float [1.0 – 30.0]).                                           |
 | `ENCODER_DENOISE_LIGHT_P`               | `3`             | NLMeans patch size `p` for `light` level (odd int [1 – 99]).                                           |
 | `ENCODER_DENOISE_LIGHT_R`               | `7`             | NLMeans research size `r` for `light` level (odd int [1 – 99]).                                        |
@@ -66,7 +67,7 @@ All settings are configurable via environment variables in `docker-compose.yml`:
 | `ENCODER_DOWNSCALE`                     | `false`         | Downscale 4K sources to 1080p before encoding.                                                         |
 | `ENCODER_SKIP_BOOSTING`                 | `false`         | Skip boosting — bypass per-scene CRF zone analysis.                                                    |
 | `ENCODER_DEDUPE_SUBTITLES`              | `false`         | Keep only one subtitle per language + type.                                                            |
-| `ENCODER_NO_PHASE_INV`                  | `false`         | Disable phase inversion (`--no-phase-inv`) for AV1 encoding.                                           |
+| `AUDIO_NO_PHASE_INV`                    | `false`         | Disable phase inversion (`--no-phase-inv`) for AV1 encoding.                                           |
 | `AUDIO_LANGUAGES`                       | _(empty)_       | Comma-separated audio language codes to keep (empty = keep all).                                       |
 | `SUBTITLE_LANGUAGES`                    | _(empty)_       | Comma-separated subtitle language codes to keep (empty = keep all).                                    |
 | `ORGANIZATION`                          | `RabbitCompany` | Tag appended to encoded filenames (e.g. `-RabbitCompany`).                                             |
@@ -86,6 +87,7 @@ The dashboard at `http://localhost:3000` shows:
 - **Per-file settings** (quality, speed, audio bitrates) editable while queued
 - **Live progress** tracking through all encoding stages
 - **Results** showing output file size and encode time
+- **Preview** generate a small set of comparison samples for any queued job and toggle between source and encode
 - **Library browser** for navigating and encoding mounted media folders
 
 ## Library Encoding
@@ -170,29 +172,36 @@ Source tags are detected from the input filename: `Bluray`, `WEBDL`, `WEBRip`, `
 
 ## API Endpoints
 
-| Method   | Endpoint                         | Description                                            |
-| -------- | -------------------------------- | ------------------------------------------------------ |
-| `GET`    | `/api/jobs`                      | List all jobs                                          |
-| `GET`    | `/api/jobs/:id`                  | Get job details                                        |
-| `PATCH`  | `/api/jobs/:id`                  | Update job settings (queued only)                      |
-| `DELETE` | `/api/jobs/:id`                  | Remove a job                                           |
-| `POST`   | `/api/jobs/:id/retry`            | Retry a failed job                                     |
-| `POST`   | `/api/jobs/:id/cancel`           | Cancel an actively encoding job                        |
-| `GET`    | `/api/jobs/:id/audio-preview`    | Preview audio reorder/filter/dedup for a job           |
-| `GET`    | `/api/jobs/:id/subtitle-preview` | Preview subtitle reorder/rename for a job              |
-| `GET`    | `/api/config`                    | Get default settings                                   |
-| `PATCH`  | `/api/config`                    | Update default settings                                |
-| `GET`    | `/api/library`                   | List configured library root directories               |
-| `GET`    | `/api/library/browse`            | Browse a library folder (`?path=/data/library/Animes`) |
-| `POST`   | `/api/library/encode`            | Queue all videos in a folder for in-place encoding     |
-| `GET`    | `/api/queue`                     | Get queue state (paused or running)                    |
-| `POST`   | `/api/queue/pause`               | Pause encoding - stops current encode, preserves queue |
-| `POST`   | `/api/queue/resume`              | Resume encoding from where it was paused               |
-| `GET`    | `/api/opencl-devices`            | List available OpenCL devices                          |
-| `GET`    | `/api/vulkan-devices`            | List available Vulkan devices                          |
-| `GET`    | `/api/benchmark`                 | Get current benchmark state                            |
-| `POST`   | `/api/benchmark`                 | Start a denoise benchmark run                          |
-| `DELETE` | `/api/benchmark`                 | Cancel a running benchmark                             |
+| Method   | Endpoint                                    | Description                                                                 |
+| -------- | ------------------------------------------- | --------------------------------------------------------------------------- |
+| `GET`    | `/api/jobs`                                 | List all jobs                                                               |
+| `GET`    | `/api/jobs/:id`                             | Get job details                                                             |
+| `PATCH`  | `/api/jobs/:id`                             | Update job settings (queued only)                                           |
+| `DELETE` | `/api/jobs/:id`                             | Remove a job                                                                |
+| `POST`   | `/api/jobs/:id/retry`                       | Retry a failed job                                                          |
+| `POST`   | `/api/jobs/:id/cancel`                      | Cancel an actively encoding job                                             |
+| `POST`   | `/api/jobs/:id/move`                        | Move a queued job in the queue (`direction`: `up`, `down`, `top`, `bottom`) |
+| `POST`   | `/api/jobs/reorder`                         | Set the entire queue order from a JSON `{ ids: [...] }` body                |
+| `GET`    | `/api/jobs/:id/audio-preview`               | Preview audio reorder/filter/dedup for a job                                |
+| `GET`    | `/api/jobs/:id/subtitle-preview`            | Preview subtitle reorder/rename for a job                                   |
+| `GET`    | `/api/jobs/:id/mediainfo`                   | Run `mediainfo` on the source file and return the report                    |
+| `GET`    | `/api/jobs/:id/preview`                     | Get preview-encode state for a job (`idle`, running, or completed samples)  |
+| `POST`   | `/api/jobs/:id/preview`                     | Start a preview encode (6 short comparison clips spread across the source)  |
+| `DELETE` | `/api/jobs/:id/preview`                     | Cancel a running preview, or clear completed preview artifacts              |
+| `GET`    | `/api/jobs/:id/preview/sample/:index/:kind` | Fetch a preview artifact. `kind`: `source` / `encode` (PNG) or `clip` (MKV) |
+| `GET`    | `/api/config`                               | Get default settings                                                        |
+| `PATCH`  | `/api/config`                               | Update default settings                                                     |
+| `GET`    | `/api/library`                              | List configured library root directories                                    |
+| `GET`    | `/api/library/browse`                       | Browse a library folder (`?path=/data/library/Animes`)                      |
+| `POST`   | `/api/library/encode`                       | Queue all videos in a folder for in-place encoding                          |
+| `GET`    | `/api/queue`                                | Get queue state (paused or running)                                         |
+| `POST`   | `/api/queue/pause`                          | Pause encoding - stops current encode, preserves queue                      |
+| `POST`   | `/api/queue/resume`                         | Resume encoding from where it was paused                                    |
+| `GET`    | `/api/opencl-devices`                       | List available OpenCL devices                                               |
+| `GET`    | `/api/vulkan-devices`                       | List available Vulkan devices                                               |
+| `GET`    | `/api/benchmark`                            | Get current benchmark state                                                 |
+| `POST`   | `/api/benchmark`                            | Start a denoise benchmark run                                               |
+| `DELETE` | `/api/benchmark`                            | Cancel a running benchmark                                                  |
 
 All API endpoints require authentication via `Authorization: Bearer <token>` header, where the token is the BLAKE2b-512 hash of `rabbitencoder-{PASSWORD}`.
 
