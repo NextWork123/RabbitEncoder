@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, rmSync, statSync } from "fs";
+import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "fs";
 import { join, parse as parsePath } from "path";
 import type { AppConfig, Job, JobSettings, PreviewSample, PreviewState, ProbeResult } from "./types";
 import { probeFile } from "./probe";
 import { CancelledError, describeExitCode, humanSize, run } from "./process";
 import { Logger } from "./logger";
 import { buildPrepareFilterConfig } from "./filters";
-import { FFV1_ENCODE_ARGS, runAnalysisPass } from "./auto-denoise";
+import { FFV1_ENCODE_ARGS, runAnalysisPass, runSegmentedAutoDenoiseGpu } from "./auto-denoise";
 
 export interface PreviewEncodeOptions {
 	sampleCount: number;
@@ -208,7 +208,7 @@ async function encodeSample(
 	checkCancelled();
 	onProgress(0.15, "Applying filters");
 
-	let prepareFilter = await buildPrepareFilterConfig({
+	const prepareFilter = await buildPrepareFilterConfig({
 		downscale: job.settings.downscale,
 		sourceHeight: probe.height,
 		denoise: job.settings.denoise,
@@ -221,20 +221,6 @@ async function encodeSample(
 		totalDuration: ctx.windowSec,
 	});
 
-	if (prepareFilter?.deferredAutoDenoise) {
-		Logger.info(`[preview] Sample ${ctx.index}: skipping deferred GPU auto-denoise (preview-only)`);
-		prepareFilter = await buildPrepareFilterConfig({
-			downscale: job.settings.downscale,
-			sourceHeight: probe.height,
-			denoise: "off",
-			denoiseBackend: job.settings.denoiseBackend,
-			deband: job.settings.deband,
-			gpuDevice: job.settings.gpuDevice,
-			nlmeansParams: job.settings.nlmeansParams,
-			gradfunParams: job.settings.gradfunParams,
-		});
-	}
-
 	let abeInput = sourceClip;
 	if (prepareFilter) {
 		const filterArgs = ["ffmpeg", "-y", ...prepareFilter.preInputArgs, "-i", sourceClip, ...colorArgs];
@@ -245,6 +231,38 @@ async function encodeSample(
 		if (filterRes.code !== 0) {
 			throw new Error(`Filter pass failed: ${filterRes.stderr.slice(-500)}`);
 		}
+		abeInput = filteredClip;
+	}
+
+	if (prepareFilter?.deferredAutoDenoise) {
+		checkCancelled();
+		onProgress(0.2, "Auto-denoise (segmented GPU)");
+
+		const { plan, backend, gpuDevice, nlmeansParams } = prepareFilter.deferredAutoDenoise;
+		const denoisedClip = join(ctx.dir, "denoised.mkv");
+
+		Logger.info(`[preview] Sample ${ctx.index}: running segmented GPU auto-denoise ` + `(${plan.length} ranges, ${backend} on device ${gpuDevice})`);
+
+		await runSegmentedAutoDenoiseGpu(
+			filteredClip,
+			denoisedClip,
+			plan,
+			ctx.windowSec,
+			backend,
+			gpuDevice,
+			ctx.dir,
+			nlmeansParams,
+			(i, n, label) => {
+				const segFrac = n > 0 ? i / n : 1;
+				onProgress(0.2 + 0.04 * segFrac, `Auto denoise — segment ${i}/${n} (${label})`);
+			},
+			signal,
+		);
+
+		try {
+			rmSync(filteredClip);
+		} catch {}
+		renameSync(denoisedClip, filteredClip);
 		abeInput = filteredClip;
 	}
 
