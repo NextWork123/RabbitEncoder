@@ -840,11 +840,10 @@ function renderAutoThresholds(container, thresholds, onChange) {
 		input.max = "1";
 		input.value = thresholds[key];
 		input.onchange = () => {
-			const v = parseFloat(input.value);
-			if (Number.isFinite(v)) {
-				thresholds[key] = v;
-				onChange({ ...thresholds });
-			}
+			const v = clampFloat(input.value, 0, 1);
+			thresholds[key] = v;
+			input.value = v;
+			onChange({ ...thresholds });
 		};
 		label.appendChild(span);
 		label.appendChild(input);
