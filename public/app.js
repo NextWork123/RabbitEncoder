@@ -64,6 +64,7 @@ function previewSettingsFingerprintFE(s) {
 		nlmeansParams: s.nlmeansParams,
 		gradfunParams: s.gradfunParams,
 		autoDenoiseThresholds: s.autoDenoiseThresholds,
+		vsFilters: s.vsFilters ?? [],
 	});
 }
 
@@ -1912,6 +1913,7 @@ async function openSettings() {
 		autoDenoiseThresholds: { ...(defaults.autoDenoiseThresholds || DEFAULT_AUTO_THRESHOLDS) },
 		nlmeansParams: defaults.nlmeansParams ? JSON.parse(JSON.stringify(defaults.nlmeansParams)) : JSON.parse(JSON.stringify(DEFAULT_NLMEANS_PARAMS)),
 		gradfunParams: defaults.gradfunParams ? JSON.parse(JSON.stringify(defaults.gradfunParams)) : JSON.parse(JSON.stringify(DEFAULT_GRADFUN_PARAMS)),
+		vsFilters: Array.isArray(defaults.vsFilters) ? JSON.parse(JSON.stringify(defaults.vsFilters)) : [],
 	};
 	window._tempDefaults = tempDefaults;
 
@@ -2319,6 +2321,7 @@ async function openJobSettings(jobId) {
 		autoDenoiseThresholds: { ...(job.settings.autoDenoiseThresholds || DEFAULT_AUTO_THRESHOLDS) },
 		nlmeansParams: job.settings.nlmeansParams ? JSON.parse(JSON.stringify(job.settings.nlmeansParams)) : JSON.parse(JSON.stringify(DEFAULT_NLMEANS_PARAMS)),
 		gradfunParams: job.settings.gradfunParams ? JSON.parse(JSON.stringify(job.settings.gradfunParams)) : JSON.parse(JSON.stringify(DEFAULT_GRADFUN_PARAMS)),
+		vsFilters: Array.isArray(job.settings.vsFilters) ? JSON.parse(JSON.stringify(job.settings.vsFilters)) : [],
 	};
 	window._tempJobSettings = tempSettings;
 

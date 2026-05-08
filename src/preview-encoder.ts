@@ -6,6 +6,7 @@ import { CancelledError, describeExitCode, humanSize, run } from "./process";
 import { Logger } from "./logger";
 import { buildPrepareFilterConfig } from "./filters";
 import { FFV1_ENCODE_ARGS, runAnalysisPass, runSegmentedAutoDenoiseGpu } from "./auto-denoise";
+import { formatVsProgressDetail, runVsPass, vsRegistry } from "./vs-filters";
 
 export interface PreviewEncodeOptions {
 	sampleCount: number;
@@ -190,6 +191,60 @@ async function encodeSample(
 	);
 	if (extractRes.code !== 0) {
 		throw new Error(`Source clip extraction failed: ${extractRes.stderr.slice(-500)}`);
+	}
+
+	// 1.5. VapourSynth filter chain
+	const activeVsEntries = (job.settings.vsFilters ?? []).filter((e) => e.level !== "off");
+
+	if (activeVsEntries.length > 0) {
+		const totalFrames = Math.max(1, Math.round(ctx.windowSec * probe.videoStreamFps));
+		let currentInput = sourceClip;
+
+		for (let i = 0; i < activeVsEntries.length; i++) {
+			checkCancelled();
+			const entry = activeVsEntries[i]!;
+			const manifest = vsRegistry.get(entry.presetId);
+			if (!manifest) {
+				Logger.warn(`[preview] Skipping unknown VS preset: ${entry.presetId}`);
+				continue;
+			}
+
+			const outPath = join(ctx.dir, `vs_${i}_${manifest.bareId}.mkv`);
+			const passBaseFrac = i / activeVsEntries.length;
+			const passShareFrac = 1 / activeVsEntries.length;
+
+			Logger.info(`[preview] Sample ${ctx.index} VS pass ${i + 1}/${activeVsEntries.length}: ` + `${manifest.id} level=${entry.level}`);
+			onProgress(0.05 + 0.05 * passBaseFrac, formatVsProgressDetail(manifest.name, entry.level, 0, totalFrames, null));
+
+			await runVsPass({
+				manifest,
+				entry,
+				inputPath: currentInput,
+				outputPath: outPath,
+				totalFrames,
+				signal,
+				onProgress: (current, fps) => {
+					const passFrac = totalFrames > 0 ? current / totalFrames : 0;
+					onProgress(0.05 + 0.05 * (passBaseFrac + passShareFrac * passFrac), formatVsProgressDetail(manifest.name, entry.level, current, totalFrames, fps));
+				},
+			});
+
+			if (currentInput !== sourceClip) {
+				try {
+					rmSync(currentInput);
+				} catch {}
+			}
+			currentInput = outPath;
+		}
+
+		if (currentInput !== sourceClip) {
+			try {
+				rmSync(sourceClip);
+			} catch {}
+			renameSync(currentInput, sourceClip);
+		}
+
+		Logger.info(`[preview] Sample ${ctx.index}: VS chain complete (${activeVsEntries.length} pass(es))`);
 	}
 
 	// 2. Optional per-clip auto-denoise analysis.

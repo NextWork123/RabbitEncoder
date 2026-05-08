@@ -205,6 +205,9 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 	if (settings.gradfunParams) {
 		appConfig.defaults.gradfunParams = normalizeGradfunLevelParams(settings.gradfunParams, appConfig.defaults.gradfunParams);
 	}
+	if (Array.isArray(settings.vsFilters)) {
+		appConfig.defaults.vsFilters = normalizeVsFilterChain(settings.vsFilters);
+	}
 	if (settings.audioBitrates) {
 		appConfig.defaults.audioBitrates = {
 			...appConfig.defaults.audioBitrates,
