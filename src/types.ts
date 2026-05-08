@@ -94,6 +94,13 @@ export interface JobSettings {
 	dedupeSubtitles: boolean;
 	audioLanguages: string[];
 	subtitleLanguages: string[];
+	/**
+	 * Ordered list of VapourSynth filter passes to apply during the prepare
+	 * stage, before the FFmpeg -vf chain. Each entry references a preset by
+	 * namespaced id ("stock:finedehalo" or "user:my_dehalo"), selects an
+	 * active level, and stores per-level param values.
+	 */
+	vsFilters: VsFilterEntry[];
 }
 
 export interface AudioStreamInfo {
@@ -262,4 +269,57 @@ export interface PreviewState {
 	settingsFingerprint: string;
 	sampleCount: number;
 	windowSeconds: number;
+}
+
+export type VsParamType = "float" | "int" | "bool" | "enum";
+export type VsParamValue = number | boolean | string;
+export type VsPresetSource = "stock" | "user";
+
+export interface VsParamSpec {
+	key: string;
+	label: string;
+	type: VsParamType;
+	min?: number;
+	max?: number;
+	step?: number;
+	enum?: string[];
+	help?: string;
+	/** Per-level default values. Keys must match the preset's `levels` array. */
+	defaults: Record<string, VsParamValue>;
+}
+
+export interface VsPresetManifest {
+	/** Namespaced id: "stock:finedehalo" or "user:my_dehalo". */
+	id: string;
+	/** Bare id from the manifest file (without source prefix). */
+	bareId: string;
+	name: string;
+	description: string;
+	category?: string;
+	supports: { bitDepth: number[]; hdr: boolean };
+	/** Ordered list of level names this preset offers (e.g. ["light","medium","heavy"]). */
+	levels: string[];
+	params: VsParamSpec[];
+	source: VsPresetSource;
+	/** Absolute path to the .vpy script. */
+	scriptPath: string;
+	/** Absolute path to the .json manifest. */
+	manifestPath: string;
+}
+
+/**
+ * One entry in a job's VapourSynth filter chain.
+ *
+ *   presetId : namespaced id of the preset to run.
+ *   level    : "off" disables this entry without removing it; otherwise must
+ *              be one of the preset's declared levels.
+ *   params   : per-level override map. Pre-populated from manifest defaults
+ *              when the entry is created; users can edit individual values
+ *              in Advanced settings without losing other levels' tweaks.
+ *              Shape: { [level]: { [paramKey]: value } }
+ */
+export interface VsFilterEntry {
+	presetId: string;
+	level: string;
+	params: Record<string, Record<string, VsParamValue>>;
 }

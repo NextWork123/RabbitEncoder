@@ -35,7 +35,7 @@
 # MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 # IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
 # DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-# ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER 
+# ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
 from vstools import vs, core, depth, DitherType, clip_async_render
@@ -263,7 +263,7 @@ if stage != 0 and resume:
     raise SystemExit(1)
 
 if os.path.exists(tmp_dir):
-    if resume and os.path.exists(stage_file): 
+    if resume and os.path.exists(stage_file):
         with open(stage_file, "r") as file:
             lines = file.readlines()
             stage_resume = int(lines[0].strip())
@@ -280,7 +280,7 @@ if not os.path.exists(tmp_dir):
     os.makedirs(tmp_dir)
 
 if not os.path.exists(vpy_file):
-    with open(vpy_file, 'w') as file:          
+    with open(vpy_file, 'w') as file:
         file.write(
 f"""
 from vstools import vs, core, depth, DitherType, set_output
@@ -1062,7 +1062,7 @@ def calculate_zones(ranges: list[float], hr: bool, nframe: int) -> None:
                 file.write(f"Zones : {ranges[index]},{end_range-1},{new_crf};")
             else:
                 file.write(f"{ranges[index]},{end_range-1},{new_crf};")
-    
+
     emit_json("stage_complete", stage=3, label="Computed zones", total_zones=len(ranges))
     if not json_stream:
         console.print("[cyan]Successfully computed zones.")
@@ -1093,7 +1093,7 @@ match stage:
                 raise SystemExit(1)
             with open(stage_file, "w") as file:
                 file.write("3")
-            if not json_stream:    
+            if not json_stream:
                 print('Stage 2 complete!')
         if stage_resume < 4:
             try:
@@ -1106,7 +1106,7 @@ match stage:
                 raise SystemExit(1)
             with open(stage_file, "w") as file:
                 file.write("4")
-            if not json_stream:    
+            if not json_stream:
                 print('Stage 3 complete!')
         if stage_resume < 5:
             final_pass()

@@ -34,6 +34,7 @@ export function previewSettingsFingerprint(s: JobSettings): string {
 		nlmeansParams: s.nlmeansParams,
 		gradfunParams: s.gradfunParams,
 		autoDenoiseThresholds: s.autoDenoiseThresholds,
+		vsFilters: s.vsFilters ?? [],
 	});
 }
 

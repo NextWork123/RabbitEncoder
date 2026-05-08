@@ -6,6 +6,7 @@ import { isAlreadyEncoded } from "./library";
 import { Logger } from "./logger";
 import { DEFAULT_NLMEANS_PARAMS, DEFAULT_GRADFUN_PARAMS, normalizeNlmeansLevelParams, normalizeGradfunLevelParams } from "./filters";
 import { runPreviewEncode, deletePreviewDir, previewSettingsFingerprint, DEFAULT_PREVIEW_OPTIONS } from "./preview-encoder";
+import { normalizeVsFilterChain } from "./vs-filters";
 
 const jobs = new Map<string, Job>();
 let paused = false;
@@ -73,6 +74,8 @@ function migrateJobSettings(s: any, defaults: JobSettings): JobSettings {
 
 	// Audio bitrates merge
 	out.audioBitrates = { ...defaults.audioBitrates, ...(s?.audioBitrates ?? {}) };
+
+	out.vsFilters = normalizeVsFilterChain(s?.vsFilters ?? defaults.vsFilters);
 
 	return out;
 }
@@ -406,6 +409,11 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 	if (settings.gradfunParams) {
 		job.settings.gradfunParams = normalizeGradfunLevelParams(settings.gradfunParams, job.settings.gradfunParams);
 	}
+
+	if (Array.isArray(settings.vsFilters)) {
+		job.settings.vsFilters = normalizeVsFilterChain(settings.vsFilters);
+	}
+
 	if (settings.audioBitrates) {
 		job.settings.audioBitrates = {
 			...job.settings.audioBitrates,

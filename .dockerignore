@@ -3,7 +3,9 @@ dist/
 input/
 output/
 temp/
+vapoursynth-user/
 *.log
 .git/
 .gitignore
 README.md
+ffmpeg-dist/

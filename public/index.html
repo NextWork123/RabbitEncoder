@@ -260,6 +260,16 @@
 							<div id="advanced-gradfun-params"></div>
 							<div class="lang-filter-hint"><code>strength</code> = max change per pixel [0.51 – 64], <code>radius</code> = neighbourhood size [8 – 32].</div>
 						</div>
+
+						<div class="setting-group">
+							<label>VapourSynth Filters</label>
+							<div id="advanced-vs-chain"></div>
+							<div class="lang-filter-hint">
+								Each filter runs as its own pass before the FFmpeg filter chain. VapourSynth filters are CPU-bound and slower than FFmpeg filters – expect
+								noticeably longer prepare times.
+							</div>
+							<button class="btn btn-ghost" id="vs-reload-btn" type="button">Reload presets</button>
+						</div>
 					</div>
 					<div class="modal-footer">
 						<button class="btn btn-primary" id="close-advanced-done-btn">Done</button>

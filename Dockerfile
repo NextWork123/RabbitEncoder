@@ -45,15 +45,15 @@ EOF
 RUN apt-get update && apt-get install -y --no-install-recommends \
 	python3 \
 	python3-pip \
-	vapoursynth \
-	python3-vapoursynth-jetpack \
-	vapoursynth-akarin \
-	vapoursynth-ffms2 \
+	python3-venv \
+	python3-dev \
+	libpython3-dev \
 	ffmpeg \
 	mediainfo \
 	opus-tools \
 	mkvtoolnix \
 	zstd \
+	p7zip-full \
 	\
 	# OpenCL
 	ocl-icd-libopencl1 \
@@ -152,9 +152,47 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	libegl1 \
 	libgles2 \
 	libglu1-mesa \
- && pip3 install --no-cache-dir --break-system-packages --no-deps vstools \
  && rm -f /etc/OpenCL/vendors/mesa.icd \
  && rm -rf /var/lib/apt/lists/*
+
+# Create venv, install vsrepo, and symlink it for convenience
+RUN python3 -m venv /opt/vs-venv \
+	&& /opt/vs-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
+	&& /opt/vs-venv/bin/pip install --no-cache-dir \
+		VapourSynth \
+		vsrepo \
+		vsjetpack \
+		vstools \
+		vsutil \
+		vapoursynth-adaptivegrain \
+		vapoursynth-akarin \
+		vapoursynth-awarp \
+		vapoursynth-resize2 \
+		vapoursynth-vszip \
+		vapoursynth-zsmooth \
+		vapoursynth-mvtools \
+		vapoursynth-eedi3 \
+		vapoursynth-znedi3 \
+		vapoursynth-descale \
+		vapoursynth-deblock \
+		vapoursynth-hysteresis \
+		ffms2 \
+	&& /opt/vs-venv/bin/vapoursynth config \
+	&& ln -sf /opt/vs-venv/bin/python /usr/local/bin/python \
+	&& ln -sf /opt/vs-venv/bin/python3 /usr/local/bin/python3 \
+	&& ln -sf /opt/vs-venv/bin/vapoursynth /usr/local/bin/vapoursynth \
+	&& ln -sf /opt/vs-venv/bin/vspipe /usr/local/bin/vspipe \
+	&& ln -sf /opt/vs-venv/bin/vsrepo /usr/local/bin/vsrepo
+
+# Use the venv's vsrepo to install required scripts
+RUN mkdir -p /root/.config/vsrepo \
+	&& vsrepo update \
+	&& vsrepo install ffms2 fmtc nnedi3
+
+# Make the venv's Python the default for any 'python3' call
+ENV PATH="/opt/vs-venv/bin:${PATH}"
+
+COPY vapoursynth/ /app/vapoursynth/
 
 # Copy bundled binaries and custom FFmpeg archives
 COPY binaries/ /app/binaries/
@@ -167,16 +205,6 @@ RUN chmod +x \
  && if [ -f /app/binaries/x86_64_v4/SvtAv1EncApp ]; then chmod +x /app/binaries/x86_64_v4/SvtAv1EncApp; fi
 
 # Extract custom FFmpeg builds.
-#
-# Expected archive contents:
-#   ffmpeg-x86-64-v2/
-#   ffmpeg-x86-64-v3/
-#   ffmpeg-x86-64-v4/
-#
-# Final locations:
-#   /opt/ffmpeg-x86-64-v2
-#   /opt/ffmpeg-x86-64-v3
-#   /opt/ffmpeg-x86-64-v4
 RUN mkdir -p /opt \
  && tar --zstd -xpf /app/binaries/x86_64_v2/ffmpeg.tar.zst -C /opt \
  && tar --zstd -xpf /app/binaries/x86_64_v3/ffmpeg.tar.zst -C /opt \
@@ -190,7 +218,6 @@ RUN mkdir -p /opt \
 	/opt/ffmpeg-x86-64-v4/bin/ffprobe
 
 # Verify all custom FFmpeg builds can resolve shared libraries.
-# This catches missing runtime packages during docker build.
 RUN set -eux; \
 	for level in x86-64-v2 x86-64-v3 x86-64-v4; do \
 	echo "Checking /opt/ffmpeg-$level/bin/ffmpeg"; \

@@ -20,6 +20,7 @@ import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle
 import pkg from "../package.json";
 import { buildPrepareFilterConfig } from "./filters";
 import { FFV1_ENCODE_ARGS, runAnalysisPass, runSegmentedAutoDenoiseGpu, type DenoisePlan } from "./auto-denoise";
+import { formatVsProgressDetail, runVsPass, vsRegistry } from "./vs-filters";
 
 export { CancelledError } from "./process";
 
@@ -162,11 +163,69 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			throw new Error(`Failed to extract video stream: ${extractRes.stderr || extractRes.stdout}`);
 		}
 
+		// VapourSynth filter chain
+		const activeVsEntries = (job.settings.vsFilters ?? []).filter((e) => e.level !== "off");
+
+		if (activeVsEntries.length > 0) {
+			const totalFrames = Math.round(probe.duration * probe.videoStreamFps);
+			let currentInput = preparedVideo;
+
+			for (let i = 0; i < activeVsEntries.length; i++) {
+				checkCancelled();
+				const entry = activeVsEntries[i]!;
+				const manifest = vsRegistry.get(entry.presetId);
+				if (!manifest) {
+					Logger.warn(`[prepare] Skipping unknown VS preset: ${entry.presetId}`);
+					continue;
+				}
+
+				const outPath = join(tempDir, `vs_${i}_${manifest.bareId}.mkv`);
+				const label = `${manifest.name} (${entry.level})`;
+				const passBaseProgress = (i / activeVsEntries.length) * 4.5;
+				const passShare = 4.5 / activeVsEntries.length;
+
+				setStep(S_PREPARE, { progress: passBaseProgress, detail: `${label} — ${fmtFrames(0, totalFrames)}` });
+				Logger.info(`[prepare] VS pass ${i + 1}/${activeVsEntries.length}: ${manifest.id} level=${entry.level}`);
+
+				await runVsPass({
+					manifest,
+					entry,
+					inputPath: currentInput,
+					outputPath: outPath,
+					totalFrames,
+					signal,
+					onProgress: (current, fps) => {
+						const passFrac = totalFrames > 0 ? current / totalFrames : 0;
+						setStep(S_PREPARE, {
+							progress: passBaseProgress + passShare * passFrac,
+							detail: formatVsProgressDetail(manifest.name, entry.level, current, totalFrames, fps),
+						});
+					},
+				});
+
+				if (currentInput !== preparedVideo) {
+					try {
+						unlinkSync(currentInput);
+					} catch {}
+				}
+				currentInput = outPath;
+			}
+
+			if (currentInput !== preparedVideo) {
+				try {
+					unlinkSync(preparedVideo);
+				} catch {}
+				renameSync(currentInput, preparedVideo);
+			}
+
+			Logger.info(`[prepare] VapourSynth chain complete (${activeVsEntries.length} pass(es))`);
+		}
+
 		// Prepare filter pass (downscale + deband + denoise)
 		let autoPlan: DenoisePlan | null = null;
 		if (job.settings.denoise === "auto") {
 			checkCancelled();
-			setStep(S_PREPARE, { progress: 2, detail: "Analyzing noise..." });
+			setStep(S_PREPARE, { progress: 4.7, detail: "Analyzing noise..." });
 			try {
 				autoPlan = await runAnalysisPass(preparedVideo, tempDir, probe.duration, job.settings.autoDenoiseThresholds, signal);
 			} catch (err) {
@@ -624,6 +683,17 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		const outputFilename = `${baseTitle} [${sourceTag}-${resTag}][${audioLabel}][AV1]-${config.organization}.mkv`;
 		const finalOutput = join(tempDir, "final.mkv");
 
+		const vsTagSegment =
+			activeVsEntries.length > 0
+				? ", VS " +
+					activeVsEntries
+						.map((e) => {
+							const m = vsRegistry.get(e.presetId);
+							return m ? `${m.bareId}/${e.level}` : e.presetId;
+						})
+						.join("+")
+				: "";
+
 		const xmlTags = [
 			'<?xml version="1.0" encoding="UTF-8"?>',
 			"<Tags><Tag>",
@@ -638,7 +708,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				`Quality ${job.settings.quality}, Speed ${job.settings.finalSpeed}` +
 					`${job.settings.downscale && probe.height > 1080 ? ", Downscale 1080p" : ""}` +
 					`${job.settings.deband !== "off" ? ", Deband " + job.settings.deband : ""}` +
-					`${job.settings.denoise !== "off" ? ", Denoise " + job.settings.denoise : ""}`,
+					`${job.settings.denoise !== "off" ? ", Denoise " + job.settings.denoise : ""}` +
+					vsTagSegment,
 			)}</String></Simple>`,
 			"</Simple>",
 

@@ -3,6 +3,7 @@ dist/
 input/
 output/
 temp/
+vapoursynth-user/
 *.log
 bun.lock
 ffmpeg-dist/

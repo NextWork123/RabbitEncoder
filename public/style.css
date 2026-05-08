@@ -2103,3 +2103,232 @@ code {
 	border-radius: 4px;
 	pointer-events: none;
 }
+
+#advanced-vs-chain {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.vs-entry-card {
+	background: var(--bg-2);
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-sm);
+	padding: 12px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.vs-entry-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.vs-entry-name {
+	font-size: 0.85rem;
+	font-weight: 600;
+	color: var(--text-0);
+}
+
+.vs-entry-source {
+	font-family: var(--font-mono);
+	font-size: 0.6rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--text-2);
+	padding: 2px 7px;
+	border-radius: 10px;
+	border: 1px solid var(--border);
+	background: var(--bg-1);
+	line-height: 1.4;
+}
+
+.vs-entry-source.user {
+	color: var(--accent);
+	border-color: var(--accent);
+	background: var(--accent-glow);
+}
+
+.vs-entry-header .btn-remove {
+	margin-left: auto;
+}
+
+.vs-entry-description {
+	font-size: 0.72rem;
+	color: var(--text-2);
+	line-height: 1.4;
+	margin-top: -4px;
+}
+
+.vs-entry-edit-btn {
+	align-self: flex-start;
+	font-family: var(--font-mono);
+	font-size: 0.7rem;
+	color: var(--text-2);
+	background: none;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+	text-decoration: underline;
+	text-decoration-color: var(--border);
+	text-underline-offset: 3px;
+	transition: color 0.15s;
+}
+.vs-entry-edit-btn:hover {
+	color: var(--text-0);
+	text-decoration-color: var(--text-2);
+}
+.vs-entry-edit-btn::before {
+	content: "▸ ";
+	display: inline-block;
+	transition: transform 0.15s;
+}
+.vs-entry-edit-btn.open::before {
+	transform: rotate(90deg);
+}
+
+.vs-param-panel {
+	margin-top: 2px;
+	padding: 12px;
+	background: var(--bg-1);
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-sm);
+}
+
+.vs-param-grid {
+	display: grid;
+	gap: 6px 8px;
+	align-items: center;
+}
+
+.vs-param-header {
+	font-family: var(--font-mono);
+	font-size: 0.65rem;
+	font-weight: 600;
+	color: var(--text-2);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	padding-bottom: 4px;
+	text-align: center;
+}
+
+.vs-param-header.vs-param-header-corner {
+	text-align: left;
+}
+
+.vs-param-row-label {
+	font-family: var(--font-mono);
+	font-size: 0.78rem;
+	color: var(--text-1);
+	text-transform: lowercase;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.vs-param-cell {
+	display: flex;
+	align-items: center;
+	justify-content: stretch;
+}
+
+.vs-param-cell input[type="number"],
+.vs-param-cell select {
+	font-family: var(--font-mono);
+	font-size: 0.82rem;
+	padding: 6px 8px;
+	background: var(--bg-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--text-0);
+	width: 100%;
+	outline: none;
+	transition: border-color 0.15s;
+	box-sizing: border-box;
+}
+.vs-param-cell input[type="number"]:focus,
+.vs-param-cell select:focus {
+	border-color: var(--accent);
+}
+
+.vs-param-cell input[type="checkbox"] {
+	width: 16px;
+	height: 16px;
+	margin: 0 auto;
+	accent-color: var(--accent);
+	cursor: pointer;
+}
+
+.vs-param-help {
+	grid-column: 1 / -1;
+	font-size: 0.68rem;
+	color: var(--text-2);
+	line-height: 1.4;
+	margin-top: -2px;
+	margin-bottom: 4px;
+	padding-left: 2px;
+}
+
+.vs-param-help code {
+	font-family: var(--font-mono);
+	color: var(--text-1);
+	font-size: 0.95em;
+}
+
+.vs-add-row {
+	display: flex;
+	gap: 8px;
+}
+
+.vs-add-row select {
+	flex: 1;
+	font-family: var(--font-mono);
+	font-size: 0.8rem;
+	padding: 8px 10px;
+	background: var(--bg-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--text-0);
+	cursor: pointer;
+	outline: none;
+	transition: border-color 0.15s;
+}
+.vs-add-row select:hover {
+	border-color: var(--text-2);
+}
+.vs-add-row select:focus {
+	border-color: var(--accent);
+}
+
+.vs-empty {
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	color: var(--text-2);
+	padding: 16px;
+	text-align: center;
+	border: 1px dashed var(--border-subtle);
+	border-radius: var(--radius-sm);
+}
+
+#vs-reload-btn {
+	margin-top: 8px;
+	font-size: 0.72rem;
+	font-family: var(--font-mono);
+}
+
+@media (max-width: 540px) {
+	.vs-param-grid {
+		font-size: 0.95em;
+	}
+	.vs-param-row-label {
+		font-size: 0.72rem;
+	}
+	.vs-param-cell input[type="number"],
+	.vs-param-cell select {
+		font-size: 0.76rem;
+		padding: 5px 6px;
+	}
+}
