@@ -1917,6 +1917,11 @@ code {
 	color: var(--bg-0);
 }
 
+.preview-sample-tag.is-vs {
+	background: var(--purple);
+	color: white;
+}
+
 .preview-sample-hint {
 	position: absolute;
 	bottom: 8px;

@@ -241,9 +241,13 @@ app.delete("/api/jobs/:id/preview", (c) => {
 app.get("/api/jobs/:id/preview/sample/:index/:kind", (c) => {
 	const jobId = c.params.id!;
 	const idx = parseInt(c.params.index!, 10);
-	const kind = c.params.kind as "source" | "encode" | "clip";
+	const kind = c.params.kind!;
 
-	if (Number.isNaN(idx) || !["source", "encode", "clip"].includes(kind)) {
+	if (Number.isNaN(idx)) return c.json({ error: "Bad request" }, 400);
+
+	const isStandard = kind === "source" || kind === "encode" || kind === "clip";
+	const isVsStep = /^vs:\d+$/.test(kind);
+	if (!isStandard && !isVsStep) {
 		return c.json({ error: "Bad request" }, 400);
 	}
 

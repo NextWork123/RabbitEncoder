@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "fs";
 import { join, parse as parsePath } from "path";
-import type { AppConfig, Job, JobSettings, PreviewSample, PreviewState, ProbeResult } from "./types";
+import type { AppConfig, Job, JobSettings, PreviewSample, PreviewSampleVsFrame, PreviewState, ProbeResult } from "./types";
 import { probeFile } from "./probe";
 import { CancelledError, describeExitCode, humanSize, run } from "./process";
 import { Logger } from "./logger";
@@ -165,6 +165,9 @@ async function encodeSample(
 		if (signal.aborted) throw new CancelledError();
 	};
 
+	const frameOffset = (ctx.windowSec / 2).toFixed(3);
+	const vsFrames: PreviewSampleVsFrame[] = [];
+
 	// 1. Extract source window with FFV1 (lossless, frame-accurate).
 	checkCancelled();
 	onProgress(0.05, "Extracting source clip");
@@ -193,9 +196,7 @@ async function encodeSample(
 		throw new Error(`Source clip extraction failed: ${extractRes.stderr.slice(-500)}`);
 	}
 
-	// Capture the source PNG NOW, before any VS pass touches the soruce
-	const frameOffset = (ctx.windowSec / 2).toFixed(3);
-
+	// 1a. Capture the source PNG NOW, before any VS pass touches source
 	checkCancelled();
 	const sourceFrameRes = await run(buildPreviewPngExtractArgs(sourceClip, frameOffset, sourceFrame, colorInfo, probe), { signal });
 	if (sourceFrameRes.code !== 0) {
@@ -237,6 +238,21 @@ async function encodeSample(
 					onProgress(0.05 + 0.05 * (passBaseFrac + passShareFrac * passFrac), formatVsProgressDetail(manifest.name, entry.level, current, totalFrames, fps));
 				},
 			});
+
+			// Snapshot a PNG from this pass's output BEFORE we delete/rename the .mkv.
+			checkCancelled();
+			const vsPng = join(ctx.dir, `vs_${i}.png`);
+			const vsFrameRes = await run(buildPreviewPngExtractArgs(outPath, frameOffset, vsPng, colorInfo, probe), { signal });
+			if (vsFrameRes.code !== 0) {
+				Logger.warn(`[preview] VS snapshot failed for sample ${ctx.index} pass ${i + 1} ` + `(${manifest.id}): ${vsFrameRes.stderr.slice(-300)}`);
+			} else {
+				vsFrames.push({
+					index: i,
+					presetId: manifest.id,
+					bareId: manifest.bareId,
+					label: `${manifest.name} (${entry.level})`,
+				});
+			}
 
 			if (currentInput !== sourceClip) {
 				try {
@@ -390,7 +406,7 @@ async function encodeSample(
 						abeLastError = evt.message;
 					}
 				} catch {
-					// Non-JSON line; ignore — only the JSON events matter here.
+					// Non-JSON line, just ignore
 				}
 			}
 		}
@@ -428,7 +444,7 @@ async function encodeSample(
 
 	// 6. Pull the encode frame
 	checkCancelled();
-	onProgress(0.98, "Extracting comparison frames");
+	onProgress(0.98, "Extracting comparison frame");
 
 	const encodeFrameRes = await run(buildPreviewPngExtractArgs(encodedClip, frameOffset, encodeFrame, colorInfo, probe), { signal });
 	if (encodeFrameRes.code !== 0) {
@@ -457,6 +473,7 @@ async function encodeSample(
 		projectedTotalBytes,
 		projectedTotalHuman: humanSize(projectedTotalBytes),
 		encodedBitrateKbps,
+		vsFrames,
 	};
 }
 
@@ -528,22 +545,25 @@ export async function runPreviewEncode(args: RunPreviewArgs): Promise<PreviewSam
 	return completed;
 }
 
-export function resolvePreviewArtifact(config: AppConfig, jobId: string, sampleIndex: number, kind: "source" | "encode" | "clip"): string | null {
+export function resolvePreviewArtifact(config: AppConfig, jobId: string, sampleIndex: number, kind: string): string | null {
 	const dir = join(previewDirFor(config, jobId), `sample_${String(sampleIndex).padStart(2, "0")}`);
 	let file: string;
-	switch (kind) {
-		case "source":
-			file = join(dir, "source.png");
-			break;
-		case "encode":
-			file = join(dir, "encode.png");
-			break;
-		case "clip":
-			file = join(dir, "encoded.mkv");
-			break;
-		default:
-			return null;
+
+	if (kind === "source") {
+		file = join(dir, "source.png");
+	} else if (kind === "encode") {
+		file = join(dir, "encode.png");
+	} else if (kind === "clip") {
+		file = join(dir, "encoded.mkv");
+	} else {
+		// VS-intermediate snapshot: "vs:N" where N is the zero-based pass index.
+		const m = kind.match(/^vs:(\d+)$/);
+		if (!m) return null;
+		const idx = parseInt(m[1]!, 10);
+		if (!Number.isFinite(idx) || idx < 0) return null;
+		file = join(dir, `vs_${idx}.png`);
 	}
+
 	return existsSync(file) ? file : null;
 }
 

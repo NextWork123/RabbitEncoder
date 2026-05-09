@@ -631,10 +631,23 @@ function renderPreviewState(state) {
 	clearBtn.style.display = !isRunning && hasResults ? "" : "none";
 }
 
+function buildPreviewSampleViews(sample) {
+	const views = [{ id: "source", label: "Source", role: "source" }];
+	for (const f of sample.vsFrames || []) {
+		views.push({
+			id: `vs:${f.index}`,
+			label: f.label || `VS step ${f.index + 1}`,
+			role: "vs",
+		});
+	}
+	views.push({ id: "encode", label: "Encode", role: "encode" });
+	return views;
+}
+
 function renderPreviewSamples(jobId, samples) {
 	const container = document.getElementById("preview-samples");
 
-	const desiredKey = samples.map((s) => s.index).join(",");
+	const desiredKey = samples.map((s) => `${s.index}:${(s.vsFrames || []).length}`).join(",");
 	if (container.dataset.renderedKey === desiredKey) return;
 	container.dataset.renderedKey = desiredKey;
 	container.innerHTML = "";
@@ -643,12 +656,17 @@ function renderPreviewSamples(jobId, samples) {
 		const card = document.createElement("div");
 		card.className = "preview-sample";
 		card.dataset.idx = String(sample.index);
-		card.dataset.viewing = "source";
+
+		const views = buildPreviewSampleViews(sample);
+		card._views = views;
+		card._viewIdx = 0;
 
 		const ts = formatTimestamp(sample.timestampSec);
 		const projected = sample.projectedTotalHuman || "—";
 		const sizeStr = sample.encodedSizeHuman || "—";
 		const bitrate = formatBitrate2(sample.encodedBitrateKbps);
+
+		const hint = views.length > 2 ? `Click — ${views.length} views` : "Click to toggle";
 
 		card.innerHTML = `
 			<div class="preview-sample-image" data-action="toggle">
@@ -658,7 +676,7 @@ function renderPreviewSamples(jobId, samples) {
 				<button class="preview-fullscreen-btn" type="button" title="View fullscreen" aria-label="View preview sample fullscreen" data-action="fullscreen">
 					<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
 				</button>
-				<span class="preview-sample-hint">Click to toggle</span>
+				<span class="preview-sample-hint">${hint}</span>
 			</div>
 			<div class="preview-sample-meta">
 				<div class="preview-sample-meta-row">
@@ -684,12 +702,20 @@ function renderPreviewSamples(jobId, samples) {
 
 		(async () => {
 			try {
+				// Show source immediately.
 				const sourceUrl = await fetchPreviewArtifactBlob(jobId, sample.index, "source");
-				await fetchPreviewArtifactBlob(jobId, sample.index, "encode"); // warm cache
 				const img = card.querySelector("img");
 				img.src = sourceUrl;
 				img.style.display = "";
 				card.querySelector(".preview-img-loading").style.display = "none";
+
+				// Warm-cache every other view so cycling/arrow keys are instant.
+				for (const v of views) {
+					if (v.id === "source") continue;
+					fetchPreviewArtifactBlob(jobId, sample.index, v.id).catch(() => {
+						// Per-view fetch can fail, just ignore.
+					});
+				}
 			} catch (e) {
 				card.querySelector(".preview-img-loading").textContent = `Failed to load: ${e.message || e}`;
 			}
@@ -706,24 +732,29 @@ function formatTimestamp(sec) {
 	return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
-async function setPreviewSampleView(card, view) {
+async function setPreviewSampleViewByIdx(card, idx) {
 	const jobId = currentPreviewJobId;
-	const idx = parseInt(card.dataset.idx, 10);
-	if (!jobId || !Number.isFinite(idx)) return;
+	const sampleIdx = parseInt(card.dataset.idx, 10);
+	if (!jobId || !Number.isFinite(sampleIdx)) return;
+
+	const views = card._views || [];
+	if (views.length === 0) return;
+	const wrapped = ((idx % views.length) + views.length) % views.length;
+	const view = views[wrapped];
 
 	try {
-		const url = await fetchPreviewArtifactBlob(jobId, idx, view);
+		const url = await fetchPreviewArtifactBlob(jobId, sampleIdx, view.id);
 		const img = card.querySelector("img");
-
 		if (img) img.src = url;
-		card.dataset.viewing = view;
+		card._viewIdx = wrapped;
+		card.dataset.viewing = view.id;
 
-		const label = view === "source" ? "Source" : "Encode";
 		const tag = card.querySelector(".preview-sample-tag");
 		if (tag) {
-			tag.textContent = label;
-			tag.classList.toggle("is-source", view === "source");
-			tag.classList.toggle("is-encode", view === "encode");
+			tag.textContent = view.label;
+			tag.classList.toggle("is-source", view.role === "source");
+			tag.classList.toggle("is-encode", view.role === "encode");
+			tag.classList.toggle("is-vs", view.role === "vs");
 		}
 
 		if (currentPreviewFullscreenCard === card) {
@@ -731,9 +762,10 @@ async function setPreviewSampleView(card, view) {
 			const fsTag = document.getElementById("preview-fullscreen-tag");
 			if (fsImg) fsImg.src = url;
 			if (fsTag) {
-				fsTag.textContent = label;
-				fsTag.classList.toggle("is-source", view === "source");
-				fsTag.classList.toggle("is-encode", view === "encode");
+				fsTag.textContent = view.label;
+				fsTag.classList.toggle("is-source", view.role === "source");
+				fsTag.classList.toggle("is-encode", view.role === "encode");
+				fsTag.classList.toggle("is-vs", view.role === "vs");
 			}
 		}
 	} catch (e) {
@@ -741,16 +773,25 @@ async function setPreviewSampleView(card, view) {
 	}
 }
 
+function cyclePreviewSampleView(card, direction) {
+	const views = card._views || [];
+	if (views.length === 0) return;
+	const cur = typeof card._viewIdx === "number" ? card._viewIdx : 0;
+	return setPreviewSampleViewByIdx(card, cur + direction);
+}
+
 async function togglePreviewSampleView(card) {
-	const next = card.dataset.viewing === "source" ? "encode" : "source";
-	await setPreviewSampleView(card, next);
+	return cyclePreviewSampleView(card, +1);
 }
 
 async function openPreviewFullscreen(card) {
 	if (!card) return;
 	currentPreviewFullscreenCard = card;
 	const idx = parseInt(card.dataset.idx, 10);
-	const view = card.dataset.viewing || "source";
+	const views = card._views || [];
+	const cur = typeof card._viewIdx === "number" ? card._viewIdx : 0;
+	const view = views[cur] || { id: "source", label: "Source", role: "source" };
+
 	const modal = document.getElementById("preview-fullscreen-modal");
 	const title = document.getElementById("preview-fullscreen-title");
 	const img = document.getElementById("preview-fullscreen-img");
@@ -765,11 +806,11 @@ async function openPreviewFullscreen(card) {
 	modal.style.display = "";
 
 	try {
-		const url = await fetchPreviewArtifactBlob(currentPreviewJobId, idx, view);
+		const url = await fetchPreviewArtifactBlob(currentPreviewJobId, idx, view.id);
 		img.src = url;
 		img.style.display = "";
 		loading.style.display = "none";
-		await setPreviewSampleView(card, view);
+		await setPreviewSampleViewByIdx(card, cur);
 	} catch (e) {
 		loading.textContent = `Failed to load: ${e.message || e}`;
 	}
@@ -3088,8 +3129,27 @@ function initEventListeners() {
 	document.getElementById("preview-fullscreen-stage").addEventListener("click", () => {
 		if (currentPreviewFullscreenCard) togglePreviewSampleView(currentPreviewFullscreenCard);
 	});
+
 	document.addEventListener("keydown", (e) => {
-		if (e.key === "Escape") closePreviewFullscreen();
+		if (e.key === "Escape") {
+			closePreviewFullscreen();
+			return;
+		}
+
+		// Arrow / Space navigation only fires when fullscreen preview is open.
+		if (!currentPreviewFullscreenCard) return;
+
+		// Don't hijack typing in inputs.
+		const t = e.target;
+		if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+
+		if (e.key === "ArrowRight" || e.code === "Space") {
+			e.preventDefault();
+			cyclePreviewSampleView(currentPreviewFullscreenCard, +1);
+		} else if (e.key === "ArrowLeft") {
+			e.preventDefault();
+			cyclePreviewSampleView(currentPreviewFullscreenCard, -1);
+		}
 	});
 
 	document.getElementById("open-library-btn").addEventListener("click", openLibrary);

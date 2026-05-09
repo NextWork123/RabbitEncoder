@@ -246,6 +246,17 @@ export interface AudioPreviewResult {
 	output: AudioPreviewTrack[];
 }
 
+export interface PreviewSampleVsFrame {
+	/** Zero-based index in the active VS chain. */
+	index: number;
+	/** Namespaced preset id (e.g. "stock:f3k_deband"). */
+	presetId: string;
+	/** Bare preset id, useful for filenames or download labels. */
+	bareId: string;
+	/** Human-readable label like "F3K Deband (heavy)". */
+	label: string;
+}
+
 export interface PreviewSample {
 	index: number;
 	timestampSec: number;
@@ -255,6 +266,7 @@ export interface PreviewSample {
 	projectedTotalBytes: number;
 	projectedTotalHuman: string;
 	encodedBitrateKbps: number;
+	vsFrames: PreviewSampleVsFrame[];
 }
 
 export interface PreviewState {
