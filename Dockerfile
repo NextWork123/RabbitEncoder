@@ -18,6 +18,7 @@ USER root
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV RUSTICL_ENABLE=radeonsi,iris,nouveau
+ENV OCL_ICD_VENDORS=/etc/OpenCL/vendors
 
 # Base packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -187,7 +188,7 @@ RUN python3 -m venv /opt/vs-venv \
 # Use the venv's vsrepo to install required scripts
 RUN mkdir -p /root/.config/vsrepo \
 	&& vsrepo update \
-	&& vsrepo install ffms2 fmtc nnedi3
+	&& vsrepo install ffms2 fmtc nnedi3 knlm
 
 # Make the venv's Python the default for any 'python3' call
 ENV PATH="/opt/vs-venv/bin:${PATH}"

@@ -1,0 +1,127 @@
+{
+	"id": "f3k_deband",
+	"name": "F3K Deband",
+	"description": "Removes color banding in smooth gradients while preserving detail. Wraps vszip.Deband (modern f3kdb successor) via vs-jetpack. Raise thr/radius and add grain for stubborn bands; use sparingly on detailed sources.",
+	"category": "Deband",
+	"supports": {
+		"bitDepth": [8, 10, 12, 16],
+		"hdr": true
+	},
+	"levels": ["light", "medium", "heavy"],
+	"params": [
+		{
+			"key": "radius",
+			"label": "Radius",
+			"type": "int",
+			"min": 1,
+			"max": 255,
+			"step": 1,
+			"defaults": {
+				"light": 12,
+				"medium": 16,
+				"heavy": 20
+			},
+			"help": "Banding detection radius. Larger values catch wider bands but blur more detail."
+		},
+		{
+			"key": "thr",
+			"label": "Threshold",
+			"type": "float",
+			"min": 1,
+			"max": 255,
+			"step": 1,
+			"defaults": {
+				"light": 48,
+				"medium": 96,
+				"heavy": 128
+			},
+			"help": "Banding detection threshold. A pixel is considered banded if the difference with its reference is below this value. Higher = more aggressive but more risk to detail."
+		},
+		{
+			"key": "grain",
+			"label": "Grain",
+			"type": "float",
+			"min": 0,
+			"max": 256,
+			"step": 1,
+			"defaults": {
+				"light": 0,
+				"medium": 0,
+				"heavy": 24
+			},
+			"help": "Grain to add after debanding. Useful for masking residual banding and matching natural film grain. 0 disables."
+		},
+		{
+			"key": "planes",
+			"label": "Planes",
+			"type": "enum",
+			"enum": ["all", "luma", "chroma"],
+			"defaults": {
+				"light": "all",
+				"medium": "all",
+				"heavy": "all"
+			},
+			"help": "Which planes to process. Banding usually shows in luma but can affect chroma too on heavily compressed sources."
+		},
+		{
+			"key": "sample_mode",
+			"label": "Sample mode",
+			"type": "enum",
+			"enum": ["COLUMN", "SQUARE", "ROW", "COL_ROW_MEAN", "MEAN_DIFF_INT", "MEAN_DIFF_FLOAT", "MEAN_DIFF_GRADIENT"],
+			"defaults": {
+				"light": "SQUARE",
+				"medium": "SQUARE",
+				"heavy": "SQUARE"
+			},
+			"help": "Strategy for sampling reference pixels. SQUARE (4 points) is the default; MEAN_DIFF modes use additional thresholds for stronger detail preservation."
+		},
+		{
+			"key": "dynamic_grain",
+			"label": "Dynamic grain",
+			"type": "bool",
+			"defaults": {
+				"light": false,
+				"medium": false,
+				"heavy": true
+			},
+			"help": "Generate a unique grain pattern per frame. Looks more natural in motion but adds temporal noise that can hurt encoder efficiency."
+		},
+		{
+			"key": "blur_first",
+			"label": "Blur first",
+			"type": "bool",
+			"defaults": {
+				"light": true,
+				"medium": true,
+				"heavy": true
+			},
+			"help": "If true, compares the current pixel against the mean of references. If false, compares against each reference individually (stricter — pixel only marked banded when ALL pairwise differences are below threshold)."
+		},
+		{
+			"key": "seed",
+			"label": "Random seed",
+			"type": "int",
+			"min": -1,
+			"max": 2147483647,
+			"step": 1,
+			"defaults": {
+				"light": -1,
+				"medium": -1,
+				"heavy": -1
+			},
+			"help": "Seed for grain RNG. -1 picks a random seed each run (varies between encodes); set to a fixed positive integer for reproducible output."
+		},
+		{
+			"key": "random",
+			"label": "Random algorithm",
+			"type": "enum",
+			"enum": ["OLD", "UNIFORM", "GAUSSIAN"],
+			"defaults": {
+				"light": "UNIFORM",
+				"medium": "UNIFORM",
+				"heavy": "UNIFORM"
+			},
+			"help": "RNG strategy used for both reference positions and grain. UNIFORM is the default; OLD is the legacy algorithm; GAUSSIAN gives a normal distribution."
+		}
+	]
+}
