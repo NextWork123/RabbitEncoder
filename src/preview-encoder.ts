@@ -193,6 +193,15 @@ async function encodeSample(
 		throw new Error(`Source clip extraction failed: ${extractRes.stderr.slice(-500)}`);
 	}
 
+	// Capture the source PNG NOW, before any VS pass touches the soruce
+	const frameOffset = (ctx.windowSec / 2).toFixed(3);
+
+	checkCancelled();
+	const sourceFrameRes = await run(buildPreviewPngExtractArgs(sourceClip, frameOffset, sourceFrame, colorInfo, probe), { signal });
+	if (sourceFrameRes.code !== 0) {
+		throw new Error(`Source frame extraction failed: ${sourceFrameRes.stderr.slice(-500)}`);
+	}
+
 	// 1.5. VapourSynth filter chain
 	const activeVsEntries = (job.settings.vsFilters ?? []).filter((e) => e.level !== "off");
 
@@ -417,24 +426,11 @@ async function encodeSample(
 		throw new Error(`mkvmerge failed: ${muxRes.stderr || muxRes.stdout}`);
 	}
 
-	// 6. Pull a representative frame out of both clips at the centre of the
-	// window. Seek before -i for speed; both clips were re-encoded as keyframe
-	// every-frame (FFV1 / ABE output) so seek is exact.
+	// 6. Pull the encode frame
 	checkCancelled();
 	onProgress(0.98, "Extracting comparison frames");
 
-	const frameOffset = (ctx.windowSec / 2).toFixed(3);
-
-	const sourceFrameRes = await run(buildPreviewPngExtractArgs(sourceClip, frameOffset, sourceFrame, colorInfo, probe), {
-		signal,
-	});
-	if (sourceFrameRes.code !== 0) {
-		throw new Error(`Source frame extraction failed: ${sourceFrameRes.stderr.slice(-500)}`);
-	}
-
-	const encodeFrameRes = await run(buildPreviewPngExtractArgs(encodedClip, frameOffset, encodeFrame, colorInfo, probe), {
-		signal,
-	});
+	const encodeFrameRes = await run(buildPreviewPngExtractArgs(encodedClip, frameOffset, encodeFrame, colorInfo, probe), { signal });
 	if (encodeFrameRes.code !== 0) {
 		throw new Error(`Encode frame extraction failed: ${encodeFrameRes.stderr.slice(-500)}`);
 	}
