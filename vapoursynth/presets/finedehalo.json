@@ -1,0 +1,105 @@
+{
+	"id": "finedehalo",
+	"name": "FineDehalo",
+	"description": "Reduces dark and bright halos around high-contrast edges. Best for anime and DVD upscales. Powered by vs-jetpack.",
+	"category": "dehalo",
+	"supports": { "bitDepth": [8, 10, 12, 16], "hdr": false },
+	"levels": ["light", "medium", "heavy"],
+	"params": [
+		{
+			"key": "rx",
+			"label": "Horizontal radius",
+			"type": "int",
+			"min": 1,
+			"max": 4,
+			"step": 1,
+			"defaults": { "light": 1, "medium": 2, "heavy": 3 },
+			"help": "Halo width in pixels. Set as low as possible — the docs note that values too high will start missing small halos."
+		},
+		{
+			"key": "ry",
+			"label": "Vertical radius",
+			"type": "int",
+			"min": 1,
+			"max": 4,
+			"step": 1,
+			"defaults": { "light": 1, "medium": 2, "heavy": 3 }
+		},
+		{
+			"key": "darkstr",
+			"label": "Dark halo strength",
+			"type": "float",
+			"min": 0.0,
+			"max": 1.0,
+			"step": 0.05,
+			"defaults": { "light": 0.0, "medium": 0.0, "heavy": 0.4 },
+			"help": "0 by default — affecting dark halos often does more damage than people want."
+		},
+		{
+			"key": "brightstr",
+			"label": "Bright halo strength",
+			"type": "float",
+			"min": 0.0,
+			"max": 1.0,
+			"step": 0.05,
+			"defaults": { "light": 0.6, "medium": 1.0, "heavy": 1.0 }
+		},
+		{
+			"key": "thmi",
+			"label": "Edge threshold (min)",
+			"type": "float",
+			"min": 0,
+			"max": 255,
+			"defaults": { "light": 80, "medium": 80, "heavy": 60 },
+			"help": "Minimum sharp-edge threshold. Below this, edges are not considered for dehalo."
+		},
+		{
+			"key": "thma",
+			"label": "Edge threshold (max)",
+			"type": "float",
+			"min": 0,
+			"max": 255,
+			"defaults": { "light": 128, "medium": 128, "heavy": 128 }
+		},
+		{
+			"key": "lowsens",
+			"label": "Sensitivity (low)",
+			"type": "float",
+			"min": 0.0,
+			"max": 100.0,
+			"step": 1.0,
+			"defaults": { "light": 50.0, "medium": 50.0, "heavy": 40.0 },
+			"help": "Below this sensitivity, dehalo is fully applied."
+		},
+		{
+			"key": "highsens",
+			"label": "Sensitivity (high)",
+			"type": "float",
+			"min": 0.0,
+			"max": 100.0,
+			"step": 1.0,
+			"defaults": { "light": 50.0, "medium": 50.0, "heavy": 60.0 },
+			"help": "Above this sensitivity, dehalo is fully skipped."
+		},
+		{
+			"key": "ss",
+			"label": "Supersampling",
+			"type": "float",
+			"min": 1.0,
+			"max": 2.0,
+			"step": 0.05,
+			"defaults": { "light": 1.25, "medium": 1.5, "heavy": 1.75 },
+			"help": "Internal supersampling factor to reduce aliasing. Higher = better quality, slower."
+		},
+		{
+			"key": "contra",
+			"label": "Contra-sharpening",
+			"type": "float",
+			"min": 0.0,
+			"max": 2.0,
+			"step": 0.1,
+			"defaults": { "light": 0.0, "medium": 0.0, "heavy": 0.5 },
+			"help": "Restore some edge contrast lost to dehalo. 0 disables."
+		}
+	]
+}

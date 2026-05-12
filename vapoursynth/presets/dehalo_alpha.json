@@ -1,0 +1,104 @@
+{
+	"id": "dehalo_alpha",
+	"name": "Dehalo Alpha",
+	"description": "Reduces halos around high-contrast edges using vs-jetpack dehalo_alpha.",
+	"category": "Dehalo",
+	"levels": ["light", "medium", "heavy"],
+	"supports": {
+		"bitDepth": [8, 10, 16],
+		"hdr": true
+	},
+	"params": [
+		{
+			"key": "blur",
+			"label": "Blur sigma",
+			"type": "float",
+			"min": 0.5,
+			"max": 3.0,
+			"step": 0.1,
+			"defaults": {
+				"light": 1.2,
+				"medium": 1.4,
+				"heavy": 1.6
+			}
+		},
+		{
+			"key": "darkstr",
+			"label": "Dark halo strength",
+			"type": "float",
+			"min": 0,
+			"max": 1,
+			"step": 0.05,
+			"defaults": {
+				"light": 0.0,
+				"medium": 0.0,
+				"heavy": 0.1
+			}
+		},
+		{
+			"key": "brightstr",
+			"label": "Bright halo strength",
+			"type": "float",
+			"min": 0,
+			"max": 1,
+			"step": 0.05,
+			"defaults": {
+				"light": 0.5,
+				"medium": 0.75,
+				"heavy": 1.0
+			}
+		},
+		{
+			"key": "lowsens",
+			"label": "Low sensitivity",
+			"type": "float",
+			"min": -1,
+			"max": 100,
+			"step": 1,
+			"defaults": {
+				"light": 40,
+				"medium": 50,
+				"heavy": 60
+			}
+		},
+		{
+			"key": "highsens",
+			"label": "High sensitivity",
+			"type": "float",
+			"min": -1,
+			"max": 100,
+			"step": 1,
+			"defaults": {
+				"light": 40,
+				"medium": 50,
+				"heavy": 60
+			}
+		},
+		{
+			"key": "ss",
+			"label": "Supersampling",
+			"type": "float",
+			"min": 1,
+			"max": 2,
+			"step": 0.1,
+			"defaults": {
+				"light": 1.0,
+				"medium": 1.25,
+				"heavy": 1.5
+			}
+		},
+		{
+			"key": "planes",
+			"label": "Planes",
+			"type": "int",
+			"min": 0,
+			"max": 2,
+			"step": 1,
+			"defaults": {
+				"light": 0,
+				"medium": 0,
+				"heavy": 0
+			}
+		}
+	]
+}

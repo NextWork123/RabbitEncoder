@@ -35,8 +35,16 @@ import { cancelBenchmark, getBenchmarkState, startBenchmark } from "./benchmark"
 import { listOpenClDevices } from "./opencl";
 import { listVulkanDevices } from "./vulkan";
 import { resolvePreviewArtifact } from "./preview-encoder";
+import { makeDefaultVsFilterEntry, vsRegistry } from "./vs-filters";
 
 export const config = await loadConfig();
+
+vsRegistry.configure(
+	process.env.VS_PRESETS_STOCK_DIR ?? "/app/vapoursynth/presets",
+	process.env.VS_PRESETS_USER_DIR ?? "/config/vapoursynth/presets",
+	process.env.VS_RABBIT_MODULE_DIR ?? "/app/vapoursynth",
+);
+vsRegistry.reload();
 
 const hashedPassword = new Bun.CryptoHasher("blake2b512").update(`rabbitencoder-${process.env.PASSWORD || "rabbitencoder"}`).digest("hex");
 
@@ -233,9 +241,13 @@ app.delete("/api/jobs/:id/preview", (c) => {
 app.get("/api/jobs/:id/preview/sample/:index/:kind", (c) => {
 	const jobId = c.params.id!;
 	const idx = parseInt(c.params.index!, 10);
-	const kind = c.params.kind as "source" | "encode" | "clip";
+	const kind = c.params.kind!;
 
-	if (Number.isNaN(idx) || !["source", "encode", "clip"].includes(kind)) {
+	if (Number.isNaN(idx)) return c.json({ error: "Bad request" }, 400);
+
+	const isStandard = kind === "source" || kind === "encode" || kind === "clip";
+	const isVsStep = /^vs:\d+$/.test(kind);
+	if (!isStandard && !isVsStep) {
 		return c.json({ error: "Bad request" }, 400);
 	}
 
@@ -358,6 +370,21 @@ app.post("/api/library/encode", async (c) => {
 
 	Logger.info(`[library] Queued ${totalAdded} files (${totalSkipped} already queued, ${totalAlreadyEncoded} already encoded)`);
 	return c.json({ ok: true, added: totalAdded, skipped: totalSkipped, alreadyEncoded: totalAlreadyEncoded });
+});
+
+app.get("/api/vs-presets", (c) => {
+	return c.json({ presets: vsRegistry.list() });
+});
+
+app.post("/api/vs-presets/reload", (c) => {
+	vsRegistry.reload();
+	return c.json({ ok: true, count: vsRegistry.list().length });
+});
+
+app.get("/api/vs-presets/:id/default-entry", (c) => {
+	const entry = makeDefaultVsFilterEntry(c.params.id!);
+	if (!entry) return c.json({ error: "Unknown preset" }, 404);
+	return c.json(entry);
 });
 
 Logger.info(`Rabbit Encoder started on http://0.0.0.0:${config.port}`);

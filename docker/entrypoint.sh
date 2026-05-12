@@ -1,13 +1,14 @@
 #!/bin/sh
 set -e
 
+export PATH="/opt/vs-venv/bin:${PATH}"
+
 BIN_DIR="/app/binaries"
 
 TARGET_SVT="/usr/local/bin/SvtAv1EncApp"
 TARGET_FFMPEG="/usr/local/bin/ffmpeg"
 TARGET_FFPROBE="/usr/local/bin/ffprobe"
 
-TARGET_LIB="/usr/lib/x86_64-linux-gnu/vapoursynth/libvszip.so"
 
 # Always expose the arch-independent language-detector
 if ! command -v language-detector >/dev/null 2>&1; then
@@ -75,9 +76,8 @@ if [ -x "$ARCH_DIR/SvtAv1EncApp" ]; then
 	ln -sf "$ARCH_DIR/SvtAv1EncApp" "$TARGET_SVT"
 fi
 
-# Expose VapourSynth zip plugin
-if [ -f "$ARCH_DIR/libvszip.so" ]; then
-	ln -sf "$ARCH_DIR/libvszip.so" "$TARGET_LIB"
+if [ -x /opt/vs-venv/bin/vapoursynth ]; then
+  export VSSCRIPT_PATH="$("/opt/vs-venv/bin/vapoursynth" get-vsscript)"
 fi
 
 # Expose custom FFmpeg
@@ -98,10 +98,27 @@ fi
 # Make matching FFmpeg shared libs visible
 export LD_LIBRARY_PATH="$FFMPEG_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-# Refresh the dynamic linker cache so libvszip.so is findable
+# Refresh linker cache where possible
 ldconfig 2>/dev/null || true
 
 echo "[entrypoint] Using FFmpeg: $("$TARGET_FFMPEG" -hide_banner -version | head -n1)"
 echo "[entrypoint] Using FFprobe: $("$TARGET_FFPROBE" -hide_banner -version | head -n1)"
+
+USER_VS_DIR="/config/vapoursynth/presets"
+if [ ! -d "$USER_VS_DIR" ]; then
+	mkdir -p "$USER_VS_DIR"
+	cat > "$USER_VS_DIR/README.md" <<'EOF'
+Drop your custom VapourSynth presets in this directory.
+
+Each preset needs two files with the same stem:
+  myfilter.vpy   - the script
+  myfilter.json  - the manifest (id, levels, params, defaults)
+
+See https://github.com/Rabbit-Company/RabbitEncoder/tree/main/vapoursynth/presets for working examples.
+
+After adding a preset, hit "Reload presets" in the dashboard's Advanced
+Settings panel (or POST /api/vs-presets/reload).
+EOF
+fi
 
 exec "$@"

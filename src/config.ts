@@ -186,6 +186,7 @@ export async function loadConfig(): Promise<AppConfig> {
 			dedupeSubtitles,
 			audioLanguages,
 			subtitleLanguages,
+			vsFilters: [],
 		},
 	};
 }

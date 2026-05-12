@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "fs";
 import { join, parse as parsePath } from "path";
-import type { AppConfig, Job, JobSettings, PreviewSample, PreviewState, ProbeResult } from "./types";
+import type { AppConfig, Job, JobSettings, PreviewSample, PreviewSampleVsFrame, PreviewState, ProbeResult } from "./types";
 import { probeFile } from "./probe";
 import { CancelledError, describeExitCode, humanSize, run } from "./process";
 import { Logger } from "./logger";
 import { buildPrepareFilterConfig } from "./filters";
 import { FFV1_ENCODE_ARGS, runAnalysisPass, runSegmentedAutoDenoiseGpu } from "./auto-denoise";
+import { formatVsProgressDetail, runVsPass, vsRegistry } from "./vs-filters";
 
 export interface PreviewEncodeOptions {
 	sampleCount: number;
@@ -34,6 +35,7 @@ export function previewSettingsFingerprint(s: JobSettings): string {
 		nlmeansParams: s.nlmeansParams,
 		gradfunParams: s.gradfunParams,
 		autoDenoiseThresholds: s.autoDenoiseThresholds,
+		vsFilters: s.vsFilters ?? [],
 	});
 }
 
@@ -163,6 +165,9 @@ async function encodeSample(
 		if (signal.aborted) throw new CancelledError();
 	};
 
+	const frameOffset = (ctx.windowSec / 2).toFixed(3);
+	const vsFrames: PreviewSampleVsFrame[] = [];
+
 	// 1. Extract source window with FFV1 (lossless, frame-accurate).
 	checkCancelled();
 	onProgress(0.05, "Extracting source clip");
@@ -189,6 +194,82 @@ async function encodeSample(
 	);
 	if (extractRes.code !== 0) {
 		throw new Error(`Source clip extraction failed: ${extractRes.stderr.slice(-500)}`);
+	}
+
+	// 1a. Capture the source PNG NOW, before any VS pass touches source
+	checkCancelled();
+	const sourceFrameRes = await run(buildPreviewPngExtractArgs(sourceClip, frameOffset, sourceFrame, colorInfo, probe), { signal });
+	if (sourceFrameRes.code !== 0) {
+		throw new Error(`Source frame extraction failed: ${sourceFrameRes.stderr.slice(-500)}`);
+	}
+
+	// 1.5. VapourSynth filter chain
+	const activeVsEntries = (job.settings.vsFilters ?? []).filter((e) => e.level !== "off");
+
+	if (activeVsEntries.length > 0) {
+		const totalFrames = Math.max(1, Math.round(ctx.windowSec * probe.videoStreamFps));
+		let currentInput = sourceClip;
+
+		for (let i = 0; i < activeVsEntries.length; i++) {
+			checkCancelled();
+			const entry = activeVsEntries[i]!;
+			const manifest = vsRegistry.get(entry.presetId);
+			if (!manifest) {
+				Logger.warn(`[preview] Skipping unknown VS preset: ${entry.presetId}`);
+				continue;
+			}
+
+			const outPath = join(ctx.dir, `vs_${i}_${manifest.bareId}.mkv`);
+			const passBaseFrac = i / activeVsEntries.length;
+			const passShareFrac = 1 / activeVsEntries.length;
+
+			Logger.info(`[preview] Sample ${ctx.index} VS pass ${i + 1}/${activeVsEntries.length}: ` + `${manifest.id} level=${entry.level}`);
+			onProgress(0.05 + 0.05 * passBaseFrac, formatVsProgressDetail(manifest.name, entry.level, 0, totalFrames, null));
+
+			await runVsPass({
+				manifest,
+				entry,
+				inputPath: currentInput,
+				outputPath: outPath,
+				totalFrames,
+				signal,
+				onProgress: (current, fps) => {
+					const passFrac = totalFrames > 0 ? current / totalFrames : 0;
+					onProgress(0.05 + 0.05 * (passBaseFrac + passShareFrac * passFrac), formatVsProgressDetail(manifest.name, entry.level, current, totalFrames, fps));
+				},
+			});
+
+			// Snapshot a PNG from this pass's output BEFORE we delete/rename the .mkv.
+			checkCancelled();
+			const vsPng = join(ctx.dir, `vs_${i}.png`);
+			const vsFrameRes = await run(buildPreviewPngExtractArgs(outPath, frameOffset, vsPng, colorInfo, probe), { signal });
+			if (vsFrameRes.code !== 0) {
+				Logger.warn(`[preview] VS snapshot failed for sample ${ctx.index} pass ${i + 1} ` + `(${manifest.id}): ${vsFrameRes.stderr.slice(-300)}`);
+			} else {
+				vsFrames.push({
+					index: i,
+					presetId: manifest.id,
+					bareId: manifest.bareId,
+					label: `${manifest.name} (${entry.level})`,
+				});
+			}
+
+			if (currentInput !== sourceClip) {
+				try {
+					rmSync(currentInput);
+				} catch {}
+			}
+			currentInput = outPath;
+		}
+
+		if (currentInput !== sourceClip) {
+			try {
+				rmSync(sourceClip);
+			} catch {}
+			renameSync(currentInput, sourceClip);
+		}
+
+		Logger.info(`[preview] Sample ${ctx.index}: VS chain complete (${activeVsEntries.length} pass(es))`);
 	}
 
 	// 2. Optional per-clip auto-denoise analysis.
@@ -325,7 +406,7 @@ async function encodeSample(
 						abeLastError = evt.message;
 					}
 				} catch {
-					// Non-JSON line; ignore — only the JSON events matter here.
+					// Non-JSON line, just ignore
 				}
 			}
 		}
@@ -361,24 +442,11 @@ async function encodeSample(
 		throw new Error(`mkvmerge failed: ${muxRes.stderr || muxRes.stdout}`);
 	}
 
-	// 6. Pull a representative frame out of both clips at the centre of the
-	// window. Seek before -i for speed; both clips were re-encoded as keyframe
-	// every-frame (FFV1 / ABE output) so seek is exact.
+	// 6. Pull the encode frame
 	checkCancelled();
-	onProgress(0.98, "Extracting comparison frames");
+	onProgress(0.98, "Extracting comparison frame");
 
-	const frameOffset = (ctx.windowSec / 2).toFixed(3);
-
-	const sourceFrameRes = await run(buildPreviewPngExtractArgs(sourceClip, frameOffset, sourceFrame, colorInfo, probe), {
-		signal,
-	});
-	if (sourceFrameRes.code !== 0) {
-		throw new Error(`Source frame extraction failed: ${sourceFrameRes.stderr.slice(-500)}`);
-	}
-
-	const encodeFrameRes = await run(buildPreviewPngExtractArgs(encodedClip, frameOffset, encodeFrame, colorInfo, probe), {
-		signal,
-	});
+	const encodeFrameRes = await run(buildPreviewPngExtractArgs(encodedClip, frameOffset, encodeFrame, colorInfo, probe), { signal });
 	if (encodeFrameRes.code !== 0) {
 		throw new Error(`Encode frame extraction failed: ${encodeFrameRes.stderr.slice(-500)}`);
 	}
@@ -405,6 +473,7 @@ async function encodeSample(
 		projectedTotalBytes,
 		projectedTotalHuman: humanSize(projectedTotalBytes),
 		encodedBitrateKbps,
+		vsFrames,
 	};
 }
 
@@ -476,22 +545,25 @@ export async function runPreviewEncode(args: RunPreviewArgs): Promise<PreviewSam
 	return completed;
 }
 
-export function resolvePreviewArtifact(config: AppConfig, jobId: string, sampleIndex: number, kind: "source" | "encode" | "clip"): string | null {
+export function resolvePreviewArtifact(config: AppConfig, jobId: string, sampleIndex: number, kind: string): string | null {
 	const dir = join(previewDirFor(config, jobId), `sample_${String(sampleIndex).padStart(2, "0")}`);
 	let file: string;
-	switch (kind) {
-		case "source":
-			file = join(dir, "source.png");
-			break;
-		case "encode":
-			file = join(dir, "encode.png");
-			break;
-		case "clip":
-			file = join(dir, "encoded.mkv");
-			break;
-		default:
-			return null;
+
+	if (kind === "source") {
+		file = join(dir, "source.png");
+	} else if (kind === "encode") {
+		file = join(dir, "encode.png");
+	} else if (kind === "clip") {
+		file = join(dir, "encoded.mkv");
+	} else {
+		// VS-intermediate snapshot: "vs:N" where N is the zero-based pass index.
+		const m = kind.match(/^vs:(\d+)$/);
+		if (!m) return null;
+		const idx = parseInt(m[1]!, 10);
+		if (!Number.isFinite(idx) || idx < 0) return null;
+		file = join(dir, `vs_${idx}.png`);
 	}
+
 	return existsSync(file) ? file : null;
 }
 

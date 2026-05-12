@@ -260,6 +260,16 @@
 							<div id="advanced-gradfun-params"></div>
 							<div class="lang-filter-hint"><code>strength</code> = max change per pixel [0.51 – 64], <code>radius</code> = neighbourhood size [8 – 32].</div>
 						</div>
+
+						<div class="setting-group">
+							<label>VapourSynth Filters</label>
+							<div id="advanced-vs-chain"></div>
+							<div class="lang-filter-hint">
+								Each filter runs as its own pass before the FFmpeg filter chain. VapourSynth filters are CPU-bound and slower than FFmpeg filters – expect
+								noticeably longer prepare times.
+							</div>
+							<button class="btn btn-ghost" id="vs-reload-btn" type="button">Reload presets</button>
+						</div>
 					</div>
 					<div class="modal-footer">
 						<button class="btn btn-primary" id="close-advanced-done-btn">Done</button>
@@ -418,7 +428,7 @@
 						<div id="preview-intro" class="preview-intro" style="display: none">
 							<p>
 								Encodes <strong>6 short clips</strong> spread evenly across the source so you can compare quality before committing the full encode. Click any
-								image to toggle between source and encode.
+								image to step through source → filter passes → encode. In fullscreen, use ← → or Space to navigate.
 							</p>
 						</div>
 
@@ -452,7 +462,7 @@
 					<div class="preview-fullscreen-header">
 						<div>
 							<h2 id="preview-fullscreen-title">Preview sample</h2>
-							<span class="preview-fullscreen-subtitle">Click image to toggle source / encode</span>
+							<span class="preview-fullscreen-subtitle">Click or ← → / Space to step through views · Esc to close</span>
 						</div>
 						<button class="btn-close" id="close-preview-fullscreen-btn" aria-label="Close fullscreen preview">&times;</button>
 					</div>
