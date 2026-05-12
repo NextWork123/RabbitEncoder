@@ -7,6 +7,7 @@ const API = "";
 let queuePaused = false;
 let defaults = null;
 let currentEditJobId = null;
+let currentAdvancedTarget = null;
 let authToken = localStorage.getItem("authToken") || "";
 let pollTimer = null;
 let benchmarkPollTimer = null;
@@ -245,6 +246,11 @@ async function patchConfig(settings) {
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(settings),
 	});
+	return res.json();
+}
+
+async function resetConfigRequest() {
+	const res = await authFetch(`${API}/api/config/reset`, { method: "POST" });
 	return res.json();
 }
 
@@ -1987,6 +1993,13 @@ async function saveSettings() {
 	closeSettings();
 }
 
+async function onResetDefaultsClick() {
+	if (!confirm("Reset all settings to defaults? This will discard your customizations.")) return;
+	const res = await resetConfigRequest();
+	defaults = res;
+	closeSettings();
+}
+
 function closeSettings() {
 	document.getElementById("settings-modal").style.display = "none";
 }
@@ -1996,6 +2009,7 @@ function closeSettingsIfOutside(e) {
 }
 
 async function openAdvancedModal(target /* "default" | "job" */) {
+	currentAdvancedTarget = target;
 	const settings = target === "default" ? window._tempDefaults : window._tempJobSettings;
 	if (!settings) return;
 
@@ -2057,6 +2071,7 @@ async function openAdvancedModal(target /* "default" | "job" */) {
 
 function closeAdvancedModal() {
 	document.getElementById("advanced-modal").style.display = "none";
+	currentAdvancedTarget = null;
 }
 
 function closeAdvancedModalIfOutside(e) {
@@ -3002,10 +3017,18 @@ async function handleLibraryEncode() {
 	}
 }
 
+function getCurrentSettings() {
+	if (currentAdvancedTarget === "default") return window._tempDefaults;
+	if (currentAdvancedTarget === "job") return window._tempJobSettings;
+	return null;
+}
+
 function initEventListeners() {
 	document.getElementById("open-settings-btn").addEventListener("click", openSettings);
 	document.getElementById("close-settings-btn").addEventListener("click", closeSettings);
 	document.getElementById("save-settings-btn").addEventListener("click", saveSettings);
+	document.getElementById("reset-settings-btn").addEventListener("click", onResetDefaultsClick);
+
 	document.getElementById("settings-modal").addEventListener("click", closeSettingsIfOutside);
 
 	document.getElementById("close-job-modal-btn").addEventListener("click", closeJobModal);

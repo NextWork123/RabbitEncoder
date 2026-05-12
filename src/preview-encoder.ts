@@ -386,35 +386,45 @@ async function encodeSample(
 
 	const stdoutTask = (async () => {
 		if (!abeProc.stdout) return;
-		const reader = abeProc.stdout.getReader();
-		const decoder = new TextDecoder();
-		let buffer = "";
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			buffer += decoder.decode(value, { stream: true });
-			const lines = buffer.split("\n");
-			buffer = lines.pop() || "";
-			for (const line of lines) {
-				if (!line.trim()) continue;
+
+		try {
+			const reader = abeProc.stdout.getReader();
+			const decoder = new TextDecoder();
+			let buffer = "";
+			while (true) {
 				try {
-					const evt = JSON.parse(line);
-					if (evt.event === "stage_complete" && typeof evt.stage === "number") {
-						const stagePct = Math.min(1, (evt.stage + 1) / 5);
-						onProgress(0.25 + 0.7 * stagePct, `Encoding — stage ${evt.stage + 1}/5 done`);
-					} else if (evt.event === "error" && typeof evt.message === "string") {
-						abeLastError = evt.message;
+					const { done, value } = await reader.read();
+					if (done) break;
+					buffer += decoder.decode(value, { stream: true });
+					const lines = buffer.split("\n");
+					buffer = lines.pop() || "";
+					for (const line of lines) {
+						if (!line.trim()) continue;
+						try {
+							const evt = JSON.parse(line);
+							if (evt.event === "stage_complete" && typeof evt.stage === "number") {
+								const stagePct = Math.min(1, (evt.stage + 1) / 5);
+								onProgress(0.25 + 0.7 * stagePct, `Encoding — stage ${evt.stage + 1}/5 done`);
+							} else if (evt.event === "error" && typeof evt.message === "string") {
+								abeLastError = evt.message;
+							}
+						} catch {
+							// Non-JSON line, just ignore
+						}
 					}
 				} catch {
-					// Non-JSON line, just ignore
+					break;
 				}
 			}
-		}
+		} catch {}
 	})();
 
 	const stderrTask = (async () => {
 		if (!abeProc.stderr) return;
-		abeStderr = await new Response(abeProc.stderr).text();
+
+		try {
+			abeStderr = await new Response(abeProc.stderr).text();
+		} catch {}
 	})();
 
 	const abeCode = await abeProc.exited;

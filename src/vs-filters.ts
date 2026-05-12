@@ -90,10 +90,6 @@ class VsRegistry {
 
 export const vsRegistry = new VsRegistry();
 
-// ---------------------------------------------------------------------------
-// Manifest validation
-// ---------------------------------------------------------------------------
-
 function validateManifest(raw: any, source: VsPresetSource, scriptPath: string, manifestPath: string): VsPresetManifest {
 	const where = `manifest ${manifestPath}`;
 
@@ -200,10 +196,6 @@ function coerceValue(v: unknown, type: VsParamType, enumValues?: string[]): VsPa
 	return s;
 }
 
-// ---------------------------------------------------------------------------
-// Param normalization (for incoming entries from the API / queue.json)
-// ---------------------------------------------------------------------------
-
 function clampNum(v: number, min?: number, max?: number): number {
 	if (typeof min === "number" && v < min) v = min;
 	if (typeof max === "number" && v > max) v = max;
@@ -299,10 +291,6 @@ export function makeDefaultVsFilterEntry(presetId: string): VsFilterEntry | null
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Color metadata probing
-// ---------------------------------------------------------------------------
-
 interface SourceColorTags {
 	pixFmt: string;
 	colorRange?: string;
@@ -360,10 +348,6 @@ function buildColorPassthroughArgs(c: SourceColorTags): string[] {
 	return args;
 }
 
-// ---------------------------------------------------------------------------
-// Command construction
-// ---------------------------------------------------------------------------
-
 /**
  * Build the vspipe argv that runs `manifest`'s script with the params for the
  * selected level.
@@ -393,10 +377,6 @@ function formatArg(v: VsParamValue, spec: VsParamSpec): string {
 	return String(v);
 }
 
-// ---------------------------------------------------------------------------
-// Runner: vspipe → ffmpeg(FFV1) with progress + cancel
-// ---------------------------------------------------------------------------
-
 export interface VsPassResult {
 	/** Final output path (same as the one passed in). */
 	outputPath: string;
@@ -414,6 +394,10 @@ export interface RunVsPassOptions {
 	totalFrames: number;
 	onProgress?: (currentFrames: number, fpsStr: string | null) => void;
 	signal?: AbortSignal;
+}
+
+function shQuote(s: string): string {
+	return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
 
 /**
@@ -434,53 +418,111 @@ export async function runVsPass(opts: RunVsPassOptions): Promise<VsPassResult> {
 
 	const vsArgs = buildVsCommand(manifest, entry, inputPath);
 
+	const ffmpegTailArgs = [...colorArgs, ...FFV1_ENCODE_ARGS, "-an", "-sn", outputPath];
+
 	const env: Record<string, string> = { ...process.env } as Record<string, string>;
 	const existingPyPath = env.PYTHONPATH ? `:${env.PYTHONPATH}` : "";
 	env.PYTHONPATH = `${vsRegistry.getRabbitVsDir()}${existingPyPath}`;
 
 	Logger.debug(`[vs] ${manifest.id} level=${entry.level} cmd: ${vsArgs.join(" ")}`);
 
-	const vspipe = Bun.spawn(vsArgs, {
-		stdout: "pipe",
+	const vsCmd = vsArgs.map(shQuote).join(" ");
+	const ffmpegTailCmd = ffmpegTailArgs.map(shQuote).join(" ");
+
+	const pipelineScript = `
+set -u
+
+fifo="$(mktemp -u /tmp/rabbit-vs-y4m.XXXXXX)"
+mkfifo "$fifo"
+
+vspid=""
+ffpid=""
+
+cleanup_children() {
+	trap - TERM INT
+
+	if [ -n "$vspid" ]; then
+		kill -TERM "$vspid" 2>/dev/null || true
+	fi
+
+	if [ -n "$ffpid" ]; then
+		kill -TERM "$ffpid" 2>/dev/null || true
+	fi
+
+	sleep 0.3
+
+	if [ -n "$vspid" ]; then
+		kill -KILL "$vspid" 2>/dev/null || true
+	fi
+
+	if [ -n "$ffpid" ]; then
+		kill -KILL "$ffpid" 2>/dev/null || true
+	fi
+}
+
+cleanup_exit() {
+	rm -f "$fifo"
+}
+
+on_term() {
+	cleanup_children
+	cleanup_exit
+	exit 143
+}
+
+trap on_term TERM INT
+trap cleanup_exit EXIT
+
+ffmpeg -y -f yuv4mpegpipe -i "$fifo" ${ffmpegTailCmd} &
+ffpid="$!"
+
+${vsCmd} > "$fifo" &
+vspid="$!"
+
+wait "$vspid"
+vs_code="$?"
+
+wait "$ffpid"
+ff_code="$?"
+
+if [ "$vs_code" -ne 0 ]; then
+	exit "$vs_code"
+fi
+
+if [ "$ff_code" -ne 0 ]; then
+	exit "$ff_code"
+fi
+
+exit 0
+`.trim();
+
+	const proc = Bun.spawn(["bash", "-lc", pipelineScript], {
+		stdout: "ignore",
 		stderr: "pipe",
 		env,
 	});
 
-	const ffmpegArgs = ["ffmpeg", "-y", "-f", "yuv4mpegpipe", "-i", "pipe:0", ...colorArgs, ...FFV1_ENCODE_ARGS, "-an", "-sn", outputPath];
-
-	const ffmpeg = Bun.spawn(ffmpegArgs, {
-		stdin: vspipe.stdout,
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-
-	// Cancellation: kill both, ffmpeg first so vspipe sees SIGPIPE on its stdout.
 	const onAbort = () => {
 		try {
-			ffmpeg.kill("SIGTERM");
+			proc.kill("SIGTERM");
 		} catch {}
-		try {
-			vspipe.kill("SIGTERM");
-		} catch {}
+
 		setTimeout(() => {
 			try {
-				ffmpeg.kill("SIGKILL");
-			} catch {}
-			try {
-				vspipe.kill("SIGKILL");
+				proc.kill("SIGKILL");
 			} catch {}
 		}, 3000);
 	};
+
 	if (signal) {
 		if (signal.aborted) onAbort();
 		else signal.addEventListener("abort", onAbort, { once: true });
 	}
 
-	// vspipe progress goes to stderr as "Frame: X/Y (Z fps)".
 	const startedAt = Date.now();
 	let currentFrames = 0;
 
-	const vsStderrTask = readStderrLines(vspipe.stderr, (line) => {
+	const stderrTask = readStderrLines(proc.stderr, (line) => {
 		const m = line.match(/Frame:\s*(\d+)\s*\/\s*(\d+)/);
 		if (m) {
 			currentFrames = parseInt(m[1]!, 10);
@@ -489,64 +531,62 @@ export async function runVsPass(opts: RunVsPassOptions): Promise<VsPassResult> {
 		}
 	});
 
-	const ffStderrTask = readStderrLines(ffmpeg.stderr, () => {
-		// We rely on vspipe for progress; ffmpeg's frame= can lag.
-	});
+	const [stderr, code] = await Promise.all([stderrTask, proc.exited]);
 
-	const [vsStderr, ffStderr] = await Promise.all([vsStderrTask, ffStderrTask]);
-	const vsCode = await vspipe.exited;
-	const ffCode = await ffmpeg.exited;
+	if (signal && !signal.aborted) {
+		signal.removeEventListener("abort", onAbort);
+	}
 
-	if (signal && !signal.aborted) signal.removeEventListener("abort", onAbort);
-	if (signal?.aborted) throw new CancelledError();
+	if (signal?.aborted) {
+		throw new CancelledError();
+	}
 
-	if (vsCode !== 0 || ffCode !== 0) {
-		const tail = [
-			vsCode !== 0 ? `vspipe exited ${vsCode}:\n${vsStderr.trim().split("\n").slice(-15).join("\n")}` : "",
-			ffCode !== 0 ? `ffmpeg exited ${ffCode}:\n${ffStderr.trim().split("\n").slice(-15).join("\n")}` : "",
-		]
-			.filter(Boolean)
-			.join("\n---\n");
-		throw new Error(`VapourSynth pass failed (preset=${manifest.id}, level=${entry.level}):\n${tail}`);
+	if (code !== 0) {
+		const tail = stderr.trim().split("\n").slice(-40).join("\n");
+		throw new Error(`VapourSynth pass failed (preset=${manifest.id}, level=${entry.level}, exit=${code}):\n${tail}`);
 	}
 
 	return {
 		outputPath,
 		frames: currentFrames || totalFrames,
-		stderrTail: `${vsStderr}\n${ffStderr}`.slice(-2000),
+		stderrTail: stderr.slice(-2000),
 	};
 }
 
 async function readStderrLines(stream: ReadableStream<Uint8Array> | undefined | null, onLine: (line: string) => void): Promise<string> {
 	if (!stream) return "";
-	const reader = stream.getReader();
-	const decoder = new TextDecoder();
-	let buffer = "";
-	const collected: string[] = [];
 
-	while (true) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		buffer += decoder.decode(value, { stream: true });
-		const parts = buffer.split(/[\r\n]/);
-		buffer = parts.pop() || "";
-		for (const part of parts) {
-			if (part) {
-				collected.push(part);
-				onLine(part);
+	const collected: string[] = [];
+	try {
+		const reader = stream.getReader();
+		const decoder = new TextDecoder();
+		let buffer = "";
+
+		while (true) {
+			try {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				const parts = buffer.split(/[\r\n]/);
+				buffer = parts.pop() || "";
+				for (const part of parts) {
+					if (part) {
+						collected.push(part);
+						onLine(part);
+					}
+				}
+			} catch {
+				break;
 			}
 		}
-	}
-	if (buffer) {
-		collected.push(buffer);
-		onLine(buffer);
-	}
+		if (buffer) {
+			collected.push(buffer);
+			onLine(buffer);
+		}
+	} catch {}
+
 	return collected.join("\n");
 }
-
-// ---------------------------------------------------------------------------
-// Pretty progress string for the encoder UI
-// ---------------------------------------------------------------------------
 
 export function formatVsProgressDetail(presetName: string, level: string, current: number, total: number, fpsStr: string | null): string {
 	const base = `${presetName} (${level}) — ${fmtFrames(current, total)}`;

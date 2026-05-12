@@ -1,12 +1,13 @@
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { resolve, dirname, join, extname, relative, basename } from "path";
 import { type Job, type JobSettings, type AppConfig, type DenoiseBackend, type PreviewState, MEDIA_EXTENSIONS } from "./types";
 import { encodeJob, CancelledError } from "./encoder";
 import { isAlreadyEncoded } from "./library";
 import { Logger } from "./logger";
-import { DEFAULT_NLMEANS_PARAMS, DEFAULT_GRADFUN_PARAMS, normalizeNlmeansLevelParams, normalizeGradfunLevelParams } from "./filters";
+import { normalizeNlmeansLevelParams, normalizeGradfunLevelParams } from "./filters";
 import { runPreviewEncode, deletePreviewDir, previewSettingsFingerprint, DEFAULT_PREVIEW_OPTIONS } from "./preview-encoder";
 import { normalizeVsFilterChain } from "./vs-filters";
+import { getDefaultJobSettings } from "./config";
 
 const jobs = new Map<string, Job>();
 let paused = false;
@@ -14,6 +15,7 @@ let processing = false;
 let orderCounter = 0;
 let appConfig: AppConfig;
 let queueFile = "";
+let settingsFile = "";
 let activeAbortController: AbortController | null = null;
 let activeJobId: string | null = null;
 
@@ -23,66 +25,11 @@ let activePreviewAbort: AbortController | null = null;
 
 const VALID_DENOISE_BACKENDS: DenoiseBackend[] = ["cpu", "auto", "vulkan", "opencl"];
 
-/**
- * Migrate legacy job settings shape to the new one.
- *
- *   - Old: denoiseGpu: boolean + gpuBackend: "auto"|"vulkan"|"opencl"
- *   - New: denoiseBackend: "cpu"|"auto"|"vulkan"|"opencl"
- *
- *   - Old: NLMEANS_PARAMS / GRADFUN_PARAMS were globals
- *   - New: nlmeansParams / gradfunParams on the settings
- */
-function migrateJobSettings(s: any, defaults: JobSettings): JobSettings {
-	const out: JobSettings = { ...defaults, ...s };
-
-	// denoiseBackend migration
-	if (typeof s?.denoiseBackend === "string" && VALID_DENOISE_BACKENDS.includes(s.denoiseBackend)) {
-		out.denoiseBackend = s.denoiseBackend;
-	} else if (s && (typeof s.denoiseGpu === "boolean" || typeof s.gpuBackend === "string")) {
-		const gpu = s.denoiseGpu === true;
-		const oldBackend = typeof s.gpuBackend === "string" ? s.gpuBackend.toLowerCase() : "auto";
-		if (!gpu) {
-			out.denoiseBackend = "cpu";
-		} else if (oldBackend === "vulkan" || oldBackend === "opencl" || oldBackend === "auto") {
-			out.denoiseBackend = oldBackend;
-		} else {
-			out.denoiseBackend = "auto";
-		}
-	} else {
-		out.denoiseBackend = defaults.denoiseBackend;
-	}
-	// strip the old fields if present (defensive)
-	delete (out as any).denoiseGpu;
-	delete (out as any).gpuBackend;
-
-	// gpuDevice fallback
-	if (typeof out.gpuDevice !== "string" || out.gpuDevice.length === 0) {
-		out.gpuDevice = defaults.gpuDevice;
-	}
-
-	// Filter params
-	out.nlmeansParams = normalizeNlmeansLevelParams(s?.nlmeansParams, defaults.nlmeansParams ?? DEFAULT_NLMEANS_PARAMS);
-	out.gradfunParams = normalizeGradfunLevelParams(s?.gradfunParams, defaults.gradfunParams ?? DEFAULT_GRADFUN_PARAMS);
-
-	// Auto thresholds: keep the defaults if missing/malformed
-	const t = s?.autoDenoiseThresholds;
-	if (t && typeof t.light === "number" && typeof t.medium === "number" && typeof t.heavy === "number") {
-		out.autoDenoiseThresholds = { light: t.light, medium: t.medium, heavy: t.heavy };
-	} else {
-		out.autoDenoiseThresholds = { ...defaults.autoDenoiseThresholds };
-	}
-
-	// Audio bitrates merge
-	out.audioBitrates = { ...defaults.audioBitrates, ...(s?.audioBitrates ?? {}) };
-
-	out.vsFilters = normalizeVsFilterChain(s?.vsFilters ?? defaults.vsFilters);
-
-	return out;
-}
-
 export function initStore(config: AppConfig) {
 	appConfig = config;
 	queueFile = join(config.tempDir, "queue.json");
+	settingsFile = join(config.tempDir, "settings.json");
+	loadSettings();
 	loadQueue();
 	processQueue();
 }
@@ -147,9 +94,7 @@ function loadQueue(): void {
 				continue;
 			}
 
-			// Migrate the persisted settings (handles old denoiseGpu/gpuBackend shape and
-			// missing nlmeansParams/gradfunParams).
-			raw.settings = migrateJobSettings(raw.settings ?? {}, appConfig.defaults);
+			raw.settings = { ...appConfig.defaults, ...(raw.settings ?? {}) };
 
 			jobs.set(raw.id, raw as Job);
 			if (raw.queueOrder > orderCounter) {
@@ -163,6 +108,27 @@ function loadQueue(): void {
 		}
 	} catch (err: any) {
 		Logger.warn("[store] Failed to load queue:", { "error.message": err?.message });
+	}
+}
+
+function saveSettings(): void {
+	if (!settingsFile) return;
+	try {
+		writeFileSync(settingsFile, JSON.stringify(appConfig.defaults, null, 2));
+	} catch (err: any) {
+		Logger.warn("[store] Failed to save settings:", { "error.message": err?.message });
+	}
+}
+
+function loadSettings(): void {
+	try {
+		if (!existsSync(settingsFile)) return;
+		const raw = JSON.parse(readFileSync(settingsFile, "utf-8"));
+		if (!raw || typeof raw !== "object") return;
+		appConfig.defaults = { ...appConfig.defaults, ...raw };
+		Logger.info("[store] Restored defaults from settings.json");
+	} catch (err: any) {
+		Logger.warn("[store] Failed to load settings:", { "error.message": err?.message });
 	}
 }
 
@@ -214,6 +180,19 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 			...settings.audioBitrates,
 		};
 	}
+
+	saveSettings();
+	return appConfig.defaults;
+}
+
+export function resetDefaults(): JobSettings {
+	appConfig.defaults = getDefaultJobSettings();
+	try {
+		if (settingsFile && existsSync(settingsFile)) unlinkSync(settingsFile);
+	} catch (err: any) {
+		Logger.warn("[store] Failed to delete settings.json:", { "error.message": err?.message });
+	}
+	Logger.info("[store] Defaults reset");
 	return appConfig.defaults;
 }
 

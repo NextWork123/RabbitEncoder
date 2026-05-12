@@ -249,7 +249,7 @@ export async function runAnalysisPass(
 		else signal.addEventListener("abort", onAbort, { once: true });
 	}
 
-	const stderrText = await new Response(proc.stderr).text();
+	const stderrText = await new Response(proc.stderr).text().catch(() => "");
 	const code = await proc.exited;
 
 	if (signal && onAbort) signal.removeEventListener("abort", onAbort);

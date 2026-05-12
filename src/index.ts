@@ -19,6 +19,7 @@ import {
 	startPreview,
 	cancelPreview,
 	clearPreviewFor,
+	resetDefaults,
 } from "./store";
 import { startWatcher } from "./watcher";
 import { browseFolder, isPathAllowed } from "./library";
@@ -282,6 +283,10 @@ app.patch("/api/config", async (c) => {
 	const body = (await c.req.json()) as Partial<JobSettings>;
 	const updated = updateDefaults(body);
 	return c.json(updated);
+});
+
+app.post("/api/config/reset", (c) => {
+	return c.json(resetDefaults());
 });
 
 app.get("/api/queue", (c) => {

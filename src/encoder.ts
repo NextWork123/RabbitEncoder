@@ -283,43 +283,50 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 			const stderrTask = (async () => {
 				if (!filterProc.stderr) return "";
-				const reader = filterProc.stderr.getReader();
-				const decoder = new TextDecoder();
-				let buffer = "";
-				let lastUpdate = 0;
-				const errLines: string[] = [];
 
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					buffer += decoder.decode(value, { stream: true });
-					const parts = buffer.split(/[\r\n]/);
-					buffer = parts.pop() || "";
+				try {
+					const reader = filterProc.stderr.getReader();
+					const decoder = new TextDecoder();
+					let buffer = "";
+					let lastUpdate = 0;
+					const errLines: string[] = [];
 
-					for (const part of parts) {
-						const frameMatch = part.match(/frame=\s*(\d+)/);
-						if (frameMatch && totalFrames > 0) {
-							const current = parseInt(frameMatch[1]!);
-							const now = Date.now();
-							if (now - lastUpdate >= 1000) {
-								lastUpdate = now;
-								const fps = computeFps(current, filterStartedAt);
-								const fpsStr = fps ? ` (${fps} fps)` : "";
-								setStep(S_PREPARE, {
-									progress: 5 + pct2(current, totalFrames) * 0.95,
-									detail: `${prepareFilter.label} — ${fmtFrames(current, totalFrames)}${fpsStr}`,
-								});
+					while (true) {
+						try {
+							const { done, value } = await reader.read();
+							if (done) break;
+							buffer += decoder.decode(value, { stream: true });
+							const parts = buffer.split(/[\r\n]/);
+							buffer = parts.pop() || "";
+
+							for (const part of parts) {
+								const frameMatch = part.match(/frame=\s*(\d+)/);
+								if (frameMatch && totalFrames > 0) {
+									const current = parseInt(frameMatch[1]!);
+									const now = Date.now();
+									if (now - lastUpdate >= 1000) {
+										lastUpdate = now;
+										const fps = computeFps(current, filterStartedAt);
+										const fpsStr = fps ? ` (${fps} fps)` : "";
+										setStep(S_PREPARE, {
+											progress: 5 + pct2(current, totalFrames) * 0.95,
+											detail: `${prepareFilter.label} — ${fmtFrames(current, totalFrames)}${fpsStr}`,
+										});
+									}
+								} else if (part.trim()) {
+									errLines.push(part);
+									if (errLines.length > 200) errLines.shift();
+								}
 							}
-						} else if (part.trim()) {
-							errLines.push(part);
-							if (errLines.length > 200) errLines.shift();
+						} catch {
+							break;
 						}
 					}
-				}
 
-				buffer += decoder.decode();
-				if (buffer.trim()) errLines.push(buffer);
-				return errLines.join("\n");
+					buffer += decoder.decode();
+					if (buffer.trim()) errLines.push(buffer);
+					return errLines.join("\n");
+				} catch {}
 			})();
 
 			const stdoutTask = new Response(filterProc.stdout).text();
@@ -329,7 +336,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			checkCancelled();
 
 			if (filterCode !== 0) {
-				throw new Error(`Prepare filter failed (exit ${filterCode}): ${stderrTail.trim().slice(-500)}`);
+				throw new Error(`Prepare filter failed (exit ${filterCode}): ${stderrTail?.trim().slice(-500)}`);
 			}
 
 			unlinkSync(preparedVideo);
@@ -504,63 +511,75 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			const abeStdoutTask = (async () => {
 				if (!abeProc.stdout) return;
 
-				const reader = abeProc.stdout.getReader();
-				const decoder = new TextDecoder();
-				let buffer = "";
+				try {
+					const reader = abeProc.stdout.getReader();
+					const decoder = new TextDecoder();
+					let buffer = "";
 
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-
-					buffer += decoder.decode(value, { stream: true });
-					const lines = buffer.split("\n");
-					buffer = lines.pop() || "";
-
-					for (const rawLine of lines) {
-						const line = rawLine.trim();
-						if (!line) continue;
-
+					while (true) {
 						try {
-							const evt = JSON.parse(line);
-							handleAbeEvent(evt);
+							const { done, value } = await reader.read();
+							if (done) break;
+
+							buffer += decoder.decode(value, { stream: true });
+							const lines = buffer.split("\n");
+							buffer = lines.pop() || "";
+
+							for (const rawLine of lines) {
+								const line = rawLine.trim();
+								if (!line) continue;
+
+								try {
+									const evt = JSON.parse(line);
+									handleAbeEvent(evt);
+								} catch {
+									Logger.warn(`[ABE stdout non-json]`, { output: rawLine });
+								}
+							}
 						} catch {
-							Logger.warn(`[ABE stdout non-json]`, { output: rawLine });
+							break;
 						}
 					}
-				}
 
-				buffer += decoder.decode();
+					buffer += decoder.decode();
 
-				const trailing = buffer.trim();
-				if (trailing) {
-					try {
-						const evt = JSON.parse(trailing);
-						handleAbeEvent(evt);
-					} catch {
-						Logger.warn(`[ABE stdout trailing non-json]`, { output: trailing });
+					const trailing = buffer.trim();
+					if (trailing) {
+						try {
+							const evt = JSON.parse(trailing);
+							handleAbeEvent(evt);
+						} catch {
+							Logger.warn(`[ABE stdout trailing non-json]`, { output: trailing });
+						}
 					}
-				}
+				} catch {}
 			})();
 
 			const abeStderrTask = (async () => {
 				if (!abeProc.stderr) return;
 
-				const reader = abeProc.stderr.getReader();
-				const decoder = new TextDecoder();
+				try {
+					const reader = abeProc.stderr.getReader();
+					const decoder = new TextDecoder();
 
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
+					while (true) {
+						try {
+							const { done, value } = await reader.read();
+							if (done) break;
 
-					const chunk = decoder.decode(value, { stream: true });
-					abeStderr += chunk;
+							const chunk = decoder.decode(value, { stream: true });
+							abeStderr += chunk;
 
-					if (chunk.trim()) {
-						Logger.error("[ABE stderr]", { error: chunk.trimEnd() });
+							if (chunk.trim()) {
+								Logger.error("[ABE stderr]", { error: chunk.trimEnd() });
+							}
+						} catch {
+							break;
+						}
 					}
-				}
 
-				abeStderr += decoder.decode();
+					abeStderr += decoder.decode();
+				} catch {}
 			})();
 
 			const [abeCode] = await Promise.all([abeProc.exited, abeStdoutTask, abeStderrTask]);
