@@ -139,6 +139,7 @@ Source tags are detected from the input filename: `Bluray`, `WEBDL`, `WEBRip`, `
 | `GET`    | `/api/jobs/:id/preview/sample/:index/:kind` | Fetch a preview artifact. `kind`: `source` / `encode` (PNG) or `clip` (MKV)   |
 | `GET`    | `/api/config`                               | Get default settings                                                          |
 | `PATCH`  | `/api/config`                               | Update default settings                                                       |
+| `POST`   | `/api/config/reset`                         | Reset default settings                                                        |
 | `GET`    | `/api/library`                              | List configured library root directories                                      |
 | `GET`    | `/api/library/browse`                       | Browse a library folder (`?path=/data/library/Animes`)                        |
 | `POST`   | `/api/library/encode`                       | Queue all videos in a folder for in-place encoding                            |
