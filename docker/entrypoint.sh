@@ -114,7 +114,7 @@ Each preset needs two files with the same stem:
   myfilter.vpy   - the script
   myfilter.json  - the manifest (id, levels, params, defaults)
 
-See /app/vapoursynth/presets/finedehalo.json for a worked example.
+See https://github.com/Rabbit-Company/RabbitEncoder/tree/main/vapoursynth/presets for working examples.
 
 After adding a preset, hit "Reload presets" in the dashboard's Advanced
 Settings panel (or POST /api/vs-presets/reload).
