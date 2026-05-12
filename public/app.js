@@ -7,6 +7,7 @@ const API = "";
 let queuePaused = false;
 let defaults = null;
 let currentEditJobId = null;
+let currentAdvancedTarget = null;
 let authToken = localStorage.getItem("authToken") || "";
 let pollTimer = null;
 let benchmarkPollTimer = null;
@@ -1996,6 +1997,7 @@ function closeSettingsIfOutside(e) {
 }
 
 async function openAdvancedModal(target /* "default" | "job" */) {
+	currentAdvancedTarget = target;
 	const settings = target === "default" ? window._tempDefaults : window._tempJobSettings;
 	if (!settings) return;
 
@@ -2057,6 +2059,7 @@ async function openAdvancedModal(target /* "default" | "job" */) {
 
 function closeAdvancedModal() {
 	document.getElementById("advanced-modal").style.display = "none";
+	currentAdvancedTarget = null;
 }
 
 function closeAdvancedModalIfOutside(e) {
@@ -3000,6 +3003,12 @@ async function handleLibraryEncode() {
 		encodeBtn.textContent = "Encode Selected";
 		encodeBtn.disabled = getCheckedPaths().length === 0;
 	}
+}
+
+function getCurrentSettings() {
+	if (currentAdvancedTarget === "default") return window._tempDefaults;
+	if (currentAdvancedTarget === "job") return window._tempJobSettings;
+	return null;
 }
 
 function initEventListeners() {
