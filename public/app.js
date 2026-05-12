@@ -249,6 +249,11 @@ async function patchConfig(settings) {
 	return res.json();
 }
 
+async function resetConfigRequest() {
+	const res = await authFetch(`${API}/api/config/reset`, { method: "POST" });
+	return res.json();
+}
+
 async function patchJob(id, settings) {
 	const res = await authFetch(`${API}/api/jobs/${id}`, {
 		method: "PATCH",
@@ -1988,6 +1993,13 @@ async function saveSettings() {
 	closeSettings();
 }
 
+async function onResetDefaultsClick() {
+	if (!confirm("Reset all settings to defaults? This will discard your customizations.")) return;
+	const res = await resetConfigRequest();
+	defaults = res;
+	closeSettings();
+}
+
 function closeSettings() {
 	document.getElementById("settings-modal").style.display = "none";
 }
@@ -3015,6 +3027,8 @@ function initEventListeners() {
 	document.getElementById("open-settings-btn").addEventListener("click", openSettings);
 	document.getElementById("close-settings-btn").addEventListener("click", closeSettings);
 	document.getElementById("save-settings-btn").addEventListener("click", saveSettings);
+	document.getElementById("reset-settings-btn").addEventListener("click", onResetDefaultsClick);
+
 	document.getElementById("settings-modal").addEventListener("click", closeSettingsIfOutside);
 
 	document.getElementById("close-job-modal-btn").addEventListener("click", closeJobModal);

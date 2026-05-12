@@ -33,8 +33,8 @@ export async function run(cmd: string[], opts?: { cwd?: string; signal?: AbortSi
 		}
 	}
 
-	const stdoutText = await new Response(proc.stdout).text();
-	const stderrText = await new Response(proc.stderr).text();
+	const stdoutText = await new Response(proc.stdout).text().catch(() => "");
+	const stderrText = await new Response(proc.stderr).text().catch(() => "");
 	const code = await proc.exited;
 
 	if (onAbort && opts?.signal) {
