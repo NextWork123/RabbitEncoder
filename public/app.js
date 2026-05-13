@@ -646,6 +646,13 @@ function buildPreviewSampleViews(sample) {
 			role: "vs",
 		});
 	}
+	for (const f of sample.prepareFrames || []) {
+		views.push({
+			id: `pf:${f.kind}`,
+			label: f.label || f.kind,
+			role: "prepare",
+		});
+	}
 	views.push({ id: "encode", label: "Encode", role: "encode" });
 	return views;
 }
@@ -653,7 +660,7 @@ function buildPreviewSampleViews(sample) {
 function renderPreviewSamples(jobId, samples) {
 	const container = document.getElementById("preview-samples");
 
-	const desiredKey = samples.map((s) => `${s.index}:${(s.vsFrames || []).length}`).join(",");
+	const desiredKey = samples.map((s) => `${s.index}:${(s.vsFrames || []).length}:${(s.prepareFrames || []).length}`).join(",");
 	if (container.dataset.renderedKey === desiredKey) return;
 	container.dataset.renderedKey = desiredKey;
 	container.innerHTML = "";
@@ -761,6 +768,7 @@ async function setPreviewSampleViewByIdx(card, idx) {
 			tag.classList.toggle("is-source", view.role === "source");
 			tag.classList.toggle("is-encode", view.role === "encode");
 			tag.classList.toggle("is-vs", view.role === "vs");
+			tag.classList.toggle("is-prepare", view.role === "prepare");
 		}
 
 		if (currentPreviewFullscreenCard === card) {
@@ -772,6 +780,7 @@ async function setPreviewSampleViewByIdx(card, idx) {
 				fsTag.classList.toggle("is-source", view.role === "source");
 				fsTag.classList.toggle("is-encode", view.role === "encode");
 				fsTag.classList.toggle("is-vs", view.role === "vs");
+				fsTag.classList.toggle("is-prepare", view.role === "prepare");
 			}
 		}
 	} catch (e) {

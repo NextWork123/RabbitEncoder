@@ -257,6 +257,13 @@ export interface PreviewSampleVsFrame {
 	label: string;
 }
 
+export interface PreviewSamplePrepareFrame {
+	/** Which prepare-filter step this snapshot came from. */
+	kind: "downscale" | "deband" | "denoise";
+	/** Human-readable label like "Debanding (medium)" or "Auto denoise (GPU/Vulkan)". */
+	label: string;
+}
+
 export interface PreviewSample {
 	index: number;
 	timestampSec: number;
@@ -267,6 +274,7 @@ export interface PreviewSample {
 	projectedTotalHuman: string;
 	encodedBitrateKbps: number;
 	vsFrames: PreviewSampleVsFrame[];
+	prepareFrames: PreviewSamplePrepareFrame[];
 }
 
 export interface PreviewState {

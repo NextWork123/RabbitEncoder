@@ -112,6 +112,17 @@ export interface DebandConfig {
 	filter: string;
 }
 
+export interface PrepareFilterStep {
+	/** Discrete kind — used for artifact filenames and frontend routing. */
+	kind: "downscale" | "deband" | "denoise";
+	/** The -vf filter string for this step alone. */
+	filter: string;
+	/** Args to insert before -i (only the denoise step needs hw device init). */
+	preInputArgs: string[];
+	/** Human-readable label (e.g. "Debanding (medium)"). */
+	label: string;
+}
+
 export interface PrepareFilterConfig {
 	/** The combined -vf filter string (scale + deband + denoise). */
 	filter: string;
@@ -119,6 +130,8 @@ export interface PrepareFilterConfig {
 	preInputArgs: string[];
 	/** Human-readable label for the step detail. */
 	label: string;
+	/** Per-step breakdown of the same filter chain. */
+	steps: PrepareFilterStep[];
 	/** When set, the encoder runs runSegmentedAutoDenoiseGpu after the filter pass to apply per-range GPU denoise. */
 	deferredAutoDenoise?: {
 		plan: DenoisePlan;
@@ -372,27 +385,30 @@ export async function buildPrepareFilterConfig(input: PrepareFilterInput): Promi
 	const parts: string[] = [];
 	const preInputArgs: string[] = [];
 	const labelParts: string[] = [];
+	const steps: PrepareFilterStep[] = [];
 
 	if (needsScale) {
 		parts.push(scaleFilter);
 		labelParts.push("Downscaling");
+		steps.push({ kind: "downscale", filter: scaleFilter, preInputArgs: [], label: "Downscaling" });
 	}
 	if (debandConfig) {
 		parts.push(debandConfig.filter);
 		labelParts.push(`Debanding (${deband})`);
+		steps.push({ kind: "deband", filter: debandConfig.filter, preInputArgs: [], label: `Debanding (${deband})` });
 	}
 	if (denoiseFilter) {
 		parts.push(denoiseFilter);
 		preInputArgs.push(...denoisePreInputArgs);
-	}
-	if (denoiseLabel) {
-		labelParts.push(denoiseLabel);
+		labelParts.push(denoiseLabel!);
+		steps.push({ kind: "denoise", filter: denoiseFilter, preInputArgs: denoisePreInputArgs, label: denoiseLabel! });
 	}
 
 	return {
 		filter: parts.join(","),
 		preInputArgs,
 		label: labelParts.join(" + "),
+		steps,
 		deferredAutoDenoise,
 	};
 }

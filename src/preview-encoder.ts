@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "fs";
 import { join, parse as parsePath } from "path";
-import type { AppConfig, Job, JobSettings, PreviewSample, PreviewSampleVsFrame, PreviewState, ProbeResult } from "./types";
+import type { AppConfig, Job, JobSettings, PreviewSample, PreviewSamplePrepareFrame, PreviewSampleVsFrame, PreviewState, ProbeResult } from "./types";
 import { probeFile } from "./probe";
 import { CancelledError, describeExitCode, humanSize, run } from "./process";
 import { Logger } from "./logger";
@@ -167,6 +167,7 @@ async function encodeSample(
 
 	const frameOffset = (ctx.windowSec / 2).toFixed(3);
 	const vsFrames: PreviewSampleVsFrame[] = [];
+	const prepareFrames: PreviewSamplePrepareFrame[] = [];
 
 	// 1. Extract source window with FFV1 (lossless, frame-accurate).
 	checkCancelled();
@@ -285,7 +286,8 @@ async function encodeSample(
 		}
 	}
 
-	// 3. Apply the prepare filter the real encode uses.
+	// 3. Apply the prepare filter the real encode uses, one step at a time so
+	// each filter pass gets its own PNG snapshot for the comparison viewer.
 	checkCancelled();
 	onProgress(0.15, "Applying filters");
 
@@ -303,47 +305,118 @@ async function encodeSample(
 	});
 
 	let abeInput = sourceClip;
-	if (prepareFilter) {
-		const filterArgs = ["ffmpeg", "-y", ...prepareFilter.preInputArgs, "-i", sourceClip, ...colorArgs];
-		if (prepareFilter.filter) filterArgs.push("-vf", prepareFilter.filter);
-		filterArgs.push(...FFV1_ENCODE_ARGS, "-an", "-sn", filteredClip);
 
-		const filterRes = await run(filterArgs, { signal });
-		if (filterRes.code !== 0) {
-			throw new Error(`Filter pass failed: ${filterRes.stderr.slice(-500)}`);
+	if (prepareFilter && (prepareFilter.steps.length > 0 || prepareFilter.deferredAutoDenoise)) {
+		let currentInput = sourceClip;
+
+		// CPU-side steps: downscale, deband, denoise (or auto-denoise CPU path).
+		for (let i = 0; i < prepareFilter.steps.length; i++) {
+			checkCancelled();
+			const step = prepareFilter.steps[i]!;
+			const isLastStep = i === prepareFilter.steps.length - 1 && !prepareFilter.deferredAutoDenoise;
+			const outPath = isLastStep ? filteredClip : join(ctx.dir, `prepare_${i}_${step.kind}.mkv`);
+
+			const baseFrac = i / (prepareFilter.steps.length + (prepareFilter.deferredAutoDenoise ? 1 : 0));
+			Logger.info(`[preview] Sample ${ctx.index} prepare step ${i + 1}/${prepareFilter.steps.length}: ${step.label}`);
+			onProgress(0.15 + 0.05 * baseFrac, step.label);
+
+			const filterArgs = [
+				"ffmpeg",
+				"-y",
+				...step.preInputArgs,
+				"-i",
+				currentInput,
+				...colorArgs,
+				"-vf",
+				step.filter,
+				...FFV1_ENCODE_ARGS,
+				"-an",
+				"-sn",
+				outPath,
+			];
+			const filterRes = await run(filterArgs, { signal });
+			if (filterRes.code !== 0) {
+				throw new Error(`Filter pass (${step.kind}) failed: ${filterRes.stderr.slice(-500)}`);
+			}
+
+			// Snapshot the PNG BEFORE we overwrite/delete this intermediate later.
+			checkCancelled();
+			const pngPath = join(ctx.dir, `prepare_${step.kind}.png`);
+			const pngRes = await run(buildPreviewPngExtractArgs(outPath, frameOffset, pngPath, colorInfo, probe), { signal });
+			if (pngRes.code !== 0) {
+				Logger.warn(`[preview] Prepare snapshot failed for sample ${ctx.index} step ${step.kind}: ${pngRes.stderr.slice(-300)}`);
+			} else {
+				prepareFrames.push({ kind: step.kind, label: step.label });
+			}
+
+			if (currentInput !== sourceClip) {
+				try {
+					rmSync(currentInput);
+				} catch {}
+			}
+			currentInput = outPath;
 		}
-		abeInput = filteredClip;
-	}
 
-	if (prepareFilter?.deferredAutoDenoise) {
-		checkCancelled();
-		onProgress(0.2, "Auto-denoise (segmented GPU)");
+		// Deferred GPU auto-denoise
+		if (prepareFilter.deferredAutoDenoise) {
+			checkCancelled();
+			onProgress(0.2, "Auto-denoise (segmented GPU)");
 
-		const { plan, backend, gpuDevice, nlmeansParams } = prepareFilter.deferredAutoDenoise;
-		const denoisedClip = join(ctx.dir, "denoised.mkv");
+			const { plan, backend, gpuDevice, nlmeansParams } = prepareFilter.deferredAutoDenoise;
+			const denoiseInput = currentInput;
+			const denoiseOutput = filteredClip;
 
-		Logger.info(`[preview] Sample ${ctx.index}: running segmented GPU auto-denoise ` + `(${plan.length} ranges, ${backend} on device ${gpuDevice})`);
+			Logger.info(`[preview] Sample ${ctx.index}: running segmented GPU auto-denoise (${plan.length} ranges, ${backend} on device ${gpuDevice})`);
 
-		await runSegmentedAutoDenoiseGpu(
-			filteredClip,
-			denoisedClip,
-			plan,
-			ctx.windowSec,
-			backend,
-			gpuDevice,
-			ctx.dir,
-			nlmeansParams,
-			(i, n, label) => {
-				const segFrac = n > 0 ? i / n : 1;
-				onProgress(0.2 + 0.04 * segFrac, `Auto denoise — segment ${i}/${n} (${label})`);
-			},
-			signal,
-		);
+			if (existsSync(denoiseOutput) && denoiseOutput !== denoiseInput) {
+				try {
+					rmSync(denoiseOutput);
+				} catch {}
+			}
 
-		try {
-			rmSync(filteredClip);
-		} catch {}
-		renameSync(denoisedClip, filteredClip);
+			await runSegmentedAutoDenoiseGpu(
+				denoiseInput,
+				denoiseOutput,
+				plan,
+				ctx.windowSec,
+				backend,
+				gpuDevice,
+				ctx.dir,
+				nlmeansParams,
+				(i, n, label) => {
+					const segFrac = n > 0 ? i / n : 1;
+					onProgress(0.2 + 0.04 * segFrac, `Auto denoise — segment ${i}/${n} (${label})`);
+				},
+				signal,
+			);
+
+			checkCancelled();
+			const pngPath = join(ctx.dir, "prepare_denoise.png");
+			const pngRes = await run(buildPreviewPngExtractArgs(denoiseOutput, frameOffset, pngPath, colorInfo, probe), { signal });
+			const tag = backend === "vulkan" ? "GPU/Vulkan" : "GPU/OpenCL";
+			if (pngRes.code !== 0) {
+				Logger.warn(`[preview] Prepare snapshot failed for sample ${ctx.index} step denoise: ${pngRes.stderr.slice(-300)}`);
+			} else {
+				prepareFrames.push({ kind: "denoise", label: `Auto denoise (${tag})` });
+			}
+
+			if (denoiseInput !== sourceClip) {
+				try {
+					rmSync(denoiseInput);
+				} catch {}
+			}
+			currentInput = denoiseOutput;
+		}
+
+		// If the final intermediate isn't already at filteredClip's path, move it there.
+		if (currentInput !== filteredClip) {
+			if (existsSync(filteredClip)) {
+				try {
+					rmSync(filteredClip);
+				} catch {}
+			}
+			renameSync(currentInput, filteredClip);
+		}
 		abeInput = filteredClip;
 	}
 
@@ -484,6 +557,7 @@ async function encodeSample(
 		projectedTotalHuman: humanSize(projectedTotalBytes),
 		encodedBitrateKbps,
 		vsFrames,
+		prepareFrames,
 	};
 }
 
@@ -565,13 +639,19 @@ export function resolvePreviewArtifact(config: AppConfig, jobId: string, sampleI
 		file = join(dir, "encode.png");
 	} else if (kind === "clip") {
 		file = join(dir, "encoded.mkv");
-	} else {
-		// VS-intermediate snapshot: "vs:N" where N is the zero-based pass index.
+	} else if (kind.startsWith("vs:")) {
 		const m = kind.match(/^vs:(\d+)$/);
 		if (!m) return null;
 		const idx = parseInt(m[1]!, 10);
 		if (!Number.isFinite(idx) || idx < 0) return null;
 		file = join(dir, `vs_${idx}.png`);
+	} else if (kind.startsWith("pf:")) {
+		// Prepare-filter intermediate snapshot: pf:downscale | pf:deband | pf:denoise
+		const m = kind.match(/^pf:(downscale|deband|denoise)$/);
+		if (!m) return null;
+		file = join(dir, `prepare_${m[1]}.png`);
+	} else {
+		return null;
 	}
 
 	return existsSync(file) ? file : null;

@@ -1922,6 +1922,11 @@ code {
 	color: white;
 }
 
+.preview-sample-tag.is-prepare {
+	background: #f59e0b;
+	color: var(--bg-0);
+}
+
 .preview-sample-hint {
 	position: absolute;
 	bottom: 8px;
