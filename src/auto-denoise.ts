@@ -187,76 +187,108 @@ export async function runAnalysisPass(
 		} catch {}
 	}
 
-	// Filter chain notes:
-	//   - split=2 fans the decoded stream into two parallel chains
-	//   - chain A: downscale before scdet so cut detection is cheap; scdet must
-	//     see consecutive frames, so no select before it
-	//   - chain B: select samples first to drop ~91% of frames, then bitplanenoise
-	//     measures noise on the survivors at full resolution
-	//   - metadata=mode=print writes the lavfi.* k/v pairs to a file we parse later
-	const filterComplex = [
-		`[0:v]split=2[a][b];`,
-		`[a]scale=-2:${SCENE_DETECT_HEIGHT},scdet=s=1:t=${SCDET_THRESHOLD},`,
-		`metadata=mode=print:file='${escapeFilterPath(scenesLog)}'[s];`,
-		`[b]select='not(mod(n\\,${SAMPLE_EVERY_N_FRAMES}))',`,
-		`bitplanenoise=bitplane=4,`,
-		`metadata=mode=print:file='${escapeFilterPath(noiseLog)}'[n]`,
-	].join("");
-
 	Logger.info(`[auto-denoise] Running analysis pass on ${inputPath}`);
 
-	const proc = Bun.spawn(
-		[
-			"ffmpeg",
-			"-hide_banner",
-			"-v",
-			"error",
-			"-i",
-			inputPath,
-			"-filter_complex",
-			filterComplex,
-			"-map",
-			"[s]",
-			"-an",
-			"-sn",
-			"-f",
-			"null",
-			"-",
-			"-map",
-			"[n]",
-			"-an",
-			"-sn",
-			"-f",
-			"null",
-			"-",
-		],
-		{ stdout: "pipe", stderr: "pipe" },
-	);
+	// On short inputs (example: preview clips a few seconds long) the fused
+	// dual-output filter graph occasionally hits a wrapped_avframe encoder race
+	const SHORT_INPUT_THRESHOLD_SEC = 30;
+	const useSplitPasses = totalDuration > 0 && totalDuration <= SHORT_INPUT_THRESHOLD_SEC;
 
-	let onAbort: (() => void) | undefined;
-	if (signal) {
-		onAbort = () => {
-			try {
-				proc.kill("SIGTERM");
-			} catch {}
-			setTimeout(() => {
+	const stderrChunks: string[] = [];
+
+	const spawnFfmpeg = async (args: string[], label: string): Promise<number> => {
+		const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
+
+		let onAbort: (() => void) | undefined;
+		if (signal) {
+			onAbort = () => {
 				try {
-					proc.kill("SIGKILL");
+					proc.kill("SIGTERM");
 				} catch {}
-			}, 3000);
-		};
-		if (signal.aborted) onAbort();
-		else signal.addEventListener("abort", onAbort, { once: true });
+				setTimeout(() => {
+					try {
+						proc.kill("SIGKILL");
+					} catch {}
+				}, 3000);
+			};
+			if (signal.aborted) onAbort();
+			else signal.addEventListener("abort", onAbort, { once: true });
+		}
+
+		const stderrText = await new Response(proc.stderr).text().catch(() => "");
+		const code = await proc.exited;
+
+		if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+		if (signal?.aborted) throw new CancelledError();
+
+		if (code !== 0) stderrChunks.push(`[${label}] ${stderrText.trim()}`);
+		return code;
+	};
+
+	let code = 0;
+
+	if (useSplitPasses) {
+		// Pass 1 - scene detection
+		const sceneFilter = `scale=-2:${SCENE_DETECT_HEIGHT},scdet=s=1:t=${SCDET_THRESHOLD},` + `metadata=mode=print:file='${escapeFilterPath(scenesLog)}'`;
+
+		code = await spawnFfmpeg(["ffmpeg", "-hide_banner", "-v", "error", "-i", inputPath, "-vf", sceneFilter, "-an", "-sn", "-f", "null", "-"], "scenes");
+
+		// Pass 2 - noise sampling
+		if (code === 0) {
+			const noiseFilter =
+				`select='not(mod(n\\,${SAMPLE_EVERY_N_FRAMES}))',` + `bitplanenoise=bitplane=4,` + `metadata=mode=print:file='${escapeFilterPath(noiseLog)}'`;
+
+			code = await spawnFfmpeg(["ffmpeg", "-hide_banner", "-v", "error", "-i", inputPath, "-vf", noiseFilter, "-an", "-sn", "-f", "null", "-"], "noise");
+		}
+	} else {
+		// Fused dual-output pass for long inputs.
+		//   - split=2 fans the decoded stream into two parallel chains
+		//   - chain A: downscale before scdet so cut detection is cheap; scdet
+		//     must see consecutive frames, so no select before it
+		//   - chain B: select samples first to drop ~91% of frames, then
+		//     bitplanenoise measures noise on the survivors at full resolution
+		//   - metadata=mode=print writes the lavfi.* k/v pairs to a file we
+		//     parse later
+		const filterComplex = [
+			`[0:v]split=2[a][b];`,
+			`[a]scale=-2:${SCENE_DETECT_HEIGHT},scdet=s=1:t=${SCDET_THRESHOLD},`,
+			`metadata=mode=print:file='${escapeFilterPath(scenesLog)}'[s];`,
+			`[b]select='not(mod(n\\,${SAMPLE_EVERY_N_FRAMES}))',`,
+			`bitplanenoise=bitplane=4,`,
+			`metadata=mode=print:file='${escapeFilterPath(noiseLog)}'[n]`,
+		].join("");
+
+		code = await spawnFfmpeg(
+			[
+				"ffmpeg",
+				"-hide_banner",
+				"-v",
+				"error",
+				"-i",
+				inputPath,
+				"-filter_complex",
+				filterComplex,
+				"-map",
+				"[s]",
+				"-an",
+				"-sn",
+				"-f",
+				"null",
+				"-",
+				"-map",
+				"[n]",
+				"-an",
+				"-sn",
+				"-f",
+				"null",
+				"-",
+			],
+			"fused",
+		);
 	}
 
-	const stderrText = await new Response(proc.stderr).text().catch(() => "");
-	const code = await proc.exited;
-
-	if (signal && onAbort) signal.removeEventListener("abort", onAbort);
-	if (signal?.aborted) throw new CancelledError();
-
 	if (code !== 0) {
-		Logger.warn(`[auto-denoise] Analysis pass failed (exit ${code}): ${stderrText.trim().slice(-500)}`);
+		Logger.warn(`[auto-denoise] Analysis pass failed (exit ${code}): ${stderrChunks.join(" | ").slice(-500)}`);
 		return null;
 	}
 
