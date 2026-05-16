@@ -7,6 +7,7 @@ import { Logger } from "./logger";
 import { buildPrepareFilterConfig } from "./filters";
 import { FFV1_ENCODE_ARGS, runAnalysisPass, runSegmentedAutoDenoiseGpu } from "./auto-denoise";
 import { formatVsProgressDetail, runVsPass, vsRegistry } from "./vs-filters";
+import { applyColorMetadata, svtColorParamsFromProbe } from "./color-metadata";
 
 export interface PreviewEncodeOptions {
 	sampleCount: number;
@@ -424,6 +425,7 @@ async function encodeSample(
 	checkCancelled();
 	onProgress(0.25, "Encoding (Auto-Boost-Essential)");
 
+	const colorParams = svtColorParamsFromProbe(probe);
 	const abeArgs = [
 		"python3",
 		"-u",
@@ -436,6 +438,10 @@ async function encodeSample(
 		job.settings.quality,
 		"--final-speed",
 		job.settings.finalSpeed,
+		"--fast-params",
+		colorParams,
+		"--final-params",
+		colorParams,
 		"--json-stream",
 	];
 	if (job.settings.skipBoosting) abeArgs.push("-nb");
@@ -523,6 +529,15 @@ async function encodeSample(
 	const muxRes = await run(["mkvmerge", "-o", encodedClip, ivfFile], { signal });
 	if (muxRes.code !== 0 && muxRes.code !== 1) {
 		throw new Error(`mkvmerge failed: ${muxRes.stderr || muxRes.stdout}`);
+	}
+
+	// 5a. Tag the muxed clip with colour metadata so it plays correctly
+	checkCancelled();
+	onProgress(0.97, "Tagging color metadata");
+	try {
+		await applyColorMetadata(encodedClip, probe, signal);
+	} catch (err: any) {
+		Logger.warn(`[preview] applyColorMetadata failed: ${err?.message || err}`);
 	}
 
 	// 6. Pull the encode frame

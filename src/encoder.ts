@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync, symlinkSync, renameSync } from "fs";
 import { join, parse as parsePath, dirname, extname } from "path";
-import type { Job, JobStep, AppConfig, ProbeResult } from "./types";
+import type { Job, JobStep, AppConfig } from "./types";
 import { probeFile, getOpusBitrateForLayout, getAudioReplacementLabel, normalizeLayout } from "./probe";
 import { Logger } from "./logger";
 import { CancelledError, run, humanSize, fmtFrames, pct2, escapeXml, describeExitCode, isTimecodesVFR, computeFps } from "./process";
@@ -21,6 +21,7 @@ import pkg from "../package.json";
 import { buildPrepareFilterConfig } from "./filters";
 import { FFV1_ENCODE_ARGS, runAnalysisPass, runSegmentedAutoDenoiseGpu, type DenoisePlan } from "./auto-denoise";
 import { formatVsProgressDetail, runVsPass, vsRegistry } from "./vs-filters";
+import { applyColorMetadata, svtColorParamsFromProbe } from "./color-metadata";
 
 export { CancelledError } from "./process";
 
@@ -405,6 +406,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		// Auto-Boost-Essential (with -nb when skipBoosting to run final pass only)
 		{
+			const colorParams = svtColorParamsFromProbe(probe);
 			const abeArgs = [
 				"python3",
 				"-u",
@@ -417,6 +419,10 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				job.settings.quality,
 				"--final-speed",
 				job.settings.finalSpeed,
+				"--fast-params",
+				colorParams,
+				"--final-params",
+				colorParams,
 				"--json-stream",
 			];
 
@@ -944,10 +950,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			throw new Error(`mkvmerge failed: ${mergeRes.stderr || mergeRes.stdout}`);
 		}
 
-		if (probe.isHDR) {
-			setStep(S_MUX, { progress: 75, detail: "Applying HDR metadata" });
-			await applyHDRMetadata(finalOutput, probe, signal);
-		}
+		setStep(S_MUX, { progress: 75, detail: "Applying color metadata" });
+		await applyColorMetadata(finalOutput, probe, signal);
 
 		setStep(S_MUX, { progress: 85, detail: "Moving to output" });
 
@@ -1031,50 +1035,4 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		if (err instanceof CancelledError) throw err;
 	}
-}
-
-async function applyHDRMetadata(mkvPath: string, probe: ProbeResult, signal?: AbortSignal) {
-	const cmd: string[] = ["mkvpropedit", mkvPath, "--edit", "track:v1"];
-	cmd.push("--set", "colour-transfer-characteristics=16");
-	if (probe.colorPrimaries === "BT.2020") cmd.push("--set", "colour-primaries=9");
-	if (probe.matrixCoefficients === "BT.2020 non-constant") cmd.push("--set", "color-matrix-coefficients=9");
-	if (probe.colorRange === "Limited") cmd.push("--set", "colour-range=1");
-	if (/^\d+$/.test(probe.maxCLL) && /^\d+$/.test(probe.maxFALL)) {
-		cmd.push("--set", `max-content-light=${probe.maxCLL}`, "--set", `max-frame-light=${probe.maxFALL}`);
-	}
-	if (probe.masteringDisplay && probe.masteringLuminance) {
-		let RX: string, RY: string, GX: string, GY: string, BX: string, BY: string;
-		if (probe.masteringDisplay === "Display P3") {
-			[RX, RY, GX, GY, BX, BY] = ["0.6800", "0.3200", "0.2650", "0.6900", "0.1500", "0.0600"];
-		} else {
-			[RX, RY, GX, GY, BX, BY] = ["0.7080", "0.2920", "0.1700", "0.7970", "0.1310", "0.0460"];
-		}
-		const maxLum = probe.masteringLuminance.match(/max:\s*([0-9.]+)/)?.[1];
-		const minLum = probe.masteringLuminance.match(/min:\s*([0-9.]+)/)?.[1];
-		if (maxLum && minLum) {
-			cmd.push(
-				"--set",
-				`chromaticity-coordinates-red-x=${RX}`,
-				"--set",
-				`chromaticity-coordinates-red-y=${RY}`,
-				"--set",
-				`chromaticity-coordinates-green-x=${GX}`,
-				"--set",
-				`chromaticity-coordinates-green-y=${GY}`,
-				"--set",
-				`chromaticity-coordinates-blue-x=${BX}`,
-				"--set",
-				`chromaticity-coordinates-blue-y=${BY}`,
-				"--set",
-				"white-coordinates-x=0.3127",
-				"--set",
-				"white-coordinates-y=0.3290",
-				"--set",
-				`max-luminance=${maxLum}`,
-				"--set",
-				`min-luminance=${minLum}`,
-			);
-		}
-	}
-	await run(cmd, { signal });
 }
