@@ -382,13 +382,6 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		const skipVideoEncode = job.settings.videoEncode === "off";
 		const skipAudioEncode = job.settings.audioEncode === "copy";
 		const skipSubtitleProcessing = job.settings.subtitleProcessing === "copy";
-		const anyCopyMode = skipVideoEncode || skipAudioEncode || skipSubtitleProcessing;
-
-		if (anyCopyMode && job.replaceSource) {
-			throw new Error(
-				`Refusing replaceSource: pipeline has at least one copy-through stage (video=${job.settings.videoEncode}, audio=${job.settings.audioEncode}, subtitles=${job.settings.subtitleProcessing}). Output must go to the output directory.`,
-			);
-		}
 
 		if (skipVideoEncode) {
 			for (const si of [S_FAST, S_METRICS, S_SCENES, S_ZONES, S_FINAL]) {
