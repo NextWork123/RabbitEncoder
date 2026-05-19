@@ -1,3 +1,5 @@
+import { readMkvTags } from "./mkv-tags";
+import { tmpdir } from "os";
 import type { AudioStreamInfo, SubtitleStreamInfo, AudioChannelBitrates, ProbeResult } from "./types";
 
 async function exec(cmd: string[]): Promise<string> {
@@ -157,6 +159,8 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 	const masteringDisplay = await mediainfo(inputPath, "Video;%MasteringDisplay_ColorPrimaries%");
 	const masteringLuminance = await mediainfo(inputPath, "Video;%MasteringDisplay_Luminance%");
 
+	const priorTags = await readMkvTags(inputPath, tmpdir());
+
 	return {
 		filename,
 		width: best.width,
@@ -186,6 +190,10 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		videoLanguage,
 		videoOriginalFlag,
 		isFrameRateMismatch,
+		priorSource: priorTags.source,
+		priorRabbitSettings: priorTags.rabbitSettings,
+		priorRabbitVersion: priorTags.rabbitVersion,
+		priorEncodedBy: priorTags.encodedBy,
 	};
 }
 

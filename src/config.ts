@@ -15,6 +15,9 @@ const DEFAULT_BITRATES: AudioChannelBitrates = {
 };
 
 const DEFAULT_JOB_SETTINGS: JobSettings = {
+	videoEncode: "av1",
+	audioEncode: "opus",
+	subtitleProcessing: "full",
 	quality: "medium",
 	finalSpeed: "slow",
 	denoise: "off",

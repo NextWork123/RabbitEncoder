@@ -3,6 +3,10 @@ export type EncoderSpeed = "slower" | "slow" | "medium" | "fast" | "faster";
 export type DenoiseLevel = "off" | "light" | "medium" | "heavy" | "auto";
 export type DebandLevel = "off" | "light" | "medium" | "heavy";
 
+export type VideoEncodeMode = "av1" | "off";
+export type AudioEncodeMode = "opus" | "copy";
+export type SubtitleProcessingMode = "full" | "copy";
+
 /**
  * Backend used for the nlmeans denoise filter.
  *
@@ -74,6 +78,9 @@ export interface GradfunLevelParams {
 }
 
 export interface JobSettings {
+	videoEncode: VideoEncodeMode;
+	audioEncode: AudioEncodeMode;
+	subtitleProcessing: SubtitleProcessingMode;
 	quality: EncoderQuality;
 	finalSpeed: EncoderSpeed;
 	audioBitrates: AudioChannelBitrates;
@@ -156,6 +163,10 @@ export interface ProbeResult {
 	videoLanguage: string;
 	videoOriginalFlag: boolean;
 	isFrameRateMismatch: boolean;
+	priorSource: string | null;
+	priorRabbitSettings: string | null;
+	priorRabbitVersion: string | null;
+	priorEncodedBy: string | null;
 }
 
 export interface JobStep {

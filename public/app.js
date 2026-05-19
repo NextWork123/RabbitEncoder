@@ -42,6 +42,17 @@ const CHANNELS = [
 	{ key: "7.1.4", label: "7.1.4 Atmos" },
 ];
 
+const PIPELINE_PRESETS = ["full", "prepare", "custom"];
+const VIDEO_ENCODE_OPTIONS = ["av1", "off"];
+const AUDIO_ENCODE_OPTIONS = ["opus", "copy"];
+const SUBTITLE_PROCESSING_OPTIONS = ["full", "copy"];
+
+const PIPELINE_PRESET_HELP = {
+	full: "Denoise, AV1, Opus, full subtitle pipeline.",
+	prepare: "Run denoise & VS only; pass audio/subs/video through (FFV1). For GPU-only servers.",
+	custom: "Configure each pipeline stage individually below.",
+};
+
 const expandedFolders = new Set();
 let libraryDirs = [];
 const libraryNodes = new Map();
@@ -1487,6 +1498,9 @@ function renderJobCard(job) {
 	}
 	meta += `<span>${job.settings.quality} · ${job.settings.finalSpeed}${job.settings.downscale ? " · ↓1080p" : ""}</span>`;
 	if (job.settings.skipBoosting) meta += `<span>No Boost</span>`;
+	if (job.settings.videoEncode === "off") meta += `<span>No AV1</span>`;
+	if (job.settings.audioEncode === "copy") meta += `<span>No Opus</span>`;
+	if (job.settings.subtitleProcessing === "copy") meta += `<span>Subs: copy</span>`;
 
 	const stepsHtml = active || done || err ? renderSteps(job.steps) : "";
 
@@ -1959,6 +1973,27 @@ function stopPolling() {
 	}
 }
 
+function inferPreset(settings) {
+	const v = settings.videoEncode ?? "av1";
+	const a = settings.audioEncode ?? "opus";
+	const s = settings.subtitleProcessing ?? "full";
+	if (v === "av1" && a === "opus" && s === "full") return "full";
+	if (v === "off" && a === "copy" && s === "copy") return "prepare";
+	return "custom";
+}
+
+function applyPresetToSettings(settings, preset) {
+	if (preset === "full") {
+		settings.videoEncode = "av1";
+		settings.audioEncode = "opus";
+		settings.subtitleProcessing = "full";
+	} else if (preset === "prepare") {
+		settings.videoEncode = "off";
+		settings.audioEncode = "copy";
+		settings.subtitleProcessing = "copy";
+	}
+}
+
 async function openSettings() {
 	if (!defaults) defaults = await fetchConfig();
 
@@ -1977,6 +2012,37 @@ async function openSettings() {
 	renderRadioPills(document.getElementById("default-speed"), SPEEDS, tempDefaults.finalSpeed, (v) => (tempDefaults.finalSpeed = v));
 	renderRadioPills(document.getElementById("default-denoise"), DENOISE_LEVELS, tempDefaults.denoise || "off", (v) => (tempDefaults.denoise = v));
 	renderRadioPills(document.getElementById("default-deband"), DEBAND_LEVELS, tempDefaults.deband || "off", (v) => (tempDefaults.deband = v));
+
+	const presetValue = inferPreset(tempDefaults);
+
+	renderRadioPills(document.getElementById("default-pipeline-mode"), PIPELINE_PRESETS, presetValue, (v) => {
+		applyPresetToSettings(tempDefaults, v);
+		document.getElementById("default-pipeline-custom").style.display = v === "custom" ? "" : "none";
+		document.getElementById("default-pipeline-mode-help").textContent = PIPELINE_PRESET_HELP[v] ?? "";
+	});
+
+	document.getElementById("default-pipeline-custom").style.display = presetValue === "custom" ? "" : "none";
+	document.getElementById("default-pipeline-mode-help").textContent = PIPELINE_PRESET_HELP[presetValue] ?? "";
+
+	renderRadioPills(
+		document.getElementById("default-video-encode"),
+		VIDEO_ENCODE_OPTIONS,
+		tempDefaults.videoEncode ?? "av1",
+		(v) => (tempDefaults.videoEncode = v),
+	);
+	renderRadioPills(
+		document.getElementById("default-audio-encode"),
+		AUDIO_ENCODE_OPTIONS,
+		tempDefaults.audioEncode ?? "opus",
+		(v) => (tempDefaults.audioEncode = v),
+	);
+	renderRadioPills(
+		document.getElementById("default-subtitle-processing"),
+		SUBTITLE_PROCESSING_OPTIONS,
+		tempDefaults.subtitleProcessing ?? "full",
+		(v) => (tempDefaults.subtitleProcessing = v),
+	);
+
 	renderDownscaleToggle(document.getElementById("default-downscale"), tempDefaults.downscale || false, (v) => (tempDefaults.downscale = v));
 	renderSkipBoostingToggle(document.getElementById("default-skip-boosting"), tempDefaults.skipBoosting || false, (v) => (tempDefaults.skipBoosting = v));
 	renderNoPhaseInvToggle(document.getElementById("default-no-phase-inv"), tempDefaults.noPhaseInv || false, (v) => (tempDefaults.noPhaseInv = v));
@@ -2394,6 +2460,32 @@ async function openJobSettings(jobId) {
 	renderRadioPills(document.getElementById("job-speed"), SPEEDS, tempSettings.finalSpeed, (v) => (tempSettings.finalSpeed = v));
 	renderRadioPills(document.getElementById("job-denoise"), DENOISE_LEVELS, tempSettings.denoise || "off", (v) => (tempSettings.denoise = v));
 	renderRadioPills(document.getElementById("job-deband"), DEBAND_LEVELS, tempSettings.deband || "off", (v) => (tempSettings.deband = v));
+
+	const presetValue = inferPreset(tempSettings);
+
+	renderRadioPills(document.getElementById("job-pipeline-mode"), PIPELINE_PRESETS, presetValue, (v) => {
+		applyPresetToSettings(tempSettings, v);
+		document.getElementById("job-pipeline-custom").style.display = v === "custom" ? "" : "none";
+		document.getElementById("job-pipeline-mode-help").textContent = PIPELINE_PRESET_HELP[v] ?? "";
+	});
+
+	document.getElementById("job-pipeline-custom").style.display = presetValue === "custom" ? "" : "none";
+	document.getElementById("job-pipeline-mode-help").textContent = PIPELINE_PRESET_HELP[presetValue] ?? "";
+
+	renderRadioPills(document.getElementById("job-video-encode"), VIDEO_ENCODE_OPTIONS, tempSettings.videoEncode ?? "av1", (v) => (tempSettings.videoEncode = v));
+	renderRadioPills(
+		document.getElementById("job-audio-encode"),
+		AUDIO_ENCODE_OPTIONS,
+		tempSettings.audioEncode ?? "opus",
+		(v) => (tempSettings.audioEncode = v),
+	);
+	renderRadioPills(
+		document.getElementById("job-subtitle-processing"),
+		SUBTITLE_PROCESSING_OPTIONS,
+		tempSettings.subtitleProcessing ?? "full",
+		(v) => (tempSettings.subtitleProcessing = v),
+	);
+
 	renderDownscaleToggle(document.getElementById("job-downscale"), tempSettings.downscale || false, (v) => (tempSettings.downscale = v));
 	renderSkipBoostingToggle(document.getElementById("job-skip-boosting"), tempSettings.skipBoosting || false, (v) => (tempSettings.skipBoosting = v));
 	renderNoPhaseInvToggle(document.getElementById("job-no-phase-inv"), tempSettings.noPhaseInv || false, (v) => (tempSettings.noPhaseInv = v));

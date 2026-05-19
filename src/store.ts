@@ -1,6 +1,16 @@
 import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { resolve, dirname, join, extname, relative, basename } from "path";
-import { type Job, type JobSettings, type AppConfig, type DenoiseBackend, type PreviewState, MEDIA_EXTENSIONS } from "./types";
+import {
+	type Job,
+	type JobSettings,
+	type AppConfig,
+	type DenoiseBackend,
+	type PreviewState,
+	MEDIA_EXTENSIONS,
+	type VideoEncodeMode,
+	type AudioEncodeMode,
+	type SubtitleProcessingMode,
+} from "./types";
 import { encodeJob, CancelledError } from "./encoder";
 import { isAlreadyEncoded } from "./library";
 import { Logger } from "./logger";
@@ -23,6 +33,9 @@ const previews = new Map<string, PreviewState>();
 let activePreviewJobId: string | null = null;
 let activePreviewAbort: AbortController | null = null;
 
+const VALID_VIDEO_ENCODE: VideoEncodeMode[] = ["av1", "off"];
+const VALID_AUDIO_ENCODE: AudioEncodeMode[] = ["opus", "copy"];
+const VALID_SUBTITLE_PROCESSING: SubtitleProcessingMode[] = ["full", "copy"];
 const VALID_DENOISE_BACKENDS: DenoiseBackend[] = ["cpu", "auto", "vulkan", "opencl"];
 
 export function initStore(config: AppConfig) {
@@ -137,6 +150,15 @@ export function getAppConfig(): AppConfig {
 }
 
 export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
+	if (typeof settings.videoEncode === "string" && VALID_VIDEO_ENCODE.includes(settings.videoEncode)) {
+		appConfig.defaults.videoEncode = settings.videoEncode;
+	}
+	if (typeof settings.audioEncode === "string" && VALID_AUDIO_ENCODE.includes(settings.audioEncode)) {
+		appConfig.defaults.audioEncode = settings.audioEncode;
+	}
+	if (typeof settings.subtitleProcessing === "string" && VALID_SUBTITLE_PROCESSING.includes(settings.subtitleProcessing)) {
+		appConfig.defaults.subtitleProcessing = settings.subtitleProcessing;
+	}
 	if (settings.quality) appConfig.defaults.quality = settings.quality;
 	if (settings.finalSpeed) appConfig.defaults.finalSpeed = settings.finalSpeed;
 	if (settings.denoise) appConfig.defaults.denoise = settings.denoise;
@@ -356,6 +378,16 @@ export function scanLibraryPath(targetPath: string): { added: number; skipped: n
 export function updateJobSettings(id: string, settings: Partial<JobSettings>): Job | null {
 	const job = jobs.get(id);
 	if (!job || job.status !== "queued") return null;
+
+	if (typeof settings.videoEncode === "string" && VALID_VIDEO_ENCODE.includes(settings.videoEncode)) {
+		job.settings.videoEncode = settings.videoEncode;
+	}
+	if (typeof settings.audioEncode === "string" && VALID_AUDIO_ENCODE.includes(settings.audioEncode)) {
+		job.settings.audioEncode = settings.audioEncode;
+	}
+	if (typeof settings.subtitleProcessing === "string" && VALID_SUBTITLE_PROCESSING.includes(settings.subtitleProcessing)) {
+		job.settings.subtitleProcessing = settings.subtitleProcessing;
+	}
 
 	if (settings.quality) job.settings.quality = settings.quality;
 	if (settings.finalSpeed) job.settings.finalSpeed = settings.finalSpeed;
