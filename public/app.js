@@ -1496,7 +1496,8 @@ function renderJobCard(job) {
 		if (job.probe.isHDR) meta += `<span>HDR</span>`;
 		if (job.probe.duration) meta += `<span>${formatDuration(job.probe.duration * 1000)}</span>`;
 	}
-	meta += `<span>${job.settings.quality} · ${job.settings.finalSpeed}${job.settings.downscale ? " · ↓1080p" : ""}</span>`;
+	if (job.settings.videoEncode !== "off")
+		meta += `<span>${job.settings.quality} · ${job.settings.finalSpeed}${job.settings.downscale ? " · ↓1080p" : ""}</span>`;
 	if (job.settings.skipBoosting) meta += `<span>No Boost</span>`;
 	if (job.settings.videoEncode === "off") meta += `<span>No AV1</span>`;
 	if (job.settings.audioEncode === "copy") meta += `<span>No Opus</span>`;
