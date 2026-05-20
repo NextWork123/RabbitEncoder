@@ -594,6 +594,10 @@ code {
 	margin-bottom: 10px;
 }
 
+.setting-help {
+	margin-top: 12px;
+}
+
 .radio-group {
 	display: flex;
 	gap: 6px;
