@@ -2256,10 +2256,9 @@ function renderBenchmarkResults(state) {
 		if (state.openclAvailable === false && state.vulkanAvailable === false) {
 			recHtml = `<div class="benchmark-recommendation meh">No GPU backend available — denoising will run on CPU.</div>`;
 		} else if (vkAvg !== null && oclAvg !== null) {
-			const winner = vkAvg > oclAvg ? "vulkan" : "opencl";
 			const winnerSpeed = Math.max(vkAvg, oclAvg);
 			const cls = winnerSpeed >= 2 ? "good" : winnerSpeed >= 1.2 ? "meh" : "bad";
-			recHtml = `<div class="benchmark-recommendation ${cls}">Vulkan ${vkAvg.toFixed(1)}x · OpenCL ${oclAvg.toFixed(1)}x vs CPU — set <code>ENCODER_GPU_BACKEND=${winner}</code>.</div>`;
+			recHtml = `<div class="benchmark-recommendation ${cls}">Vulkan ${vkAvg.toFixed(1)}x · OpenCL ${oclAvg.toFixed(1)}x vs CPU.</div>`;
 		} else if (vkAvg !== null) {
 			const cls = vkAvg >= 2 ? "good" : vkAvg >= 1.2 ? "meh" : "bad";
 			recHtml = `<div class="benchmark-recommendation ${cls}">Vulkan is ${vkAvg.toFixed(1)}x faster than CPU.</div>`;

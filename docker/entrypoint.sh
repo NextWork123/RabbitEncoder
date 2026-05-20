@@ -3,7 +3,7 @@ set -e
 
 export PATH="/opt/vs-venv/bin:${PATH}"
 
-BIN_DIR="/app/binaries"
+BIN_DIR="/opt/binaries"
 
 TARGET_SVT="/usr/local/bin/SvtAv1EncApp"
 TARGET_FFMPEG="/usr/local/bin/ffmpeg"

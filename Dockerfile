@@ -12,7 +12,7 @@ COPY public/ ./public/
 RUN bun build src/index.ts --outfile rabbit-encoder --target bun --compile --production
 
 # Runtime stage
-FROM debian:13-slim
+FROM debian:testing-slim
 
 USER root
 
@@ -36,7 +36,7 @@ RUN curl -fsSLo /tmp/deb-multimedia-keyring.deb \
 RUN cat >/etc/apt/sources.list.d/dmo.sources <<'EOF'
 Types: deb
 URIs: https://www.deb-multimedia.org
-Suites: trixie
+Suites: forky
 Components: main non-free
 Signed-By: /usr/share/keyrings/deb-multimedia-keyring.pgp
 Enabled: yes
@@ -70,7 +70,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	libaom3 \
 	libaribb24-0 \
 	libass9 \
-	libbluray2 \
+	libbluray3 \
 	libbs2b0 \
 	libcaca0 \
 	libcdio19 \
@@ -110,21 +110,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	libopenjp2-7 \
 	libopenmpt0t64 \
 	libopus0 \
-	libplacebo349 \
+	libplacebo360 \
 	libpulse0 \
 	librabbitmq4 \
 	librist4 \
 	librsvg2-2 \
-	librubberband2 \
+	librubberband3 \
 	libshine3 \
 	libsmbclient0 \
 	libsnappy1v5 \
 	libsoxr0 \
 	libspeex1 \
 	libsrt1.5-openssl \
-	libsvtav1enc2 \
+	libsvtav1enc4 \
 	libtesseract5 \
-	libtheora0 \
 	libtwolame0 \
 	libva2 \
 	libvdpau1 \
@@ -134,14 +133,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	libvorbis0a \
 	libvorbisenc2 \
 	libvpl2 \
-	libvpx9 \
+	libsvtvp9enc1 \
 	libshaderc1 \
 	libwebp7 \
 	libwebpmux3 \
-	libx264-164 \
-	libx265-215 \
+	libx264-165 \
+	libx265-216 \
 	libxavs2-13 \
-	libxml2 \
 	libxvidcore4 \
 	libzimg2 \
 	libzmq5 \
@@ -195,21 +193,27 @@ ENV PATH="/opt/vs-venv/bin:${PATH}"
 
 COPY vapoursynth/ /app/vapoursynth/
 
-# Copy bundled binaries and custom FFmpeg archives
-COPY binaries/ /app/binaries/
-
-# Existing custom binaries
-RUN chmod +x \
-	/app/binaries/language-detector \
-	/app/binaries/x86_64_v2/SvtAv1EncApp \
-	/app/binaries/x86_64_v3/SvtAv1EncApp \
- && if [ -f /app/binaries/x86_64_v4/SvtAv1EncApp ]; then chmod +x /app/binaries/x86_64_v4/SvtAv1EncApp; fi
-
-# Extract custom FFmpeg builds.
-RUN mkdir -p /opt \
- && tar --zstd -xpf /app/binaries/x86_64_v2/ffmpeg.tar.zst -C /opt \
- && tar --zstd -xpf /app/binaries/x86_64_v3/ffmpeg.tar.zst -C /opt \
- && tar --zstd -xpf /app/binaries/x86_64_v4/ffmpeg.tar.zst -C /opt \
+# Download all binaries from CDN
+ARG CDN_BASE="https://cdn.rabbit-company.com/rabbit-encoder/binaries"
+RUN mkdir -p /opt/binaries/x86_64_v2 /opt/binaries/x86_64_v3 /opt/binaries/x86_64_v4 \
+ && curl -fsSL --retry 2 "${CDN_BASE}/language-detector" -o /opt/binaries/language-detector \
+ && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v2/SvtAv1EncApp" -o /opt/binaries/x86_64_v2/SvtAv1EncApp \
+ && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v3/SvtAv1EncApp" -o /opt/binaries/x86_64_v3/SvtAv1EncApp \
+ && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v4/SvtAv1EncApp" -o /opt/binaries/x86_64_v4/SvtAv1EncApp \
+ && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v2/ffmpeg.tar.zst" -o /opt/binaries/x86_64_v2/ffmpeg.tar.zst \
+ && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v3/ffmpeg.tar.zst" -o /opt/binaries/x86_64_v3/ffmpeg.tar.zst \
+ && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v4/ffmpeg.tar.zst" -o /opt/binaries/x86_64_v4/ffmpeg.tar.zst \
+# Make encoder binaries executable
+ && chmod +x \
+	/opt/binaries/language-detector \
+	/opt/binaries/x86_64_v2/SvtAv1EncApp \
+	/opt/binaries/x86_64_v3/SvtAv1EncApp \
+	/opt/binaries/x86_64_v4/SvtAv1EncApp \
+# Extract FFmpeg tarballs
+ && mkdir -p /opt \
+ && tar --zstd -xpf /opt/binaries/x86_64_v2/ffmpeg.tar.zst -C /opt \
+ && tar --zstd -xpf /opt/binaries/x86_64_v3/ffmpeg.tar.zst -C /opt \
+ && tar --zstd -xpf /opt/binaries/x86_64_v4/ffmpeg.tar.zst -C /opt \
  && chmod +x \
 	/opt/ffmpeg-x86-64-v2/bin/ffmpeg \
 	/opt/ffmpeg-x86-64-v2/bin/ffprobe \
@@ -221,12 +225,12 @@ RUN mkdir -p /opt \
 # Verify all custom FFmpeg builds can resolve shared libraries.
 RUN set -eux; \
 	for level in x86-64-v2 x86-64-v3 x86-64-v4; do \
-	echo "Checking /opt/ffmpeg-$level/bin/ffmpeg"; \
-	LD_LIBRARY_PATH="/opt/ffmpeg-$level/lib" ldd "/opt/ffmpeg-$level/bin/ffmpeg" | tee "/tmp/ldd-ffmpeg-$level.txt"; \
-	! grep -q "not found" "/tmp/ldd-ffmpeg-$level.txt"; \
-	echo "Checking /opt/ffmpeg-$level/bin/ffprobe"; \
-	LD_LIBRARY_PATH="/opt/ffmpeg-$level/lib" ldd "/opt/ffmpeg-$level/bin/ffprobe" | tee "/tmp/ldd-ffprobe-$level.txt"; \
-	! grep -q "not found" "/tmp/ldd-ffprobe-$level.txt"; \
+		echo "Checking /opt/ffmpeg-$level/bin/ffmpeg"; \
+		LD_LIBRARY_PATH="/opt/ffmpeg-$level/lib" ldd "/opt/ffmpeg-$level/bin/ffmpeg" | tee "/tmp/ldd-ffmpeg-$level.txt"; \
+		! grep -q "not found" "/tmp/ldd-ffmpeg-$level.txt"; \
+		echo "Checking /opt/ffmpeg-$level/bin/ffprobe"; \
+		LD_LIBRARY_PATH="/opt/ffmpeg-$level/lib" ldd "/opt/ffmpeg-$level/bin/ffprobe" | tee "/tmp/ldd-ffprobe-$level.txt"; \
+		! grep -q "not found" "/tmp/ldd-ffprobe-$level.txt"; \
 	done
 
 # Entrypoint
