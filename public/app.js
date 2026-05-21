@@ -53,15 +53,161 @@ const PIPELINE_PRESET_HELP = {
 	custom: "Configure each pipeline stage individually below.",
 };
 
+let librarySearchScope = null;
+let librarySearchQuery = "";
 const expandedFolders = new Set();
 let libraryDirs = [];
 const libraryNodes = new Map();
+let libraryQueuedPaths = new Set();
 
 let previewPollTimer = null;
 let currentPreviewJobId = null;
 let currentPreviewSettingsFingerprint = "";
 const previewBlobCache = new Map(); // key = `${jobId}:${idx}:${kind}` -> object URL
 let currentPreviewFullscreenCard = null;
+
+function refreshLibraryQueuedPaths(jobs) {
+	libraryQueuedPaths = new Set((jobs || []).filter((j) => j.inputPath && j.status !== "done" && j.status !== "error").map((j) => j.inputPath));
+}
+
+function isPathInside(child, parent) {
+	if (!child || !parent) return false;
+	return child === parent || child.startsWith(parent.endsWith("/") ? parent : parent + "/");
+}
+
+function libraryScopeName() {
+	if (!librarySearchScope) return libraryDirs.length === 1 ? libraryDirs[0].name : null;
+	const node = libraryNodes.get(librarySearchScope);
+	return node ? node.name : librarySearchScope.split("/").filter(Boolean).pop();
+}
+
+function updateLibrarySearchPlaceholder() {
+	const input = document.getElementById("library-search");
+	if (!input) return;
+	const name = libraryScopeName();
+	input.placeholder = name ? `Search in "${name}"...` : "Search library folders...";
+}
+
+function onLibrarySearchScopeChanged() {
+	updateLibrarySearchPlaceholder();
+	if (librarySearchQuery.trim()) runLibrarySearch();
+}
+
+function renderLibraryView() {
+	if (librarySearchQuery.trim()) runLibrarySearch();
+	else renderLibraryTree();
+}
+
+function getLibraryScopeChildren() {
+	if (librarySearchScope) {
+		const node = libraryNodes.get(librarySearchScope);
+		if (node && node.children) return node.children.map((p) => libraryNodes.get(p)).filter(Boolean);
+		return [];
+	}
+	return libraryDirs.map((d) => libraryNodes.get(d.path)).filter(Boolean);
+}
+
+function runLibrarySearch() {
+	const query = librarySearchQuery.trim().toLowerCase();
+	if (!query) {
+		renderLibraryTree();
+		return;
+	}
+	const matches = getLibraryScopeChildren()
+		.filter((n) => n.name.toLowerCase().includes(query))
+		.sort((a, b) => {
+			if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+			return a.name.localeCompare(b.name, undefined, { numeric: true });
+		});
+	renderLibrarySearchResults(matches);
+}
+
+function renderLibrarySearchResults(nodes) {
+	const content = document.getElementById("library-content");
+	const scopeName = libraryScopeName();
+	const header = `<div class="library-search-scope">${
+		scopeName ? `In <strong>${escapeHtml(scopeName)}</strong>` : "Library folders"
+	} · ${nodes.length} match${nodes.length !== 1 ? "es" : ""}</div>`;
+
+	if (nodes.length === 0) {
+		content.innerHTML = header + `<div class="library-empty">No matches in this folder</div>`;
+		return;
+	}
+
+	let rows = "";
+	for (const node of nodes) {
+		if (node.type === "directory") {
+			const state = getNodeCheckState(node.path);
+			const pending = (node.videoCount || 0) - (node.encodedCount || 0);
+			const meta = [];
+			if (node.videoCount > 0 && pending === 0) meta.push(`<span class="library-encoded-badge">encoded</span>`);
+			if (pending > 0) meta.push(`${pending} to encode`);
+			rows += `
+				<div class="tree-node tree-folder search-result">
+					<div class="tree-row" style="padding-left:16px">
+						${renderCheckbox(node.path, state.checked, state.indeterminate)}
+						<svg class="tree-icon tree-icon-folder" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+						<span class="tree-name" data-action="search-open" data-path="${escapeHtml(node.path)}" title="${escapeHtml(node.name)}">${escapeHtml(node.name)}</span>
+						<span class="tree-meta">${meta.join(" · ")}</span>
+					</div>
+				</div>`;
+		} else {
+			const cb = node.queued ? `<span class="tree-checkbox is-queued" title="Already in the queue"></span>` : renderCheckbox(node.path, node.checked, false);
+			const meta = [];
+			if (node.queued) meta.push(`<span class="library-queued-badge">queued</span>`);
+			if (node.encoded) meta.push(`<span class="library-encoded-badge">encoded</span>`);
+			if (node.size) meta.push(humanFileSize(node.size));
+			rows += `
+				<div class="tree-node tree-file search-result${node.encoded ? " is-encoded" : ""}${node.queued ? " is-queued" : ""}">
+					<div class="tree-row" style="padding-left:16px">
+						${cb}
+						<svg class="tree-icon tree-icon-file" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+						<span class="tree-name tree-name-file" title="${escapeHtml(node.name)}">${escapeHtml(node.name)}</span>
+						<span class="tree-meta">${meta.join(" · ")}</span>
+					</div>
+				</div>`;
+		}
+	}
+	content.innerHTML = header + rows;
+}
+
+async function openFolderFromSearch(path) {
+	const input = document.getElementById("library-search");
+	if (input) input.value = "";
+	librarySearchQuery = "";
+	const clearBtn = document.getElementById("library-search-clear");
+	if (clearBtn) clearBtn.style.display = "none";
+
+	const node = libraryNodes.get(path);
+	if (node && !node.expanded) {
+		await toggleNodeExpand(path);
+	} else {
+		librarySearchScope = path;
+		updateLibrarySearchPlaceholder();
+		renderLibraryTree();
+	}
+	requestAnimationFrame(() => scrollLibraryNodeIntoView(path));
+}
+
+function scrollLibraryNodeIntoView(path) {
+	const content = document.getElementById("library-content");
+	if (!content) return;
+	let target = null;
+	for (const el of content.querySelectorAll("[data-path]")) {
+		if (el.dataset.path === path) {
+			target = el;
+			break;
+		}
+	}
+	if (!target) return;
+	const nodeEl = target.closest(".tree-node") || target;
+	nodeEl.scrollIntoView({ block: "center", behavior: "smooth" });
+	const row = nodeEl.querySelector(".tree-row");
+	if (row) {
+		row.classList.add("tree-row-flash");
+		setTimeout(() => row.classList.remove("tree-row-flash"), 1200);
+	}
+}
 
 function previewSettingsFingerprintFE(s) {
 	return JSON.stringify({
@@ -92,6 +238,7 @@ function createTreeNode(entry, depth, parentPath) {
 		children: entry.type === "directory" ? null : undefined,
 		loading: false,
 		encoded: entry.encoded || false,
+		queued: entry.type === "file" && libraryQueuedPaths.has(entry.path),
 		videoCount: entry.videoCount || 0,
 		encodedCount: entry.encodedCount || 0,
 		size: entry.size || 0,
@@ -2566,11 +2713,13 @@ function humanFileSize(bytes) {
 function setNodeChecked(path, checked) {
 	const node = libraryNodes.get(path);
 	if (!node) return;
+	if (node.type === "file" && node.queued) {
+		node.checked = false;
+		return;
+	}
 	node.checked = checked;
 	if (node.type === "directory" && node.children) {
-		for (const childPath of node.children) {
-			setNodeChecked(childPath, checked);
-		}
+		for (const childPath of node.children) setNodeChecked(childPath, checked);
 	}
 }
 
@@ -2606,11 +2755,13 @@ function updateParentCheckState(path) {
 }
 
 function toggleNodeCheck(path) {
+	const node = libraryNodes.get(path);
+	if (node && node.type === "file" && node.queued) return;
 	const state = getNodeCheckState(path);
 	const newChecked = !(state.checked || state.indeterminate);
 	setNodeChecked(path, newChecked);
 	updateParentCheckState(path);
-	renderLibraryTree();
+	renderLibraryView();
 	updateLibraryFooter();
 }
 
@@ -2620,6 +2771,10 @@ async function toggleNodeExpand(path) {
 
 	if (node.expanded) {
 		node.expanded = false;
+		if (isPathInside(librarySearchScope, node.path)) {
+			librarySearchScope = node.parentPath || null;
+			onLibrarySearchScopeChanged();
+		}
 		renderLibraryTree();
 		return;
 	}
@@ -2644,6 +2799,8 @@ async function toggleNodeExpand(path) {
 	}
 
 	node.expanded = true;
+	librarySearchScope = node.path;
+	onLibrarySearchScopeChanged();
 	renderLibraryTree();
 }
 
@@ -2758,7 +2915,7 @@ function renderTreeFolder(node, checked, indeterminate, indent) {
 				<svg class="tree-icon tree-icon-folder" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
 					<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
 				</svg>
-				<span class="tree-name" data-action="expand" data-path="${escapeHtml(node.path)}">${escapeHtml(node.name)}</span>
+				<span class="tree-name" data-action="expand" data-path="${escapeHtml(node.path)}" title="${escapeHtml(node.name)}">${escapeHtml(node.name)}</span>
 				<span class="tree-meta">${metaParts.join(" · ")}</span>
 			</div>
 			${childrenHtml}
@@ -2767,20 +2924,21 @@ function renderTreeFolder(node, checked, indeterminate, indent) {
 
 function renderTreeFile(node, indent) {
 	const encodedClass = node.encoded ? " is-encoded" : "";
-	const cbHtml = renderCheckbox(node.path, node.checked, false);
+	const cbHtml = node.queued ? `<span class="tree-checkbox is-queued" title="Already in the queue"></span>` : renderCheckbox(node.path, node.checked, false);
 	let metaParts = [];
+	if (node.queued) metaParts.push(`<span class="library-queued-badge">queued</span>`);
 	if (node.encoded) metaParts.push(`<span class="library-encoded-badge">encoded</span>`);
 	if (node.size) metaParts.push(humanFileSize(node.size));
 
 	return `
-		<div class="tree-node tree-file${encodedClass}">
+		<div class="tree-node tree-file${encodedClass}${node.queued ? " is-queued" : ""}">
 			<div class="tree-row" style="padding-left:${indent + 24}px">
 				${cbHtml}
 				<svg class="tree-icon tree-icon-file" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
 					<polygon points="23 7 16 12 23 17 23 7"/>
 					<rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
 				</svg>
-				<span class="tree-name tree-name-file">${escapeHtml(node.name)}</span>
+				<span class="tree-name tree-name-file" title="${escapeHtml(node.name)}">${escapeHtml(node.name)}</span>
 				<span class="tree-meta">${metaParts.join(" · ")}</span>
 			</div>
 		</div>`;
@@ -3069,6 +3227,16 @@ async function openLibrary() {
 			return;
 		}
 		libraryNodes.clear();
+		try {
+			refreshLibraryQueuedPaths(await fetchJobs());
+		} catch {}
+
+		librarySearchScope = null;
+		librarySearchQuery = "";
+		const searchInput = document.getElementById("library-search");
+		if (searchInput) searchInput.value = "";
+		updateLibrarySearchPlaceholder();
+
 		for (const dir of libraryDirs) {
 			const rootNode = createTreeNode({ path: dir.path, name: dir.name, type: "directory", videoCount: 0, encodedCount: 0 }, 0, null);
 			libraryNodes.set(dir.path, rootNode);
@@ -3171,6 +3339,24 @@ function initEventListeners() {
 	document.getElementById("login-password").addEventListener("keydown", (e) => {
 		if (e.key === "Enter") handleLogin();
 	});
+
+	const librarySearchEl = document.getElementById("library-search");
+	if (librarySearchEl)
+		librarySearchEl.addEventListener("input", (e) => {
+			librarySearchQuery = e.target.value;
+			document.getElementById("library-search-clear").style.display = e.target.value ? "" : "none";
+			renderLibraryView();
+		});
+	const librarySearchClearEl = document.getElementById("library-search-clear");
+	if (librarySearchClearEl)
+		librarySearchClearEl.addEventListener("click", () => {
+			const input = document.getElementById("library-search");
+			if (input) input.value = "";
+			librarySearchQuery = "";
+			librarySearchClearEl.style.display = "none";
+			renderLibraryView();
+			input?.focus();
+		});
 
 	document.getElementById("jobs-list").addEventListener("click", (e) => {
 		const moveBtn = e.target.closest(".btn-move");
@@ -3294,6 +3480,13 @@ function initEventListeners() {
 		if (checkbox) {
 			const path = checkbox.dataset.path;
 			if (path) toggleNodeCheck(path);
+			return;
+		}
+
+		const open = e.target.closest('[data-action="search-open"]');
+		if (open) {
+			const path = open.dataset.path;
+			if (path) openFolderFromSearch(path);
 			return;
 		}
 	});

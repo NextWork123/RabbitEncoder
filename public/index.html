@@ -312,6 +312,14 @@
 						<button class="btn-close" id="close-library-btn">&times;</button>
 					</div>
 					<div class="modal-body" style="padding: 0">
+						<div class="library-searchbar">
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+								<circle cx="11" cy="11" r="8" />
+								<line x1="21" y1="21" x2="16.65" y2="16.65" />
+							</svg>
+							<input id="library-search" type="text" class="library-search-input" placeholder="Search library folders…" autocomplete="off" />
+							<button id="library-search-clear" class="library-search-clear" title="Clear" style="display: none">&times;</button>
+						</div>
 						<div id="library-content" class="library-content"></div>
 					</div>
 					<div class="modal-footer">
