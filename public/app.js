@@ -10,6 +10,7 @@ let currentEditJobId = null;
 let currentAdvancedTarget = null;
 let authToken = localStorage.getItem("authToken") || "";
 let pollTimer = null;
+let systemPollTimer = null;
 let benchmarkPollTimer = null;
 let vsPresets = null;
 
@@ -380,6 +381,11 @@ async function pauseQueueRequest() {
 
 async function resumeQueueRequest() {
 	const res = await authFetch(`${API}/api/queue/resume`, { method: "POST" });
+	return res.json();
+}
+
+async function fetchSystemStats() {
+	const res = await authFetch(`${API}/api/system`);
 	return res.json();
 }
 
@@ -2240,10 +2246,12 @@ async function update() {
 function startPolling() {
 	stopPolling();
 	update();
+	startSystemPolling();
 	pollTimer = setInterval(update, 1500);
 }
 
 function stopPolling() {
+	stopSystemPolling();
 	if (pollTimer) {
 		clearInterval(pollTimer);
 		pollTimer = null;
@@ -2459,6 +2467,99 @@ function classifySpeedup(x) {
 	if (x >= 2) return "speedup-good";
 	if (x >= 1.2) return "speedup-meh";
 	return "speedup-bad";
+}
+
+function fmtBytes(n) {
+	if (n == null) return "—";
+	const u = ["B", "KiB", "MiB", "GiB", "TiB"];
+	let i = 0;
+	while (n >= 1024 && i < u.length - 1) {
+		n /= 1024;
+		i++;
+	}
+	return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
+}
+function fmtRate(bps) {
+	if (bps == null) return "—";
+	return `${fmtBytes(bps)}/s`;
+}
+function pctClass(p) {
+	if (p == null) return "ok";
+	if (p >= 90) return "crit";
+	if (p >= 75) return "warn";
+	return "ok";
+}
+
+function sysMeter(percent) {
+	const cls = pctClass(percent);
+	const w = percent == null ? 0 : Math.min(100, percent);
+	return `<span class="sysbar-meter"><span class="sysbar-meter-fill ${cls}" style="width:${w}%"></span></span>`;
+}
+
+function sysPill(key, value, percent, title) {
+	return `
+		<div class="sysbar-stat" title="${escapeHtml(title || "")}">
+			<span class="sysbar-key">${key}</span>
+			<span class="sysbar-val ${pctClass(percent)}">${value}</span>
+			${sysMeter(percent)}
+		</div>`;
+}
+
+function renderSysBar(s) {
+	const bar = document.getElementById("sysbar");
+	if (!bar) return;
+
+	let html = `<span class="sysbar-lead" aria-hidden="true">
+		<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+	</span>`;
+
+	const cpuTitle = `${s.cpuName ? s.cpuName + " · " : ""}${s.cpuCount} threads${s.loadAvg ? " · load " + s.loadAvg[0].toFixed(2) : ""}`;
+	html += sysPill("CPU", s.cpuUsagePercent == null ? "—" : `${Math.round(s.cpuUsagePercent)}%`, s.cpuUsagePercent, cpuTitle);
+
+	if (s.mem) {
+		html += sysPill("RAM", `${Math.round(s.mem.usedPercent)}%`, s.mem.usedPercent, `${fmtBytes(s.mem.usedBytes)} / ${fmtBytes(s.mem.totalBytes)} used`);
+	}
+	if (s.disk) {
+		html += sysPill(
+			"DISK",
+			`${Math.round(s.disk.usedPercent)}%`,
+			s.disk.usedPercent,
+			`${fmtBytes(s.disk.availableBytes)} free of ${fmtBytes(s.disk.totalBytes)} — ${s.disk.path}`,
+		);
+	}
+	if (s.gpu && s.gpu.utilizationPercent != null) {
+		const vram = s.gpu.memTotalBytes ? ` · VRAM ${fmtBytes(s.gpu.memUsedBytes)} / ${fmtBytes(s.gpu.memTotalBytes)}` : "";
+		html += sysPill("GPU", `${Math.round(s.gpu.utilizationPercent)}%`, s.gpu.utilizationPercent, `${s.gpu.name || "GPU"}${vram}`);
+	}
+	if (s.net) {
+		html += `
+			<div class="sysbar-net">
+				<span><span class="sysbar-net-label">↓</span> ${fmtRate(s.net.rxBytesPerSec)}</span>
+				<span><span class="sysbar-net-label">↑</span> ${fmtRate(s.net.txBytesPerSec)}</span>
+			</div>`;
+	}
+
+	bar.innerHTML = html;
+	document.documentElement.style.setProperty("--sysbar-h", `${bar.offsetHeight}px`);
+}
+
+async function tickSystem() {
+	try {
+		renderSysBar(await fetchSystemStats());
+	} catch (e) {
+		if (e.message !== "Unauthorized") console.error("System poll error:", e);
+	}
+}
+
+function startSystemPolling() {
+	stopSystemPolling();
+	tickSystem();
+	systemPollTimer = setInterval(tickSystem, 2000);
+}
+
+function stopSystemPolling() {
+	if (systemPollTimer) clearInterval(systemPollTimer);
+	systemPollTimer = null;
 }
 
 function renderBenchmarkResults(state) {

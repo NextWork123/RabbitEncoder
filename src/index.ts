@@ -38,6 +38,7 @@ import { listVulkanDevices } from "./vulkan";
 import { resolvePreviewArtifact } from "./preview-encoder";
 import { makeDefaultVsFilterEntry, vsRegistry } from "./vs-filters";
 import { decodeSettingsCode, encodeSettingsCode, SettingsCodeError } from "./settings-code";
+import { getSystemStats } from "./system";
 
 export const config = await loadConfig();
 
@@ -71,6 +72,11 @@ app.use(
 		},
 	}),
 );
+
+app.get("/api/system", async (c) => {
+	const stats = await getSystemStats(config.tempDir);
+	return c.json(stats);
+});
 
 app.get("/api/opencl-devices", async (c) => {
 	const devices = await listOpenClDevices();

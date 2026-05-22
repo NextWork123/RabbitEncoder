@@ -160,6 +160,7 @@ The format is versioned with an `RE<n>` prefix, so older codes continue to work 
 | `GET`    | `/api/queue`                                | Get queue state (paused or running)                                           |
 | `POST`   | `/api/queue/pause`                          | Pause encoding - stops current encode, preserves queue                        |
 | `POST`   | `/api/queue/resume`                         | Resume encoding from where it was paused                                      |
+| `GET`    | `/api/system`                               | Current system resource usage (CPU, RAM, temp-partition disk, network, GPU)   |
 | `GET`    | `/api/opencl-devices`                       | List available OpenCL devices                                                 |
 | `GET`    | `/api/vulkan-devices`                       | List available Vulkan devices                                                 |
 | `GET`    | `/api/benchmark`                            | Get current benchmark state                                                   |
