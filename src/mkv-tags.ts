@@ -2,14 +2,12 @@ import { existsSync, unlinkSync } from "fs";
 import { join } from "path";
 import { run } from "./process";
 import { Logger } from "./logger";
+import { decodeSettingsCode, SettingsCodeError } from "./settings-code";
+import type { JobSettings } from "./types";
 
 export interface InputMkvTags {
 	source: string | null;
 	encodedBy: string | null;
-	/**
-	 * Concatenated SETTINGS value from a prior RABBIT_ENCODER pass, if any.
-	 * For example: "Quality medium, Speed slow, Denoise auto, VS finedehalo/medium".
-	 */
 	rabbitSettings: string | null;
 	rabbitVersion: string | null;
 }
@@ -96,6 +94,21 @@ export async function readMkvTags(inputPath: string, tempDir: string, signal?: A
 	}
 }
 
+export function decodePriorSettings(rabbitSettings: string | null): Partial<JobSettings> | null {
+	if (!rabbitSettings) return null;
+	const trimmed = rabbitSettings.trim();
+	if (!/^RE\d+\b/.test(trimmed)) return null;
+	try {
+		return decodeSettingsCode(trimmed);
+	} catch (err) {
+		if (err instanceof SettingsCodeError) {
+			Logger.warn(`[mkv-tags] Could not decode prior settings code: ${err.message}`);
+			return null;
+		}
+		throw err;
+	}
+}
+
 export interface PriorProcessingFlags {
 	hadDenoise: boolean;
 	hadVsFilters: boolean;
@@ -104,9 +117,21 @@ export interface PriorProcessingFlags {
 }
 
 export function detectPriorProcessing(rabbitSettings: string | null): PriorProcessingFlags {
-	if (!rabbitSettings) {
-		return { hadDenoise: false, hadVsFilters: false, hadDeband: false, hadDownscale: false };
+	const none: PriorProcessingFlags = { hadDenoise: false, hadVsFilters: false, hadDeband: false, hadDownscale: false };
+	if (!rabbitSettings) return none;
+
+	const decoded = decodePriorSettings(rabbitSettings);
+	if (decoded) {
+		const hadVsFilters = (decoded.vsFilters ?? []).some((e) => e && e.level !== "off");
+		return {
+			hadDenoise: !!decoded.denoise && decoded.denoise !== "off",
+			hadVsFilters,
+			hadDeband: !!decoded.deband && decoded.deband !== "off",
+			hadDownscale: !!decoded.downscale,
+		};
 	}
+
+	// Legacy fallback: human-readable SETTINGS from older builds: "Quality medium, Speed slow, Denoise auto, VS finedehalo/medium".
 	return {
 		hadDenoise: /\bDenoise\b/i.test(rabbitSettings),
 		hadVsFilters: /\bVS\s+/i.test(rabbitSettings),

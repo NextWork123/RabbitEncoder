@@ -22,6 +22,8 @@ import { buildPrepareFilterConfig } from "./filters";
 import { FFV1_ENCODE_ARGS, runAnalysisPass, runSegmentedAutoDenoiseGpu, type DenoisePlan } from "./auto-denoise";
 import { formatVsProgressDetail, runVsPass, vsRegistry } from "./vs-filters";
 import { applyColorMetadata, svtColorParamsFromProbe } from "./color-metadata";
+import { combineCumulativeSettings, encodeSettingsCode } from "./settings-code";
+import { decodePriorSettings } from "./mkv-tags";
 
 export { CancelledError } from "./process";
 
@@ -734,38 +736,11 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		const outputFilename = `${baseTitle} [${sourceTag}-${resTag}][${audioCodecTag}][${videoCodecTag}]-${config.organization}.mkv`;
 		const finalOutput = join(tempDir, "final.mkv");
 
-		const newSettingsParts: string[] = [];
-		if (!skipVideoEncode) {
-			newSettingsParts.push(`Quality ${job.settings.quality}, Speed ${job.settings.finalSpeed}`);
-		}
-		if (job.settings.downscale && probe.height > 1080) {
-			newSettingsParts.push("Downscale 1080p");
-		}
-		if (job.settings.deband !== "off") {
-			newSettingsParts.push(`Deband ${job.settings.deband}`);
-		}
-		if (job.settings.denoise !== "off") {
-			newSettingsParts.push(`Denoise ${job.settings.denoise}`);
-		}
-		if (activeVsEntries.length > 0) {
-			const vsParts = activeVsEntries
-				.map((e) => {
-					const m = vsRegistry.get(e.presetId);
-					return m ? `${m.bareId}/${e.level}` : e.presetId;
-				})
-				.join("+");
-			newSettingsParts.push(`VS ${vsParts}`);
-		}
-		const newSettings = newSettingsParts.join(", ");
-
-		const mergedSettings =
-			probe.priorRabbitSettings && probe.priorRabbitSettings.length > 0
-				? newSettings
-					? `${probe.priorRabbitSettings}, ${newSettings}`
-					: probe.priorRabbitSettings
-				: newSettings;
-
 		const effectiveSourceTag = probe.priorSource ?? releaseGroup;
+
+		const priorSettings = decodePriorSettings(probe.priorRabbitSettings);
+		const cumulativeSettings = combineCumulativeSettings(priorSettings, job.settings);
+		const settingsCode = encodeSettingsCode(cumulativeSettings);
 
 		const xmlTags = [
 			'<?xml version="1.0" encoding="UTF-8"?>',
@@ -777,7 +752,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			"<Simple>",
 			"<Name>RABBIT_ENCODER</Name>",
 			`<Simple><Name>VERSION</Name><String>v${escapeXml(pkg.version)}</String></Simple>`,
-			`<Simple><Name>SETTINGS</Name><String>${escapeXml(mergedSettings)}</String></Simple>`,
+			`<Simple><Name>SETTINGS</Name><String>${escapeXml(settingsCode)}</String></Simple>`,
 			"</Simple>",
 
 			"<Simple>",

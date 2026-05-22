@@ -412,6 +412,31 @@ async function resetConfigRequest() {
 	return res.json();
 }
 
+async function encodeSettingsCodeRequest(settings) {
+	try {
+		const res = await authFetch(`${API}/api/settings/encode`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(settings),
+		});
+		if (!res.ok) return "";
+		return (await res.json()).code || "";
+	} catch {
+		return "";
+	}
+}
+
+async function decodeSettingsCodeRequest(code) {
+	const res = await authFetch(`${API}/api/settings/decode`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ code }),
+	});
+	const data = await res.json();
+	if (!res.ok) throw new Error(data.error || "Invalid settings code");
+	return data.settings;
+}
+
 async function patchJob(id, settings) {
 	const res = await authFetch(`${API}/api/jobs/${id}`, {
 		method: "PATCH",
@@ -670,6 +695,110 @@ function renderVsParamInput(spec, level, entry) {
 		input.value = String(clamped);
 	};
 	return input;
+}
+
+function mountSettingsCodePanel(container, opts) {
+	if (!container) return;
+	if (container._codeTimer) clearInterval(container._codeTimer);
+	container._codeTimer = null;
+	container.innerHTML = "";
+
+	const label = document.createElement("label");
+	label.textContent = "Settings Code";
+	container.appendChild(label);
+
+	const hint = document.createElement("div");
+	hint.className = "lang-filter-hint";
+	hint.innerHTML =
+		"A compact, shareable code for these exact settings, also written to every encoded file's <code>SETTINGS</code> tag. Paste one in to reproduce a setup.";
+	container.appendChild(hint);
+
+	const exportRow = document.createElement("div");
+	exportRow.className = "settings-code-row";
+	const codeField = document.createElement("input");
+	codeField.type = "text";
+	codeField.readOnly = true;
+	codeField.className = "settings-code-field";
+	exportRow.appendChild(codeField);
+	const copyBtn = document.createElement("button");
+	copyBtn.type = "button";
+	copyBtn.className = "btn btn-ghost btn-small";
+	copyBtn.textContent = "\u00A0Copy\u00A0";
+	exportRow.appendChild(copyBtn);
+	container.appendChild(exportRow);
+
+	const importRow = document.createElement("div");
+	importRow.className = "settings-code-row";
+	const importField = document.createElement("input");
+	importField.type = "text";
+	importField.className = "settings-code-field";
+	importField.placeholder = "Paste a code (RE1...) to import";
+	importRow.appendChild(importField);
+	const importBtn = document.createElement("button");
+	importBtn.type = "button";
+	importBtn.className = "btn btn-primary btn-small";
+	importBtn.textContent = "Import";
+	importRow.appendChild(importBtn);
+	container.appendChild(importRow);
+
+	const status = document.createElement("div");
+	status.className = "settings-code-status";
+	container.appendChild(status);
+
+	let lastSerialized = null;
+	const refresh = async () => {
+		const settings = opts.getSettings();
+		lastSerialized = JSON.stringify(settings);
+		codeField.value = (await encodeSettingsCodeRequest(settings)) || "—";
+	};
+
+	// Live-update the displayed code as other fields change. The edit callbacks
+	// only mutate the settings object, so poll for changes and hit the server
+	// solely when something actually changed.
+	container._codeTimer = setInterval(async () => {
+		if (!container.isConnected) {
+			clearInterval(container._codeTimer);
+			container._codeTimer = null;
+			return;
+		}
+		const settings = opts.getSettings();
+		if (!settings) return;
+		const serialized = JSON.stringify(settings);
+		if (serialized === lastSerialized) return;
+		lastSerialized = serialized;
+		codeField.value = (await encodeSettingsCodeRequest(settings)) || "—";
+	}, 500);
+
+	copyBtn.onclick = async () => {
+		await refresh();
+		try {
+			await navigator.clipboard.writeText(codeField.value);
+			copyBtn.textContent = "Copied";
+			setTimeout(() => (copyBtn.textContent = "\u00A0Copy\u00A0"), 1200);
+		} catch {
+			codeField.select();
+		}
+	};
+
+	importBtn.onclick = async () => {
+		const code = importField.value.trim();
+		if (!code) return;
+		importBtn.disabled = true;
+		status.textContent = "";
+		status.className = "settings-code-status";
+		try {
+			const applied = await opts.onImport(code);
+			importField.value = "";
+			opts.onApplied(applied);
+		} catch (err) {
+			status.textContent = err.message || "Invalid settings code";
+			status.classList.add("err");
+		} finally {
+			importBtn.disabled = false;
+		}
+	};
+
+	refresh();
 }
 
 function clampToRange(v, min, max) {
@@ -2145,14 +2274,16 @@ function applyPresetToSettings(settings, preset) {
 async function openSettings() {
 	if (!defaults) defaults = await fetchConfig();
 
+	const base = window._tempDefaults ?? defaults;
+
 	const tempDefaults = {
-		...defaults,
-		audioBitrates: { ...defaults.audioBitrates },
+		...base,
+		audioBitrates: { ...base.audioBitrates },
 		// Deep-clone nested objects so cancel actually cancels.
-		autoDenoiseThresholds: { ...(defaults.autoDenoiseThresholds || DEFAULT_AUTO_THRESHOLDS) },
-		nlmeansParams: defaults.nlmeansParams ? JSON.parse(JSON.stringify(defaults.nlmeansParams)) : JSON.parse(JSON.stringify(DEFAULT_NLMEANS_PARAMS)),
-		gradfunParams: defaults.gradfunParams ? JSON.parse(JSON.stringify(defaults.gradfunParams)) : JSON.parse(JSON.stringify(DEFAULT_GRADFUN_PARAMS)),
-		vsFilters: Array.isArray(defaults.vsFilters) ? JSON.parse(JSON.stringify(defaults.vsFilters)) : [],
+		autoDenoiseThresholds: { ...(base.autoDenoiseThresholds || DEFAULT_AUTO_THRESHOLDS) },
+		nlmeansParams: base.nlmeansParams ? JSON.parse(JSON.stringify(base.nlmeansParams)) : JSON.parse(JSON.stringify(DEFAULT_NLMEANS_PARAMS)),
+		gradfunParams: base.gradfunParams ? JSON.parse(JSON.stringify(base.gradfunParams)) : JSON.parse(JSON.stringify(DEFAULT_GRADFUN_PARAMS)),
+		vsFilters: Array.isArray(base.vsFilters) ? JSON.parse(JSON.stringify(base.vsFilters)) : [],
 	};
 	window._tempDefaults = tempDefaults;
 
@@ -2207,6 +2338,15 @@ async function openSettings() {
 	);
 	renderBitrateInputs(document.getElementById("default-bitrates"), tempDefaults.audioBitrates, (ch, val) => (tempDefaults.audioBitrates[ch] = val));
 
+	mountSettingsCodePanel(document.getElementById("settings-code-panel-default"), {
+		getSettings: () => window._tempDefaults,
+		onImport: (code) => decodeSettingsCodeRequest(code),
+		onApplied: (settings) => {
+			Object.assign(window._tempDefaults, settings);
+			openSettings();
+		},
+	});
+
 	document.getElementById("settings-modal").style.display = "";
 }
 
@@ -2224,6 +2364,12 @@ async function onResetDefaultsClick() {
 }
 
 function closeSettings() {
+	window._tempDefaults = null;
+	const panel = document.getElementById("settings-code-panel-default");
+	if (panel && panel._codeTimer) {
+		clearInterval(panel._codeTimer);
+		panel._codeTimer = null;
+	}
 	document.getElementById("settings-modal").style.display = "none";
 }
 
@@ -2593,13 +2739,15 @@ async function openJobSettings(jobId) {
 	currentEditJobId = jobId;
 	document.getElementById("job-modal-title").textContent = job.filename;
 
+	const base = window._tempJobSettings ?? job.settings;
+
 	const tempSettings = {
-		...job.settings,
-		audioBitrates: { ...job.settings.audioBitrates },
-		autoDenoiseThresholds: { ...(job.settings.autoDenoiseThresholds || DEFAULT_AUTO_THRESHOLDS) },
-		nlmeansParams: job.settings.nlmeansParams ? JSON.parse(JSON.stringify(job.settings.nlmeansParams)) : JSON.parse(JSON.stringify(DEFAULT_NLMEANS_PARAMS)),
-		gradfunParams: job.settings.gradfunParams ? JSON.parse(JSON.stringify(job.settings.gradfunParams)) : JSON.parse(JSON.stringify(DEFAULT_GRADFUN_PARAMS)),
-		vsFilters: Array.isArray(job.settings.vsFilters) ? JSON.parse(JSON.stringify(job.settings.vsFilters)) : [],
+		...base,
+		audioBitrates: { ...(base.audioBitrates || job.settings.audioBitrates) },
+		autoDenoiseThresholds: { ...(base.autoDenoiseThresholds || DEFAULT_AUTO_THRESHOLDS) },
+		nlmeansParams: base.nlmeansParams ? JSON.parse(JSON.stringify(base.nlmeansParams)) : JSON.parse(JSON.stringify(DEFAULT_NLMEANS_PARAMS)),
+		gradfunParams: base.gradfunParams ? JSON.parse(JSON.stringify(base.gradfunParams)) : JSON.parse(JSON.stringify(DEFAULT_GRADFUN_PARAMS)),
+		vsFilters: Array.isArray(base.vsFilters) ? JSON.parse(JSON.stringify(base.vsFilters)) : [],
 	};
 	window._tempJobSettings = tempSettings;
 
@@ -2649,6 +2797,15 @@ async function openJobSettings(jobId) {
 	);
 	renderBitrateInputs(document.getElementById("job-bitrates"), tempSettings.audioBitrates, (ch, val) => (tempSettings.audioBitrates[ch] = val));
 
+	mountSettingsCodePanel(document.getElementById("settings-code-panel-job"), {
+		getSettings: () => window._tempJobSettings,
+		onImport: (code) => decodeSettingsCodeRequest(code),
+		onApplied: (settings) => {
+			Object.assign(window._tempJobSettings, settings);
+			openJobSettings(currentEditJobId);
+		},
+	});
+
 	document.getElementById("job-modal").style.display = "";
 }
 
@@ -2660,6 +2817,12 @@ async function saveJobSettings() {
 }
 
 function closeJobModal() {
+	window._tempJobSettings = null;
+	const panel = document.getElementById("settings-code-panel-job");
+	if (panel && panel._codeTimer) {
+		clearInterval(panel._codeTimer);
+		panel._codeTimer = null;
+	}
 	document.getElementById("job-modal").style.display = "none";
 	currentEditJobId = null;
 }

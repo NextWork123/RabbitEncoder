@@ -598,6 +598,35 @@ code {
 	margin-top: 12px;
 }
 
+.settings-code-row {
+	display: flex;
+	gap: 8px;
+	margin-top: 6px;
+}
+.settings-code-field {
+	font-family: var(--font-mono);
+	background: var(--bg-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--text-0);
+	box-sizing: border-box;
+	width: 100%;
+	padding: 8px 10px;
+	font-size: 0.8rem;
+}
+.settings-code-field:focus {
+	outline: none;
+	border-color: var(--accent);
+}
+.settings-code-status {
+	margin-top: 6px;
+	font-size: 12px;
+	min-height: 16px;
+}
+.settings-code-status.err {
+	color: var(--danger, #e5484d);
+}
+
 .radio-group {
 	display: flex;
 	gap: 6px;

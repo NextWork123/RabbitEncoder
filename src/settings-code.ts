@@ -1,0 +1,442 @@
+import type {
+	JobSettings,
+	EncoderQuality,
+	EncoderSpeed,
+	DenoiseLevel,
+	DebandLevel,
+	VideoEncodeMode,
+	AudioEncodeMode,
+	SubtitleProcessingMode,
+	NlmeansParams,
+	GradfunParams,
+	AudioChannelBitrates,
+	VsFilterEntry,
+	VsParamValue,
+} from "./types";
+
+export const SETTINGS_CODE_FORMAT = 1;
+export const SETTINGS_CODE_PREFIX = `RE${SETTINGS_CODE_FORMAT}`;
+
+/**
+ * Frozen baseline for format RE1. This is a snapshot of the v1 shipped
+ * defaults. DO NOT edit these to follow future default changes — bump the
+ * format version and add a new baseline instead.
+ */
+const BASELINE: JobSettings = {
+	videoEncode: "av1",
+	audioEncode: "opus",
+	subtitleProcessing: "full",
+	quality: "medium",
+	finalSpeed: "slow",
+	denoise: "off",
+	autoDenoiseThresholds: { light: 0.5, medium: 0.7, heavy: 0.9 },
+	nlmeansParams: {
+		light: { s: 1.0, p: 3, r: 7 },
+		medium: { s: 1.5, p: 3, r: 9 },
+		heavy: { s: 2.0, p: 3, r: 11 },
+	},
+	gradfunParams: {
+		light: { strength: 0.8, radius: 8 },
+		medium: { strength: 1.4, radius: 16 },
+		heavy: { strength: 2.8, radius: 24 },
+	},
+	denoiseBackend: "auto",
+	gpuDevice: "0.0",
+	deband: "off",
+	downscale: false,
+	skipBoosting: false,
+	noPhaseInv: false,
+	dedupeSubtitles: false,
+	audioLanguages: [],
+	subtitleLanguages: [],
+	audioBitrates: {
+		mono: 64,
+		stereo: 128,
+		"2.1": 160,
+		"5.1": 256,
+		"6.1": 320,
+		"7.1": 384,
+		"7.1.4": 512,
+	},
+	vsFilters: [],
+};
+
+const QUALITY_TO_CODE: Record<EncoderQuality, string> = { low: "l", medium: "m", high: "h" };
+const SPEED_TO_CODE: Record<EncoderSpeed, string> = { slower: "sr", slow: "s", medium: "m", fast: "f", faster: "fr" };
+const DENOISE_TO_CODE: Record<DenoiseLevel, string> = { off: "o", light: "l", medium: "m", heavy: "h", auto: "a" };
+const DEBAND_TO_CODE: Record<DebandLevel, string> = { off: "o", light: "l", medium: "m", heavy: "h" };
+
+function reverse<T extends string>(map: Record<T, string>): Record<string, T> {
+	const out: Record<string, T> = {};
+	for (const k in map) out[map[k as T]] = k as T;
+	return out;
+}
+const CODE_TO_QUALITY = reverse(QUALITY_TO_CODE);
+const CODE_TO_SPEED = reverse(SPEED_TO_CODE);
+const CODE_TO_DENOISE = reverse(DENOISE_TO_CODE);
+const CODE_TO_DEBAND = reverse(DEBAND_TO_CODE);
+
+const VIDEO_VALUES: VideoEncodeMode[] = ["av1", "off"];
+const AUDIO_VALUES: AudioEncodeMode[] = ["opus", "copy"];
+const SUB_VALUES: SubtitleProcessingMode[] = ["full", "copy"];
+
+const BITRATE_CHANNELS: { key: keyof AudioChannelBitrates; code: string }[] = [
+	{ key: "mono", code: "mo" },
+	{ key: "stereo", code: "so" },
+	{ key: "2.1", code: "c21" },
+	{ key: "5.1", code: "c51" },
+	{ key: "6.1", code: "c61" },
+	{ key: "7.1", code: "c71" },
+	{ key: "7.1.4", code: "c714" },
+];
+
+function esc(s: string): string {
+	return s.replace(/%/g, "%25").replace(/\|/g, "%7C").replace(/~/g, "%7E").replace(/,/g, "%2C").replace(/=/g, "%3D").replace(/\+/g, "%2B");
+}
+
+function unesc(s: string): string {
+	return s.replace(/%(7C|7E|2C|3D|2B|25)/gi, (_, h: string) => {
+		switch (h.toUpperCase()) {
+			case "7C":
+				return "|";
+			case "7E":
+				return "~";
+			case "2C":
+				return ",";
+			case "3D":
+				return "=";
+			case "2B":
+				return "+";
+			case "25":
+				return "%";
+			default:
+				return _;
+		}
+	});
+}
+
+function num(n: number): string {
+	return String(n);
+}
+
+function coerceScalar(s: string): VsParamValue {
+	if (s === "true") return true;
+	if (s === "false") return false;
+	if (/^-?\d+(?:\.\d+)?$/.test(s)) return Number(s);
+	return s;
+}
+
+class Section {
+	readonly tag: string;
+	private parts: string[] = [];
+
+	constructor(tag: string) {
+		this.tag = tag;
+	}
+
+	put(key: string, value: string | number | boolean): this {
+		const v = typeof value === "boolean" ? (value ? "1" : "0") : typeof value === "number" ? num(value) : esc(value);
+		this.parts.push(`${key}=${v}`);
+		return this;
+	}
+
+	putRaw(key: string, rawValue: string): this {
+		this.parts.push(`${key}=${rawValue}`);
+		return this;
+	}
+
+	get empty(): boolean {
+		return this.parts.length === 0;
+	}
+
+	toString(): string {
+		return `${this.tag}~${this.parts.join(",")}`;
+	}
+}
+
+function parsePayload(payload: string): Record<string, string> {
+	const out: Record<string, string> = {};
+	if (!payload) return out;
+	for (const pair of payload.split(",")) {
+		if (!pair) continue;
+		const eq = pair.indexOf("=");
+		if (eq < 0) continue;
+		const k = pair.slice(0, eq);
+		out[k] = pair.slice(eq + 1);
+	}
+	return out;
+}
+
+export function encodeSettingsCode(s: JobSettings): string {
+	const sections: string[] = [];
+
+	// core
+	const core = new Section("c");
+	if (s.quality !== BASELINE.quality) core.put("q", QUALITY_TO_CODE[s.quality] ?? QUALITY_TO_CODE.medium);
+	if (s.finalSpeed !== BASELINE.finalSpeed) core.put("sp", SPEED_TO_CODE[s.finalSpeed] ?? SPEED_TO_CODE.slow);
+	if (s.videoEncode !== BASELINE.videoEncode) core.put("v", s.videoEncode);
+	if (s.audioEncode !== BASELINE.audioEncode) core.put("a", s.audioEncode);
+	if (s.subtitleProcessing !== BASELINE.subtitleProcessing) core.put("su", s.subtitleProcessing);
+	if (s.downscale !== BASELINE.downscale) core.put("ds", s.downscale);
+	if (s.skipBoosting !== BASELINE.skipBoosting) core.put("sb", s.skipBoosting);
+	if (s.noPhaseInv !== BASELINE.noPhaseInv) core.put("np", s.noPhaseInv);
+	if (s.dedupeSubtitles !== BASELINE.dedupeSubtitles) core.put("dd", s.dedupeSubtitles);
+	if (!core.empty) sections.push(core.toString());
+
+	// denoise
+	if (s.denoise !== "off") {
+		const dn = new Section("dn");
+		dn.put("m", DENOISE_TO_CODE[s.denoise]);
+		if (s.denoise === "auto") {
+			// auto can pick any level per scene, so the full table + thresholds matter.
+			dn.put("tl", s.autoDenoiseThresholds.light);
+			dn.put("tm", s.autoDenoiseThresholds.medium);
+			dn.put("th", s.autoDenoiseThresholds.heavy);
+			putNlmeans(dn, "l", s.nlmeansParams.light);
+			putNlmeans(dn, "m", s.nlmeansParams.medium);
+			putNlmeans(dn, "h", s.nlmeansParams.heavy);
+		} else {
+			// fixed level: only that level's triplet is used.
+			const lvl = s.nlmeansParams[s.denoise];
+			dn.put("s", lvl.s).put("p", lvl.p).put("r", lvl.r);
+		}
+		sections.push(dn.toString());
+	}
+
+	// deband
+	if (s.deband !== "off") {
+		const db = new Section("db");
+		db.put("m", DEBAND_TO_CODE[s.deband]);
+		const g = s.gradfunParams[s.deband];
+		db.put("st", g.strength).put("rd", g.radius);
+		sections.push(db.toString());
+	}
+
+	// audio bitrates (only when Opus, only channels that differ)
+	if (s.audioEncode === "opus") {
+		const ab = new Section("ab");
+		for (const { key, code } of BITRATE_CHANNELS) {
+			if (s.audioBitrates[key] !== BASELINE.audioBitrates[key]) ab.put(code, s.audioBitrates[key]);
+		}
+		if (!ab.empty) sections.push(ab.toString());
+	}
+
+	// language selection
+	if (s.audioLanguages.length > 0) sections.push(new Section("al").putRaw("v", s.audioLanguages.map(esc).join("+")).toString());
+	if (s.subtitleLanguages.length > 0) sections.push(new Section("sl").putRaw("v", s.subtitleLanguages.map(esc).join("+")).toString());
+
+	// VapourSynth chain (one section per active filter, in order)
+	for (const entry of s.vsFilters ?? []) {
+		if (!entry || entry.level === "off") continue;
+		const vs = new Section("vs");
+		vs.put("id", entry.presetId);
+		vs.put("lv", entry.level);
+		const active = entry.params?.[entry.level] ?? {};
+		for (const key of Object.keys(active)) {
+			const val = active[key]!;
+			if (typeof val === "boolean") vs.put(key, val ? "true" : "false");
+			else vs.put(key, val);
+		}
+		sections.push(vs.toString());
+	}
+
+	return [SETTINGS_CODE_PREFIX, ...sections].join("|");
+}
+
+function putNlmeans(sec: Section, prefix: string, p: NlmeansParams): void {
+	sec.put(`${prefix}s`, p.s).put(`${prefix}p`, p.p).put(`${prefix}r`, p.r);
+}
+
+// DECODE
+
+export class SettingsCodeError extends Error {}
+
+export function decodeSettingsCode(code: string): Partial<JobSettings> {
+	const raw = (code ?? "").trim();
+	if (!raw) throw new SettingsCodeError("Empty settings code.");
+
+	const tokens = raw.split("|");
+	const version = tokens[0] ?? "";
+	const m = version.match(/^RE(\d+)$/);
+	if (!m) throw new SettingsCodeError(`Not a Rabbit settings code (expected "RE<n>...", got "${version.slice(0, 12)}").`);
+	const ver = parseInt(m[1]!, 10);
+	if (ver !== SETTINGS_CODE_FORMAT) {
+		throw new SettingsCodeError(`Unsupported settings-code version RE${ver}. This build understands RE${SETTINGS_CODE_FORMAT}.`);
+	}
+
+	// Start from a deep copy of the baseline, then apply overrides.
+	const out: JobSettings = structuredClone(BASELINE);
+	const vsFilters: VsFilterEntry[] = [];
+
+	for (let i = 1; i < tokens.length; i++) {
+		const sectionRaw = tokens[i]!;
+		if (!sectionRaw) continue;
+		const t = sectionRaw.indexOf("~");
+		if (t < 0) continue; // malformed section (skip)
+		const tag = sectionRaw.slice(0, t);
+		const kv = parsePayload(sectionRaw.slice(t + 1));
+
+		switch (tag) {
+			case "c":
+				applyCore(out, kv);
+				break;
+			case "dn":
+				applyDenoise(out, kv);
+				break;
+			case "db":
+				applyDeband(out, kv);
+				break;
+			case "ab":
+				applyBitrates(out, kv);
+				break;
+			case "al":
+				out.audioLanguages = splitList(kv.v);
+				break;
+			case "sl":
+				out.subtitleLanguages = splitList(kv.v);
+				break;
+			case "vs": {
+				const entry = parseVsSection(kv);
+				if (entry) vsFilters.push(entry);
+				break;
+			}
+			default:
+				// Unknown section: ignore for forward-compatibility.
+				break;
+		}
+	}
+
+	out.vsFilters = vsFilters;
+
+	// Strip machine-local fields so the importer leaves them as-is.
+	const result: Partial<JobSettings> = { ...out };
+	delete (result as Partial<JobSettings>).denoiseBackend;
+	delete (result as Partial<JobSettings>).gpuDevice;
+	return result;
+}
+
+function splitList(v: string | undefined): string[] {
+	if (!v) return [];
+	return v
+		.split("+")
+		.map((x) => unesc(x).trim())
+		.filter((x) => x.length > 0);
+}
+
+function applyCore(out: JobSettings, kv: Record<string, string>): void {
+	if (kv.q && CODE_TO_QUALITY[kv.q]) out.quality = CODE_TO_QUALITY[kv.q]!;
+	if (kv.sp && CODE_TO_SPEED[kv.sp]) out.finalSpeed = CODE_TO_SPEED[kv.sp]!;
+	if (kv.v && (VIDEO_VALUES as string[]).includes(kv.v)) out.videoEncode = kv.v as VideoEncodeMode;
+	if (kv.a && (AUDIO_VALUES as string[]).includes(kv.a)) out.audioEncode = kv.a as AudioEncodeMode;
+	if (kv.su && (SUB_VALUES as string[]).includes(kv.su)) out.subtitleProcessing = kv.su as SubtitleProcessingMode;
+	if (kv.ds !== undefined) out.downscale = kv.ds === "1";
+	if (kv.sb !== undefined) out.skipBoosting = kv.sb === "1";
+	if (kv.np !== undefined) out.noPhaseInv = kv.np === "1";
+	if (kv.dd !== undefined) out.dedupeSubtitles = kv.dd === "1";
+}
+
+function applyDenoise(out: JobSettings, kv: Record<string, string>): void {
+	const mode = kv.m && CODE_TO_DENOISE[kv.m] ? CODE_TO_DENOISE[kv.m]! : "off";
+	out.denoise = mode;
+	if (mode === "off") return;
+
+	if (mode === "auto") {
+		out.autoDenoiseThresholds = {
+			light: numOr(kv.tl, out.autoDenoiseThresholds.light),
+			medium: numOr(kv.tm, out.autoDenoiseThresholds.medium),
+			heavy: numOr(kv.th, out.autoDenoiseThresholds.heavy),
+		};
+		out.nlmeansParams = {
+			light: readNlmeans(kv, "l", out.nlmeansParams.light),
+			medium: readNlmeans(kv, "m", out.nlmeansParams.medium),
+			heavy: readNlmeans(kv, "h", out.nlmeansParams.heavy),
+		};
+	} else {
+		// Fixed level: only that level's triplet was stored.
+		const triplet: NlmeansParams = {
+			s: numOr(kv.s, out.nlmeansParams[mode].s),
+			p: numOr(kv.p, out.nlmeansParams[mode].p),
+			r: numOr(kv.r, out.nlmeansParams[mode].r),
+		};
+		out.nlmeansParams = { ...out.nlmeansParams, [mode]: triplet };
+	}
+}
+
+function readNlmeans(kv: Record<string, string>, prefix: string, fallback: NlmeansParams): NlmeansParams {
+	return {
+		s: numOr(kv[`${prefix}s`], fallback.s),
+		p: numOr(kv[`${prefix}p`], fallback.p),
+		r: numOr(kv[`${prefix}r`], fallback.r),
+	};
+}
+
+function applyDeband(out: JobSettings, kv: Record<string, string>): void {
+	const level = kv.m && CODE_TO_DEBAND[kv.m] ? CODE_TO_DEBAND[kv.m]! : "off";
+	out.deband = level;
+	if (level === "off") return;
+	const g: GradfunParams = {
+		strength: numOr(kv.st, out.gradfunParams[level].strength),
+		radius: numOr(kv.rd, out.gradfunParams[level].radius),
+	};
+	out.gradfunParams = { ...out.gradfunParams, [level]: g };
+}
+
+function applyBitrates(out: JobSettings, kv: Record<string, string>): void {
+	const next: AudioChannelBitrates = { ...out.audioBitrates };
+	for (const { key, code } of BITRATE_CHANNELS) {
+		if (kv[code] !== undefined) next[key] = numOr(kv[code], next[key]);
+	}
+	out.audioBitrates = next;
+}
+
+function parseVsSection(kv: Record<string, string>): VsFilterEntry | null {
+	const presetId = kv.id ? unesc(kv.id) : "";
+	const level = kv.lv ? unesc(kv.lv) : "";
+	if (!presetId || !level) return null;
+	const params: Record<string, VsParamValue> = {};
+	for (const key of Object.keys(kv)) {
+		if (key === "id" || key === "lv") continue;
+		params[key] = coerceScalar(unesc(kv[key]!));
+	}
+	return { presetId, level, params: { [level]: params } };
+}
+
+function numOr(v: string | undefined, fallback: number): number {
+	if (v === undefined) return fallback;
+	const n = Number(v);
+	return Number.isFinite(n) ? n : fallback;
+}
+
+export function combineCumulativeSettings(prior: Partial<JobSettings> | null | undefined, current: JobSettings): JobSettings {
+	if (!prior) return current;
+
+	const combined: JobSettings = { ...current };
+
+	// VS chain: prior first, then current; drop exact duplicates.
+	const active = (e: VsFilterEntry | undefined | null): e is VsFilterEntry => !!e && e.level !== "off";
+	const priorVs = (prior.vsFilters ?? []).filter(active);
+	const currentVs = (current.vsFilters ?? []).filter(active);
+	const seen = new Set<string>();
+	const chain: VsFilterEntry[] = [];
+	for (const e of [...priorVs, ...currentVs]) {
+		const key = `${e.presetId}|${e.level}|${JSON.stringify(e.params?.[e.level] ?? {})}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		chain.push(e);
+	}
+	combined.vsFilters = chain;
+
+	// Denoise / deband: if this pass didn't apply it but the file already had
+	// it, keep the record that it happened.
+	if ((current.denoise ?? "off") === "off" && prior.denoise && prior.denoise !== "off") {
+		combined.denoise = prior.denoise;
+	}
+	if ((current.deband ?? "off") === "off" && prior.deband && prior.deband !== "off") {
+		combined.deband = prior.deband;
+	}
+
+	// Downscale is sticky across re-encodes.
+	combined.downscale = !!current.downscale || !!prior.downscale;
+
+	return combined;
+}

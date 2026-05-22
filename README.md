@@ -114,6 +114,16 @@ Blue Exorcist (2011) - S01E01 - The Devil Resides in Human Souls [Bluray-1080p][
 
 Source tags are detected from the input filename: `Bluray`, `WEBDL`, `WEBRip`, `HDTV`, `DVD`, `SDTV`, `CAM`. Files with `REMUX` in the name are tagged as `Bluray`.
 
+## Settings Codes
+
+Each encoded file includes a `SETTINGS` tag. This is a compact, versioned string that records the exact resolved settings used for the encode, such as `RE1|c~q=h,ds=1|dn~m=m,s=4.5,p=5,r=13`.
+
+The settings code stores the actual underlying values, including every nlmeans and gradfun parameter, each active VapourSynth filter in chain order, and all related filter parameters. This makes it possible to reproduce a setup even if presets have changed since the original encode.
+
+To restore settings from a code, paste it into the **Settings Code** field in either the Default Settings panel or the per-job settings panel. Codes are portable across machines because GPU-specific choices, such as the denoise backend and GPU device, are intentionally left out. This prevents an imported code from overwriting the target machine’s hardware configuration.
+
+The format is versioned with an `RE<n>` prefix, so older codes continue to work as the format evolves. Fields that match the shipped baseline are omitted, which means a stock-default configuration is represented simply as `RE1`.
+
 ## Supported Input Formats
 
 `.mp4`, `.mkv`, `.avi`, `.webm`, `.flv`, `.ts`, `.mov`
@@ -129,6 +139,7 @@ Source tags are detected from the input filename: `Bluray`, `WEBDL`, `WEBRip`, `
 | `POST`   | `/api/jobs/:id/retry`                       | Retry a failed job                                                            |
 | `POST`   | `/api/jobs/:id/cancel`                      | Cancel an actively encoding job                                               |
 | `POST`   | `/api/jobs/:id/move`                        | Move a queued job in the queue (`direction`: `up`, `down`, `top`, `bottom`)   |
+| `POST`   | `/api/jobs/:id/import-code`                 | Apply a settings code to a queued job, replacing its settings                 |
 | `POST`   | `/api/jobs/reorder`                         | Set the entire queue order from a JSON `{ ids: [...] }` body                  |
 | `GET`    | `/api/jobs/:id/audio-preview`               | Preview audio reorder/filter/dedup for a job                                  |
 | `GET`    | `/api/jobs/:id/subtitle-preview`            | Preview subtitle reorder/rename for a job                                     |
@@ -140,6 +151,9 @@ Source tags are detected from the input filename: `Bluray`, `WEBDL`, `WEBRip`, `
 | `GET`    | `/api/config`                               | Get default settings                                                          |
 | `PATCH`  | `/api/config`                               | Update default settings                                                       |
 | `POST`   | `/api/config/reset`                         | Reset default settings                                                        |
+| `POST`   | `/api/config/import-code`                   | Import a settings code as the new default settings                            |
+| `POST`   | `/api/settings/encode`                      | Encode a settings object into a shareable settings code (`{ code }`)          |
+| `POST`   | `/api/settings/decode`                      | Decode a settings code back into a settings object (`{ settings }`)           |
 | `GET`    | `/api/library`                              | List configured library root directories                                      |
 | `GET`    | `/api/library/browse`                       | Browse a library folder (`?path=/data/library/Animes`)                        |
 | `POST`   | `/api/library/encode`                       | Queue all videos in a folder for in-place encoding                            |

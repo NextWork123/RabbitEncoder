@@ -37,6 +37,7 @@ import { listOpenClDevices } from "./opencl";
 import { listVulkanDevices } from "./vulkan";
 import { resolvePreviewArtifact } from "./preview-encoder";
 import { makeDefaultVsFilterEntry, vsRegistry } from "./vs-filters";
+import { decodeSettingsCode, encodeSettingsCode, SettingsCodeError } from "./settings-code";
 
 export const config = await loadConfig();
 
@@ -288,6 +289,52 @@ app.patch("/api/config", async (c) => {
 
 app.post("/api/config/reset", (c) => {
 	return c.json(resetDefaults());
+});
+
+app.post("/api/config/import-code", async (c) => {
+	const body = (await c.req.json()) as { code?: string };
+	if (typeof body.code !== "string") return c.json({ error: "Missing 'code' string" }, 400);
+	try {
+		return c.json(updateDefaults(decodeSettingsCode(body.code)));
+	} catch (err) {
+		if (err instanceof SettingsCodeError) return c.json({ error: err.message }, 400);
+		throw err;
+	}
+});
+
+app.post("/api/jobs/:id/import-code", async (c) => {
+	const body = (await c.req.json()) as { code?: string };
+	if (typeof body.code !== "string") return c.json({ error: "Missing 'code' string" }, 400);
+	let partial;
+	try {
+		partial = decodeSettingsCode(body.code);
+	} catch (err) {
+		if (err instanceof SettingsCodeError) return c.json({ error: err.message }, 400);
+		throw err;
+	}
+	const job = updateJobSettings(c.params.id!, partial);
+	if (!job) return c.json({ error: "Job not found or not editable" }, 400);
+	return c.json(job);
+});
+
+app.post("/api/settings/encode", async (c) => {
+	const body = (await c.req.json()) as Partial<JobSettings>;
+	try {
+		return c.json({ code: encodeSettingsCode({ ...config.defaults, ...body } as JobSettings) });
+	} catch {
+		return c.json({ code: "" });
+	}
+});
+
+app.post("/api/settings/decode", async (c) => {
+	const body = (await c.req.json()) as { code?: string };
+	if (typeof body.code !== "string") return c.json({ error: "Missing 'code' string" }, 400);
+	try {
+		return c.json({ settings: decodeSettingsCode(body.code) });
+	} catch (err) {
+		if (err instanceof SettingsCodeError) return c.json({ error: err.message }, 400);
+		throw err;
+	}
 });
 
 app.get("/api/queue", (c) => {
