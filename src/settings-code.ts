@@ -13,6 +13,7 @@ import type {
 	VsFilterEntry,
 	VsParamValue,
 } from "./types";
+import { vsRegistry } from "./vs-filters";
 
 export const SETTINGS_CODE_FORMAT = 1;
 export const SETTINGS_CODE_PREFIX = `RE${SETTINGS_CODE_FORMAT}`;
@@ -188,17 +189,23 @@ export function encodeSettingsCode(s: JobSettings): string {
 		const dn = new Section("dn");
 		dn.put("m", DENOISE_TO_CODE[s.denoise]);
 		if (s.denoise === "auto") {
-			// auto can pick any level per scene, so the full table + thresholds matter.
-			dn.put("tl", s.autoDenoiseThresholds.light);
-			dn.put("tm", s.autoDenoiseThresholds.medium);
-			dn.put("th", s.autoDenoiseThresholds.heavy);
-			putNlmeans(dn, "l", s.nlmeansParams.light);
-			putNlmeans(dn, "m", s.nlmeansParams.medium);
-			putNlmeans(dn, "h", s.nlmeansParams.heavy);
+			if (s.autoDenoiseThresholds.light !== BASELINE.autoDenoiseThresholds.light) {
+				dn.put("tl", s.autoDenoiseThresholds.light);
+			}
+			if (s.autoDenoiseThresholds.medium !== BASELINE.autoDenoiseThresholds.medium) {
+				dn.put("tm", s.autoDenoiseThresholds.medium);
+			}
+			if (s.autoDenoiseThresholds.heavy !== BASELINE.autoDenoiseThresholds.heavy) {
+				dn.put("th", s.autoDenoiseThresholds.heavy);
+			}
+
+			putNlmeansDiff(dn, "l", s.nlmeansParams.light, BASELINE.nlmeansParams.light);
+			putNlmeansDiff(dn, "m", s.nlmeansParams.medium, BASELINE.nlmeansParams.medium);
+			putNlmeansDiff(dn, "h", s.nlmeansParams.heavy, BASELINE.nlmeansParams.heavy);
 		} else {
-			// fixed level: only that level's triplet is used.
 			const lvl = s.nlmeansParams[s.denoise];
-			dn.put("s", lvl.s).put("p", lvl.p).put("r", lvl.r);
+			const base = BASELINE.nlmeansParams[s.denoise];
+			putNlmeansDiff(dn, "", lvl, base);
 		}
 		sections.push(dn.toString());
 	}
@@ -208,7 +215,8 @@ export function encodeSettingsCode(s: JobSettings): string {
 		const db = new Section("db");
 		db.put("m", DEBAND_TO_CODE[s.deband]);
 		const g = s.gradfunParams[s.deband];
-		db.put("st", g.strength).put("rd", g.radius);
+		const base = BASELINE.gradfunParams[s.deband];
+		putGradfunDiff(db, g, base);
 		sections.push(db.toString());
 	}
 
@@ -231,20 +239,66 @@ export function encodeSettingsCode(s: JobSettings): string {
 		const vs = new Section("vs");
 		vs.put("id", entry.presetId);
 		vs.put("lv", entry.level);
-		const active = entry.params?.[entry.level] ?? {};
-		for (const key of Object.keys(active)) {
-			const val = active[key]!;
-			if (typeof val === "boolean") vs.put(key, val ? "true" : "false");
-			else vs.put(key, val);
-		}
+		putVsParamDiffs(vs, entry);
 		sections.push(vs.toString());
 	}
 
 	return [SETTINGS_CODE_PREFIX, ...sections].join("|");
 }
 
-function putNlmeans(sec: Section, prefix: string, p: NlmeansParams): void {
-	sec.put(`${prefix}s`, p.s).put(`${prefix}p`, p.p).put(`${prefix}r`, p.r);
+function putNlmeansDiff(sec: Section, prefix: string, p: NlmeansParams, base: NlmeansParams): void {
+	if (p.s !== base.s) sec.put(`${prefix}s`, p.s);
+	if (p.p !== base.p) sec.put(`${prefix}p`, p.p);
+	if (p.r !== base.r) sec.put(`${prefix}r`, p.r);
+}
+
+function putGradfunDiff(sec: Section, p: GradfunParams, base: GradfunParams): void {
+	if (p.strength !== base.strength) sec.put("st", p.strength);
+	if (p.radius !== base.radius) sec.put("rd", p.radius);
+}
+
+function sameVsParamValue(a: VsParamValue | undefined, b: VsParamValue | undefined): boolean {
+	if (a === b) return true;
+
+	if (typeof a === "number" || typeof b === "number") {
+		const an = Number(a);
+		const bn = Number(b);
+		return Number.isFinite(an) && Number.isFinite(bn) && an === bn;
+	}
+
+	return false;
+}
+
+function putVsParamDiffs(sec: Section, entry: VsFilterEntry): void {
+	const active = entry.params?.[entry.level] ?? {};
+	const manifest = vsRegistry.get(entry.presetId);
+
+	if (!manifest) {
+		for (const key of Object.keys(active)) {
+			const val = active[key]!;
+			if (typeof val === "boolean") sec.put(key, val ? "true" : "false");
+			else sec.put(key, val);
+		}
+		return;
+	}
+
+	for (const spec of manifest.params) {
+		const val = active[spec.key];
+		if (val === undefined) continue;
+
+		const defaultForLevel = spec.defaults[entry.level];
+		if (sameVsParamValue(val, defaultForLevel)) continue;
+
+		if (typeof val === "boolean") sec.put(spec.key, val ? "true" : "false");
+		else sec.put(spec.key, val);
+	}
+
+	for (const key of Object.keys(active)) {
+		if (manifest.params.some((spec) => spec.key === key)) continue;
+		const val = active[key]!;
+		if (typeof val === "boolean") sec.put(key, val ? "true" : "false");
+		else sec.put(key, val);
+	}
 }
 
 // DECODE
@@ -407,6 +461,26 @@ function numOr(v: string | undefined, fallback: number): number {
 	return Number.isFinite(n) ? n : fallback;
 }
 
+function canonicalVsParamsForKey(e: VsFilterEntry): Record<string, VsParamValue> {
+	const active = e.params?.[e.level] ?? {};
+	const manifest = vsRegistry.get(e.presetId);
+
+	if (!manifest) return active;
+
+	const out: Record<string, VsParamValue> = {};
+
+	for (const spec of manifest.params) {
+		const value = active[spec.key] ?? spec.defaults[e.level];
+		if (value !== undefined) out[spec.key] = value;
+	}
+
+	for (const key of Object.keys(active)) {
+		if (!(key in out)) out[key] = active[key]!;
+	}
+
+	return out;
+}
+
 export function combineCumulativeSettings(prior: Partial<JobSettings> | null | undefined, current: JobSettings): JobSettings {
 	if (!prior) return current;
 
@@ -419,15 +493,13 @@ export function combineCumulativeSettings(prior: Partial<JobSettings> | null | u
 	const seen = new Set<string>();
 	const chain: VsFilterEntry[] = [];
 	for (const e of [...priorVs, ...currentVs]) {
-		const key = `${e.presetId}|${e.level}|${JSON.stringify(e.params?.[e.level] ?? {})}`;
+		const key = `${e.presetId}|${e.level}|${JSON.stringify(canonicalVsParamsForKey(e))}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
 		chain.push(e);
 	}
 	combined.vsFilters = chain;
 
-	// Denoise / deband: if this pass didn't apply it but the file already had
-	// it, keep the record that it happened.
 	if ((current.denoise ?? "off") === "off" && prior.denoise && prior.denoise !== "off") {
 		combined.denoise = prior.denoise;
 	}
@@ -435,7 +507,6 @@ export function combineCumulativeSettings(prior: Partial<JobSettings> | null | u
 		combined.deband = prior.deband;
 	}
 
-	// Downscale is sticky across re-encodes.
 	combined.downscale = !!current.downscale || !!prior.downscale;
 
 	return combined;
