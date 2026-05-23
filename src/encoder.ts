@@ -848,13 +848,20 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				const subDefaultAssigned = new Set<string>();
 				const subForcedAssigned = new Set<string>();
 
-				for (const stream of subtitleStreams) {
-					checkCancelled();
+				interface PlannedSubtitle {
+					stream: (typeof subtitleStreams)[number];
+					subFile: string;
+					effectiveLang: string;
+					trackName: string;
+					flagArgs: string[];
+				}
 
+				const plannedSubs: PlannedSubtitle[] = [];
+
+				for (const stream of subtitleStreams) {
 					const trackType = detectSubtitleTrackType(stream);
 					const lang = stream.language || "und";
 					const langGroup = normalizeLanguageGroup(lang);
-
 					const trackName = buildSubtitleTrackName(trackType, stream.title);
 
 					let effectiveLang = lang;
@@ -862,49 +869,17 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 						effectiveLang = "en-JP";
 					}
 
-					const subFile = join(tempDir, `sub_${stream.index}.mkv`);
-					const extractSubRes = await run(
-						[
-							"ffmpeg",
-							"-y",
-							"-i",
-							job.inputPath,
-							"-map",
-							`0:${stream.index}`,
-							"-c:s",
-							"copy",
-							"-vn",
-							"-an",
-							"-map_chapters",
-							"-1",
-							"-map_metadata",
-							"-1",
-							subFile,
-						],
-						{ signal },
-					);
-
-					if (extractSubRes.code !== 0) {
-						Logger.warn(`[subtitle] Failed to extract track ${stream.index}, skipping: ${extractSubRes.stderr || extractSubRes.stdout}`);
-						continue;
-					}
-
-					const subIdx = subtitleStreams.indexOf(stream);
-					const subProgress = 5 + Math.round(((subIdx + 1) / subtitleStreams.length) * 40);
-					setStep(S_MUX, { progress: subProgress, detail: `Extracting subtitles (${subIdx + 1}/${subtitleStreams.length})` });
-
-					mkvArgs.push("--language", `0:${effectiveLang}`);
-					mkvArgs.push("--track-name", `0:${trackName}`);
+					const flagArgs: string[] = [];
 
 					switch (trackType) {
 						case "full": {
 							const isDefault = !subDefaultAssigned.has(langGroup);
 							if (isDefault) subDefaultAssigned.add(langGroup);
-							mkvArgs.push("--default-track-flag", `0:${isDefault ? "1" : "0"}`);
-							mkvArgs.push("--forced-display-flag", "0:0");
-							mkvArgs.push("--hearing-impaired-flag", "0:0");
-							mkvArgs.push("--commentary-flag", "0:0");
-							mkvArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
+							flagArgs.push("--default-track-flag", `0:${isDefault ? "1" : "0"}`);
+							flagArgs.push("--forced-display-flag", "0:0");
+							flagArgs.push("--hearing-impaired-flag", "0:0");
+							flagArgs.push("--commentary-flag", "0:0");
+							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
 							break;
 						}
 						case "forced": {
@@ -913,40 +888,103 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 								continue;
 							}
 							subForcedAssigned.add(langGroup);
-							mkvArgs.push("--default-track-flag", "0:0");
-							mkvArgs.push("--forced-display-flag", "0:1");
-							mkvArgs.push("--hearing-impaired-flag", "0:0");
-							mkvArgs.push("--commentary-flag", "0:0");
-							mkvArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
+							flagArgs.push("--default-track-flag", "0:0");
+							flagArgs.push("--forced-display-flag", "0:1");
+							flagArgs.push("--hearing-impaired-flag", "0:0");
+							flagArgs.push("--commentary-flag", "0:0");
+							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
 							break;
 						}
 						case "honorifics": {
-							mkvArgs.push("--default-track-flag", "0:1");
-							mkvArgs.push("--forced-display-flag", "0:0");
-							mkvArgs.push("--hearing-impaired-flag", "0:0");
-							mkvArgs.push("--commentary-flag", "0:0");
-							mkvArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
+							flagArgs.push("--default-track-flag", "0:1");
+							flagArgs.push("--forced-display-flag", "0:0");
+							flagArgs.push("--hearing-impaired-flag", "0:0");
+							flagArgs.push("--commentary-flag", "0:0");
+							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
 							break;
 						}
 						case "sdh": {
-							mkvArgs.push("--default-track-flag", "0:0");
-							mkvArgs.push("--forced-display-flag", "0:0");
-							mkvArgs.push("--hearing-impaired-flag", "0:1");
-							mkvArgs.push("--commentary-flag", "0:0");
-							mkvArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
+							flagArgs.push("--default-track-flag", "0:0");
+							flagArgs.push("--forced-display-flag", "0:0");
+							flagArgs.push("--hearing-impaired-flag", "0:1");
+							flagArgs.push("--commentary-flag", "0:0");
+							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
 							break;
 						}
 						case "commentary": {
-							mkvArgs.push("--default-track-flag", "0:0");
-							mkvArgs.push("--forced-display-flag", "0:0");
-							mkvArgs.push("--hearing-impaired-flag", "0:0");
-							mkvArgs.push("--commentary-flag", "0:1");
-							mkvArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
+							flagArgs.push("--default-track-flag", "0:0");
+							flagArgs.push("--forced-display-flag", "0:0");
+							flagArgs.push("--hearing-impaired-flag", "0:0");
+							flagArgs.push("--commentary-flag", "0:1");
+							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
 							break;
 						}
 					}
 
-					mkvArgs.push(subFile);
+					plannedSubs.push({
+						stream,
+						subFile: join(tempDir, `sub_${stream.index}.mkv`),
+						effectiveLang,
+						trackName,
+						flagArgs,
+					});
+				}
+
+				if (plannedSubs.length > 0) {
+					checkCancelled();
+					setStep(S_MUX, { progress: 5, detail: `Extracting ${plannedSubs.length} subtitle track(s)` });
+
+					const extractArgs: string[] = ["ffmpeg", "-y", "-i", job.inputPath];
+					for (const planned of plannedSubs) {
+						extractArgs.push("-map", `0:${planned.stream.index}`, "-c:s", "copy", "-vn", "-an", "-map_chapters", "-1", "-map_metadata", "-1", planned.subFile);
+					}
+
+					const extractRes = await run(extractArgs, { signal });
+
+					if (extractRes.code !== 0) {
+						// One bad track fails the whole batch (fall back to per-track extraction so the rest still go through).
+						Logger.warn(`[subtitle] Single-pass extraction failed, falling back to per-track: ${extractRes.stderr || extractRes.stdout}`);
+						for (const planned of plannedSubs) {
+							checkCancelled();
+							const res = await run(
+								[
+									"ffmpeg",
+									"-y",
+									"-i",
+									job.inputPath,
+									"-map",
+									`0:${planned.stream.index}`,
+									"-c:s",
+									"copy",
+									"-vn",
+									"-an",
+									"-map_chapters",
+									"-1",
+									"-map_metadata",
+									"-1",
+									planned.subFile,
+								],
+								{ signal },
+							);
+							if (res.code !== 0) {
+								Logger.warn(`[subtitle] Failed to extract track ${planned.stream.index}, skipping: ${res.stderr || res.stdout}`);
+							}
+						}
+					}
+
+					setStep(S_MUX, { progress: 45, detail: `Extracted ${plannedSubs.length} subtitle track(s)` });
+				}
+
+				for (const planned of plannedSubs) {
+					checkCancelled();
+					if (!existsSync(planned.subFile)) {
+						Logger.warn(`[subtitle] Extracted file missing for track ${planned.stream.index}, skipping`);
+						continue;
+					}
+					mkvArgs.push("--language", `0:${planned.effectiveLang}`);
+					mkvArgs.push("--track-name", `0:${planned.trackName}`);
+					mkvArgs.push(...planned.flagArgs);
+					mkvArgs.push(planned.subFile);
 				}
 			} else {
 				Logger.info("[subtitle] No subtitle streams found");
