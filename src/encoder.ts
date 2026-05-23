@@ -24,6 +24,7 @@ import { formatVsProgressDetail, runVsPass, vsRegistry } from "./vs-filters";
 import { applyColorMetadata, svtColorParamsFromProbe } from "./color-metadata";
 import { combineCumulativeSettings, encodeSettingsCode } from "./settings-code";
 import { decodePriorSettings } from "./mkv-tags";
+import { cpus } from "os";
 
 export { CancelledError } from "./process";
 
@@ -669,7 +670,16 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		} else if (audioStreams.length === 0) {
 			setStep(S_AUDIO, { status: "done", progress: 100, detail: "No audio streams" });
 		} else {
-			setStep(S_AUDIO, { progress: 10, detail: `Encoding ${audioStreams.length} audio stream(s)` });
+			setStep(S_AUDIO, { progress: 5, detail: `Extracting ${audioStreams.length} audio stream(s)` });
+
+			interface AudioEncodeJob {
+				index: number;
+				flacFile: string;
+				opusFile: string;
+				bitrate: number;
+			}
+
+			const audioJobs: AudioEncodeJob[] = [];
 
 			for (let i = 0; i < audioStreams.length; i++) {
 				checkCancelled();
@@ -700,23 +710,57 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					throw new Error(`FFmpeg audio extraction failed for stream ${i}: ${ffRes.stderr || ffRes.stdout}`);
 				}
 
-				const opusArgs = ["opusenc", "--bitrate", String(bitrate)];
-				if (job.settings.noPhaseInv) {
-					opusArgs.push("--no-phase-inv");
-				}
-				opusArgs.push("--discard-comments");
-				opusArgs.push("--discard-pictures");
-				opusArgs.push(flacFile, opusFile);
-
-				const opusRes = await run(opusArgs, { signal });
-				if (opusRes.code !== 0) {
-					throw new Error(`Audio encoding failed for stream ${i}: ${opusRes.stderr || opusRes.stdout}`);
-				}
+				audioJobs.push({ index: i, flacFile, opusFile, bitrate });
 
 				setStep(S_AUDIO, {
-					progress: 10 + Math.round(((i + 1) / audioStreams.length) * 80),
+					progress: 5 + Math.round(((i + 1) / audioStreams.length) * 35),
+					detail: `Extracting audio (${i + 1}/${audioStreams.length})`,
 				});
 			}
+
+			setStep(S_AUDIO, { progress: 40, detail: `Encoding ${audioJobs.length} audio stream(s)` });
+
+			const concurrency = Math.max(1, Math.min(audioJobs.length, cpus().length));
+			let nextJob = 0;
+			let completed = 0;
+			let failed = false;
+
+			const encodeWorker = async (): Promise<void> => {
+				while (!failed) {
+					const jobIdx = nextJob++;
+					if (jobIdx >= audioJobs.length) return;
+
+					try {
+						checkCancelled();
+
+						const aj = audioJobs[jobIdx]!;
+
+						const opusArgs = ["opusenc", "--bitrate", String(aj.bitrate)];
+						if (job.settings.noPhaseInv) {
+							opusArgs.push("--no-phase-inv");
+						}
+						opusArgs.push("--discard-comments");
+						opusArgs.push("--discard-pictures");
+						opusArgs.push(aj.flacFile, aj.opusFile);
+
+						const opusRes = await run(opusArgs, { signal });
+						if (opusRes.code !== 0) {
+							throw new Error(`Audio encoding failed for stream ${aj.index}: ${opusRes.stderr || opusRes.stdout}`);
+						}
+
+						completed++;
+						setStep(S_AUDIO, {
+							progress: 40 + Math.round((completed / audioJobs.length) * 60),
+							detail: `Encoding audio (${completed}/${audioJobs.length})`,
+						});
+					} catch (err) {
+						failed = true;
+						throw err;
+					}
+				}
+			};
+
+			await Promise.all(Array.from({ length: concurrency }, () => encodeWorker()));
 
 			setStep(S_AUDIO, { status: "done", progress: 100 });
 		}
