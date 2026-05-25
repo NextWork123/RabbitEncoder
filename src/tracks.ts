@@ -27,6 +27,26 @@ export function normalizeLanguageCode(input: string | undefined): string {
 }
 
 /**
+ * Validate a language tag for mkvmerge's --language flag. mkvmerge rejects
+ * anything that isn't a well-formed BCP 47 tag and aborts the whole mux, so a
+ * malformed value must never reach it. Anything non-string or malformed logs
+ * its raw value (as JSON) and falls back to "und".
+ */
+export function sanitizeLanguageTag(lang: unknown, ctx?: string): string {
+	if (typeof lang !== "string") {
+		if (lang != null) {
+			Logger.warn(`[mux] Non-string language value ${JSON.stringify(lang)}${ctx ? ` (${ctx})` : ""} — falling back to "und"`);
+		}
+		return "und";
+	}
+	const tag = lang.trim();
+	if (!tag) return "und";
+	if (/^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/.test(tag)) return tag;
+	Logger.warn(`[mux] Invalid language tag ${JSON.stringify(tag)}${ctx ? ` (${ctx})` : ""} — falling back to "und"`);
+	return "und";
+}
+
+/**
  * Keep only tracks whose language matches the allowed list.
  * Empty list = no filter. `und`/missing-language tracks are dropped when active.
  * If the filter would drop every track, keep all and warn (avoid producing

@@ -15,6 +15,7 @@ import {
 	normalizeLanguageGroup,
 	deduplicateSubtitleStreams,
 	filterStreamsByLanguage,
+	sanitizeLanguageTag,
 } from "./tracks";
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
@@ -819,7 +820,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			mkvArgs.push("--timestamps", `0:${timecodesFile}`);
 		}
 
-		mkvArgs.push("--language", `0:${probe.videoLanguage}`);
+		mkvArgs.push("--language", `0:${sanitizeLanguageTag(probe.videoLanguage, "video")}`);
 		mkvArgs.push("--track-name", `0:${config.organization}`);
 		mkvArgs.push("--original-flag", `0:${probe.videoOriginalFlag ? "1" : "0"}`);
 
@@ -845,7 +846,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				if (isDefault) defaultAssigned.add(langGroup);
 
 				if (stream.language) {
-					mkvArgs.push("--language", `0:${stream.language}`);
+					mkvArgs.push("--language", `0:${sanitizeLanguageTag(stream.language, `audio idx ${stream.index}`)}`);
 				}
 
 				mkvArgs.push("--track-name", `0:`);
@@ -1025,7 +1026,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 						Logger.warn(`[subtitle] Extracted file missing for track ${planned.stream.index}, skipping`);
 						continue;
 					}
-					mkvArgs.push("--language", `0:${planned.effectiveLang}`);
+					mkvArgs.push("--language", `0:${sanitizeLanguageTag(planned.effectiveLang, `sub idx ${planned.stream.index}`)}`);
 					mkvArgs.push("--track-name", `0:${planned.trackName}`);
 					mkvArgs.push(...planned.flagArgs);
 					mkvArgs.push(planned.subFile);
