@@ -49,6 +49,7 @@ export function filterStreamsByLanguage<T extends WithLanguage>(streams: T[], al
 	return filtered;
 }
 
+const UNCENSORED_PATTERN = /\b(uncensored|uncen|uncut)\b/i;
 const COMMENTARY_PATTERN = /\b(commentary|director'?s?\s+commentary)\b/i;
 const DESCRIPTIVE_PATTERN = /\b(descriptive|description|audio\s*desc(?:ription)?|visually\s*impaired|\bAD\b)\b/i;
 
@@ -57,6 +58,11 @@ export function detectAudioTrackType(stream: AudioStreamInfo): AudioTrackType {
 	if (COMMENTARY_PATTERN.test(stream.title)) return "commentary";
 	if (DESCRIPTIVE_PATTERN.test(stream.title)) return "descriptive";
 	return "main";
+}
+
+/** Returns 0 if the track title marks it uncensored, 1 otherwise. */
+function uncensoredPriority(stream: { title?: string }): number {
+	return stream.title && UNCENSORED_PATTERN.test(stream.title) ? 0 : 1;
 }
 
 /**
@@ -94,7 +100,11 @@ export function sortAudioStreams(streams: AudioStreamInfo[]): AudioStreamInfo[] 
 		const typeB = typePriority(b);
 		if (typeA !== typeB) return typeA - typeB;
 
-		return (a.channels || 2) - (b.channels || 2);
+		const chanA = a.channels || 2;
+		const chanB = b.channels || 2;
+		if (chanA !== chanB) return chanA - chanB;
+
+		return uncensoredPriority(a) - uncensoredPriority(b);
 	});
 }
 
@@ -116,6 +126,15 @@ export function deduplicateAudioStreams(streams: AudioStreamInfo[]): AudioStream
 		const existing = bestMap.get(key);
 		if (!existing) {
 			bestMap.set(key, stream);
+			continue;
+		}
+
+		const isUncensored = uncensoredPriority(stream) === 0;
+		const existingIsUncensored = uncensoredPriority(existing) === 0;
+
+		// Uncensored wins outright (even at a lower bitrate or lossy codec)
+		if (isUncensored !== existingIsUncensored) {
+			if (isUncensored) bestMap.set(key, stream);
 			continue;
 		}
 
@@ -555,7 +574,12 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStre
 		const fmtB = formatPriority(b);
 		if (fmtA !== fmtB) return fmtA - fmtB;
 
-		// 4. Source/group
+		// 4. Uncensored
+		const uncA = uncensoredPriority(a);
+		const uncB = uncensoredPriority(b);
+		if (uncA !== uncB) return uncA - uncB;
+
+		// 5. Source/group
 		const sgA = sourceGroupPriority(a);
 		const sgB = sourceGroupPriority(b);
 
