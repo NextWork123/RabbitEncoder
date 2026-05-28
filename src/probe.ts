@@ -9,163 +9,127 @@ async function exec(cmd: string[]): Promise<string> {
 	return out.trim();
 }
 
-async function mediainfo(file: string, inform: string): Promise<string> {
-	return exec(["mediainfo", `--Inform=${inform}`, file]);
+async function mediainfoJson(file: string): Promise<any> {
+	try {
+		return JSON.parse(await exec(["mediainfo", "--Output=JSON", file]));
+	} catch {
+		return {};
+	}
 }
 
 export async function probeFile(inputPath: string): Promise<ProbeResult> {
 	const filename = inputPath.split("/").pop() || "";
 
-	const streamsRaw = await exec([
-		"ffprobe",
-		"-v",
-		"error",
-		"-select_streams",
-		"v",
-		"-show_entries",
-		"stream=index,width,height,codec_name",
-		"-of",
-		"csv=p=0",
-		inputPath,
-	]);
-	const streams = streamsRaw
-		.split("\n")
-		.filter(Boolean)
-		.map((line) => {
-			const [index, w, h, codec] = line.split(",");
-			return {
-				index: parseInt(index!),
-				width: parseInt(w!),
-				height: parseInt(h!),
-				codec: codec || "",
-			};
-		});
-	streams.sort((a, b) => b.width - a.width);
-	const best = streams[0] || { index: 0, width: 1920, height: 1080, codec: "" };
+	let probeJson: any = {};
+	try {
+		probeJson = JSON.parse(await exec(["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", inputPath]));
+	} catch {
+		probeJson = {};
+	}
+	const allStreams: any[] = probeJson.streams ?? [];
 
-	const durationStr = await exec(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", inputPath]);
-	const duration = parseFloat(durationStr) || 0;
+	const videoStreams = allStreams
+		.filter((s) => s.codec_type === "video" && s.width && !s.disposition?.attached_pic)
+		.sort((a, b) => (b.width ?? 0) - (a.width ?? 0));
+	const best: any = videoStreams[0] ?? {
+		index: 0,
+		width: 1920,
+		height: 1080,
+		codec_name: "",
+		disposition: {},
+		tags: {},
+	};
 
-	const streamFpsRaw = await exec(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", inputPath]);
-	const containerFpsStr = await mediainfo(inputPath, "Video;%FrameRate%");
-	const containerFpsNum = await mediainfo(inputPath, "Video;%FrameRate_Num%");
-	const containerFpsDen = await mediainfo(inputPath, "Video;%FrameRate_Den%");
+	const duration = parseFloat(probeJson.format?.duration) || 0;
 
-	const parseFps = (s: string): number => {
+	const parseFps = (s: string | undefined): number => {
+		if (!s) return 23.976;
 		const parts = s.split("/");
-		if (parts.length === 2) return parseInt(parts[0]!) / parseInt(parts[1]!);
+		if (parts.length === 2) {
+			const n = parseInt(parts[0]!);
+			const d = parseInt(parts[1]!);
+			return d > 0 && n > 0 ? n / d : 23.976;
+		}
 		return parseFloat(s) || 23.976;
 	};
 
-	const videoStreamFps = parseFps(streamFpsRaw);
-	const videoDisplayFps = parseFloat(containerFpsStr) || 23.976;
-	const videoFrameRate = containerFpsNum && containerFpsDen ? `${containerFpsNum}/${containerFpsDen}` : "24000/1001";
+	const videoStreamFps = parseFps(best.r_frame_rate);
+	const videoDisplayFps = parseFps(best.avg_frame_rate);
+	const videoFrameRate = best.r_frame_rate && best.r_frame_rate !== "0/0" ? best.r_frame_rate : "24000/1001";
 	const isFrameRateMismatch = Math.abs(videoStreamFps - videoDisplayFps) > 0.5;
 
-	const darRaw = await exec(["ffprobe", "-v", "error", "-select_streams", `v:0`, "-show_entries", "stream=display_aspect_ratio", "-of", "csv=p=0", inputPath]);
-	const displayAspectRatio = darRaw.trim() || "";
+	const displayAspectRatio = best.display_aspect_ratio || "";
+	const videoLanguage = best.tags?.language || "und";
+	const videoOriginalFlag = best.disposition?.original === 1;
 
-	const videoLangRaw = await exec(["ffprobe", "-v", "error", "-select_streams", `v:0`, "-show_entries", "stream_tags=language", "-of", "csv=p=0", inputPath]);
-	const videoLanguage = videoLangRaw.trim() || "und";
+	// Mediainfo
+	const mi = await mediainfoJson(inputPath);
+	const miTracks: any[] = mi.media?.track ?? [];
+	const miVideo: any = miTracks.find((t) => t["@type"] === "Video") ?? {};
 
-	const audioInfoJson = await exec([
-		"ffprobe",
-		"-v",
-		"error",
-		"-select_streams",
-		"a",
-		"-show_entries",
-		"stream=index,channels,channel_layout,codec_name,bit_rate:stream_tags=language,title",
-		"-of",
-		"json",
-		inputPath,
-	]);
-	const audioData = JSON.parse(audioInfoJson);
-
-	const delayOutput = await mediainfo(inputPath, "Audio;%Delay%\\n");
-	const delayLines = delayOutput.split("\n").map((s) => parseFloat(s.trim()) || 0);
-
-	const audioStreams: AudioStreamInfo[] = (audioData.streams || []).map((s: any, i: number) => ({
-		index: s.index,
-		channels: s.channels || 0,
-		channelLayout: s.channel_layout || "",
-		language: s.tags?.language || undefined,
-		title: s.tags?.title || undefined,
-		codec: s.codec_name || undefined,
-		bitrate: s.bit_rate ? parseInt(s.bit_rate) : undefined,
-		delayMs: delayLines[i] ?? 0,
-	}));
-
-	// Probe subtitle streams
-	const subtitleInfoJson = await exec([
-		"ffprobe",
-		"-v",
-		"error",
-		"-select_streams",
-		"s",
-		"-show_entries",
-		"stream=index,codec_name:stream_tags=language,title:stream_disposition=forced,default,hearing_impaired",
-		"-of",
-		"json",
-		inputPath,
-	]);
-	const subtitleData = JSON.parse(subtitleInfoJson);
-	const subtitleStreams: SubtitleStreamInfo[] = (subtitleData.streams || []).map((s: any) => ({
-		index: s.index,
-		codec: s.codec_name || "unknown",
-		language: s.tags?.language || undefined,
-		title: s.tags?.title || undefined,
-		isForced: s.disposition?.forced === 1,
-		isDefault: s.disposition?.default === 1,
-		isHearingImpaired: s.disposition?.hearing_impaired === 1,
-	}));
-
-	// Probe original language flags
-	let videoOriginalFlag = false;
-	const sourceExt = (inputPath.split(".").pop() || "").toLowerCase();
-	if (sourceExt === "mkv" || sourceExt === "mks") {
-		try {
-			const mkvIdJson = await exec(["mkvmerge", "-J", inputPath]);
-			const mkvId = JSON.parse(mkvIdJson);
-			const originalFlags = new Map<number, boolean>();
-			for (const track of mkvId.tracks || []) {
-				originalFlags.set(track.id as number, track.properties?.original_flag === true);
-			}
-			videoOriginalFlag = originalFlags.get(best.index) ?? false;
-			for (const stream of audioStreams) {
-				stream.isOriginal = originalFlags.get(stream.index) ?? false;
-			}
-			for (const stream of subtitleStreams) {
-				stream.isOriginal = originalFlags.get(stream.index) ?? false;
-			}
-		} catch {}
+	// Audio
+	const delayMsByIndex = new Map<number, number>();
+	for (const t of miTracks) {
+		if (t["@type"] === "Audio") {
+			const sec = parseFloat(t.Delay ?? "");
+			delayMsByIndex.set(Number(t.StreamOrder), Number.isFinite(sec) ? Math.round(sec * 1000) : 0);
+		}
 	}
+
+	const audioStreams: AudioStreamInfo[] = allStreams
+		.filter((s) => s.codec_type === "audio")
+		.map((s) => ({
+			index: s.index,
+			channels: s.channels || 0,
+			channelLayout: s.channel_layout || "",
+			language: s.tags?.language || undefined,
+			title: s.tags?.title || undefined,
+			codec: s.codec_name || undefined,
+			bitrate: s.bit_rate ? parseInt(s.bit_rate) : undefined,
+			delayMs: delayMsByIndex.get(s.index) ?? 0,
+			isOriginal: s.disposition?.original === 1,
+		}));
+
+	// Subtitles
+	const subtitleStreams: SubtitleStreamInfo[] = allStreams
+		.filter((s) => s.codec_type === "subtitle")
+		.map((s) => ({
+			index: s.index,
+			codec: s.codec_name || "unknown",
+			language: s.tags?.language || undefined,
+			title: s.tags?.title || undefined,
+			isForced: s.disposition?.forced === 1,
+			isDefault: s.disposition?.default === 1,
+			isHearingImpaired: s.disposition?.hearing_impaired === 1,
+			isOriginal: s.disposition?.original === 1,
+		}));
 
 	const firstAudio = audioStreams[0];
 	const audioLayout = firstAudio ? normalizeLayout(firstAudio.channelLayout) : "stereo";
 	const audioChannels = firstAudio ? firstAudio.channels : 2;
 
-	// HDR checks
-	const hdrFormat = await mediainfo(inputPath, "Video;%HDR_Format%");
+	// Color / HDR
+	const hdrFormat = miVideo.HDR_Format || "";
+	const transferCharacteristics = miVideo.transfer_characteristics || "";
+	const colorPrimaries = miVideo.colour_primaries || "";
+	const matrixCoefficients = miVideo.matrix_coefficients || "";
+	const colorRange = miVideo.colour_range || "";
+	const masteringDisplay = miVideo.MasteringDisplay_ColorPrimaries || "";
+	const masteringLuminance = miVideo.MasteringDisplay_Luminance || "";
+
 	const hasHDR10Plus = /HDR10\+/i.test(hdrFormat);
 	const hasDolbyVision = /Dolby Vision/i.test(hdrFormat);
+	const maxCLL = (miVideo.MaxCLL || "").split(" ")[0] || "";
+	const maxFALL = (miVideo.MaxFALL || "").split(" ")[0] || "";
 
-	const transferCharacteristics = await mediainfo(inputPath, "Video;%transfer_characteristics%");
-	const colorPrimaries = await mediainfo(inputPath, "Video;%colour_primaries%");
-	const matrixCoefficients = await mediainfo(inputPath, "Video;%matrix_coefficients%");
-	const colorRange = await mediainfo(inputPath, "Video;%colour_range%");
-	const maxCLL = await mediainfo(inputPath, "Video;%MaxCLL%").then((s) => s.split(" ")[0] || "");
-	const maxFALL = await mediainfo(inputPath, "Video;%MaxFALL%").then((s) => s.split(" ")[0] || "");
-	const masteringDisplay = await mediainfo(inputPath, "Video;%MasteringDisplay_ColorPrimaries%");
-	const masteringLuminance = await mediainfo(inputPath, "Video;%MasteringDisplay_Luminance%");
-
+	// Prior Rabbit Encoder tags
 	const priorTags = await readMkvTags(inputPath, tmpdir());
 
 	return {
 		filename,
 		width: best.width,
 		height: best.height,
-		videoCodec: best.codec,
+		videoCodec: best.codec_name || "",
 		displayAspectRatio,
 		duration,
 		audioLayout,
@@ -175,14 +139,14 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		isHDR: transferCharacteristics === "PQ",
 		hasHDR10Plus,
 		hasDolbyVision,
-		transferCharacteristics,
-		colorPrimaries,
-		matrixCoefficients,
-		colorRange,
+		transferCharacteristics: transferCharacteristics || "",
+		colorPrimaries: colorPrimaries || "",
+		matrixCoefficients: matrixCoefficients || "",
+		colorRange: colorRange || "",
 		maxCLL,
 		maxFALL,
-		masteringDisplay,
-		masteringLuminance,
+		masteringDisplay: masteringDisplay || "",
+		masteringLuminance: masteringLuminance || "",
 		videoStreamIndex: best.index,
 		videoFrameRate,
 		videoStreamFps,
