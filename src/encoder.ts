@@ -678,6 +678,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				flacFile: string;
 				opusFile: string;
 				bitrate: number;
+				copy: boolean;
 			}
 
 			const audioJobs: AudioEncodeJob[] = [];
@@ -696,6 +697,44 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				const delayMs = stream.delayMs;
 				const delaySec = delayMs / 1000;
 
+				const isOpusSource = (stream.codec || "").toLowerCase() === "opus";
+				const sourceKbps = stream.bitrate ? stream.bitrate / 1000 : undefined;
+				const canCopy = isOpusSource && delayMs === 0 && sourceKbps !== undefined && sourceKbps <= bitrate;
+
+				if (canCopy) {
+					const copyArgs = [
+						"ffmpeg",
+						"-y",
+						"-i",
+						job.inputPath,
+						"-map",
+						`0:${stream.index}`,
+						"-vn",
+						"-sn",
+						"-dn",
+						"-map_metadata",
+						"-1",
+						"-map_chapters",
+						"-1",
+						"-c:a",
+						"copy",
+						opusFile,
+					];
+					const copyRes = await run(copyArgs, { signal });
+					if (copyRes.code !== 0) {
+						throw new Error(`FFmpeg audio copy failed for stream ${i}: ${copyRes.stderr || copyRes.stdout}`);
+					}
+
+					audioJobs.push({ index: i, flacFile, opusFile, bitrate, copy: true });
+					Logger.info(`[audio] Stream ${i} already Opus @ ~${Math.round(sourceKbps)}kbps (<= ${bitrate}kbps target) — copying without re-encode`);
+
+					setStep(S_AUDIO, {
+						progress: 5 + Math.round(((i + 1) / audioStreams.length) * 35),
+						detail: `Copying audio (${i + 1}/${audioStreams.length})`,
+					});
+					continue;
+				}
+
 				const ffArgs = ["ffmpeg", "-y", "-i", job.inputPath, "-map", `0:${stream.index}`, "-vn", "-sn", "-dn", "-c:a", "flac"];
 
 				if (delaySec < 0) {
@@ -711,7 +750,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					throw new Error(`FFmpeg audio extraction failed for stream ${i}: ${ffRes.stderr || ffRes.stdout}`);
 				}
 
-				audioJobs.push({ index: i, flacFile, opusFile, bitrate });
+				audioJobs.push({ index: i, flacFile, opusFile, bitrate, copy: false });
 
 				setStep(S_AUDIO, {
 					progress: 5 + Math.round(((i + 1) / audioStreams.length) * 35),
@@ -735,6 +774,15 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 						checkCancelled();
 
 						const aj = audioJobs[jobIdx]!;
+
+						if (aj.copy) {
+							completed++;
+							setStep(S_AUDIO, {
+								progress: 40 + Math.round((completed / audioJobs.length) * 60),
+								detail: `Encoding audio (${completed}/${audioJobs.length})`,
+							});
+							continue;
+						}
 
 						const opusArgs = ["opusenc", "--bitrate", String(aj.bitrate)];
 						if (job.settings.noPhaseInv) {

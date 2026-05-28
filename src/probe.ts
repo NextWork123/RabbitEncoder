@@ -69,10 +69,16 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 
 	// Audio
 	const delayMsByIndex = new Map<number, number>();
+	const bitrateByIndex = new Map<number, number>();
 	for (const t of miTracks) {
 		if (t["@type"] === "Audio") {
+			const order = Number(t.StreamOrder);
+
 			const sec = parseFloat(t.Delay ?? "");
-			delayMsByIndex.set(Number(t.StreamOrder), Number.isFinite(sec) ? Math.round(sec * 1000) : 0);
+			delayMsByIndex.set(order, Number.isFinite(sec) ? Math.round(sec * 1000) : 0);
+
+			const br = parseInt(t.BitRate ?? "", 10);
+			if (Number.isFinite(br) && br > 0) bitrateByIndex.set(order, br);
 		}
 	}
 
@@ -85,7 +91,7 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 			language: s.tags?.language || undefined,
 			title: s.tags?.title || undefined,
 			codec: s.codec_name || undefined,
-			bitrate: s.bit_rate ? parseInt(s.bit_rate) : undefined,
+			bitrate: s.bit_rate ? parseInt(s.bit_rate) : bitrateByIndex.get(s.index),
 			delayMs: delayMsByIndex.get(s.index) ?? 0,
 			isOriginal: s.disposition?.original === 1,
 		}));
