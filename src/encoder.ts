@@ -26,6 +26,7 @@ import { applyColorMetadata, svtColorParamsFromProbe } from "./color-metadata";
 import { combineCumulativeSettings, encodeSettingsCode } from "./settings-code";
 import { decodePriorSettings } from "./mkv-tags";
 import { cpus } from "os";
+import { getEncoder } from "./encoders";
 
 export { CancelledError } from "./process";
 
@@ -80,6 +81,17 @@ function cleanupAssociatedFiles(videoPath: string): void {
 		}
 	} catch {}
 }
+
+const stripAnsiAndControls = (s: string) =>
+	s
+		// CSI sequences: ESC [ ... command
+		.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+		// OSC sequences: ESC ] ... BEL or ST
+		.replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, "")
+		// Other ESC sequences
+		.replace(/\x1B[@-_][0-?]*[ -/]*[@-~]/g, "")
+		// Remaining non-printing controls except \r and \n
+		.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
 
 function fmtFramesWithFps(current: number, total: number, startedAt: number | undefined, estVideoSize?: string, estTotalSize?: string): string {
 	const base = fmtFrames(current, total);
@@ -402,6 +414,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 			const ivfFile = join(tempDir, "source_video.ivf");
 			const inProgressIvf = join(tempDir, "abe_temp", "source_video.ivf");
+			const enc = getEncoder(job.settings.encoder);
 
 			const estimatedAudioStreams = (probe.audioStreams || []).filter((s) => !s.title || !/compatibility/i.test(s.title));
 			const estimatedAudioBytes = Math.round(
@@ -414,15 +427,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					probe.duration,
 			);
 
-			if (job.settings.skipBoosting) {
-				// Skip boosting: mark ABE-only steps as done (skipped)
-				for (const si of [S_FAST, S_METRICS, S_SCENES, S_ZONES]) {
-					setStep(si, { status: "done", progress: 100, detail: "Skipped" });
-				}
-			}
-
-			// Auto-Boost-Essential (with -nb when skipBoosting to run final pass only)
-			{
+			if (enc.usesAutoBoost) {
 				const colorParams = svtColorParamsFromProbe(probe);
 				const abeArgs = [
 					"python3",
@@ -614,6 +619,164 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					const detail = abeLastError || abeStderr.trim().slice(-500) || exitSignal || "No error details available";
 					throw new Error(`Auto-Boost-Essential failed (exit ${abeCode}): ${detail}`);
 				}
+
+				if (job.settings.skipBoosting) {
+					// Skip boosting: mark ABE-only steps as done (skipped)
+					for (const si of [S_FAST, S_METRICS, S_SCENES, S_ZONES]) {
+						setStep(si, { status: "done", progress: 100, detail: "Skipped" });
+					}
+				}
+			} else {
+				// DIRECT ENCODE
+				// ABE-only steps don't apply (mark them skipped)
+				for (const si of [S_FAST, S_METRICS, S_SCENES, S_ZONES]) {
+					setStep(si, { status: "done", progress: 100, detail: `Skipped — ${enc.label}` });
+				}
+
+				setStep(S_FINAL, { status: "active", progress: 0 });
+
+				const colorParams = svtColorParamsFromProbe(probe); // string of SVT --flags
+				const totalFrames = Math.max(1, Math.round(probe.duration * probe.videoStreamFps));
+
+				const customParams = (job.settings.customEncoderParams || "").trim();
+				const customList = customParams.length > 0 ? customParams.split(/\s+/) : [];
+
+				// ffmpeg decodes the prepared video to 10-bit y4m on stdout…
+				const ffArgs = ["ffmpeg", "-nostdin", "-i", preparedVideo, "-f", "yuv4mpegpipe", "-strict", "-1", "-pix_fmt", "yuv420p10le", "-"];
+				const encArgs = [
+					enc.binary,
+					"-i",
+					"-",
+					"--progress",
+					"2",
+					...colorParams.split(/\s+/).filter(Boolean),
+					"--crf",
+					String(job.settings.manualCrf),
+					"--preset",
+					String(job.settings.manualPreset),
+					...customList,
+					"-b",
+					inProgressIvf,
+				];
+
+				mkdirSync(join(tempDir, "abe_temp"), { recursive: true });
+
+				const ffProc = Bun.spawn(ffArgs, { stdout: "pipe", stderr: "ignore", cwd: tempDir });
+				const encProc = Bun.spawn(encArgs, {
+					stdin: ffProc.stdout,
+					stdout: "ignore",
+					stderr: "pipe",
+					cwd: tempDir,
+				});
+
+				const onAbort = () => {
+					for (const p of [ffProc, encProc]) {
+						try {
+							p.kill("SIGTERM");
+						} catch {}
+					}
+					setTimeout(() => {
+						for (const p of [ffProc, encProc]) {
+							try {
+								p.kill("SIGKILL");
+							} catch {}
+						}
+					}, 3000);
+				};
+				signal?.addEventListener("abort", onAbort, { once: true });
+
+				// Parse SVT stderr/stdout progress for the current frame count.
+				let encStderr = "";
+
+				const stderrTask = (async () => {
+					if (!encProc.stderr) return;
+
+					const reader = encProc.stderr.getReader();
+					const decoder = new TextDecoder();
+					let buffer = "";
+
+					const handleProgressLine = (rawLine: string) => {
+						const line = stripAnsiAndControls(rawLine).trim();
+
+						// Supports:
+						//   Encoding frame   123
+						//   Encoding:   123 Frames @ 8.67 fps | ...
+						const m = line.match(/Encoding frame\s+(\d+)/i) || line.match(/Encoding:\s*(\d+)\s+Frames?\b/i);
+
+						if (!m) return;
+
+						const current = parseInt(m[1]!, 10);
+						if (!Number.isFinite(current) || current <= 0) return;
+
+						let estVideo: string | undefined;
+						let estTotal: string | undefined;
+
+						const frac = current / totalFrames;
+
+						if (frac >= 0.02) {
+							try {
+								const curBytes = statSync(inProgressIvf).size;
+								const estVideoBytes = curBytes / frac;
+								const estTotalBytes = estVideoBytes + estimatedAudioBytes + 2 * 1024 * 1024;
+
+								estVideo = humanSize(estVideoBytes);
+								estTotal = humanSize(estTotalBytes);
+
+								updateJob({
+									estimatedVideoSize: estVideo,
+									estimatedFinalSize: estTotal,
+								});
+							} catch {}
+						}
+
+						setStep(S_FINAL, {
+							progress: pct2(current, totalFrames),
+							detail: fmtFramesWithFps(current, totalFrames, steps[S_FINAL]!.startedAt, estVideo, estTotal),
+						});
+					};
+
+					while (true) {
+						let chunk;
+
+						try {
+							chunk = await reader.read();
+						} catch {
+							break;
+						}
+
+						if (chunk.done) break;
+
+						const text = decoder.decode(chunk.value, { stream: true });
+						encStderr += text;
+						buffer += text;
+
+						const lines = buffer.split(/\r|\n/);
+						buffer = lines.pop() || "";
+
+						for (const line of lines) {
+							handleProgressLine(line);
+						}
+					}
+
+					if (buffer.trim()) {
+						handleProgressLine(buffer);
+					}
+				})();
+
+				const encCode = await encProc.exited;
+				await ffProc.exited;
+				await stderrTask;
+				signal?.removeEventListener("abort", onAbort);
+				checkCancelled();
+
+				if (encCode !== 0) {
+					const detail = encStderr.trim().slice(-500) || describeExitCode(encCode);
+					throw new Error(`${enc.label} failed (exit ${encCode}): ${detail}`);
+				}
+
+				setStep(S_FINAL, { status: "done", progress: 100 });
+
+				if (existsSync(inProgressIvf)) renameSync(inProgressIvf, ivfFile);
 			}
 
 			if (!existsSync(ivfFile)) {

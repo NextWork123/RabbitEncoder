@@ -113,12 +113,36 @@
 							<div class="radio-group" id="default-subtitle-processing"></div>
 						</div>
 						<div class="setting-group">
-							<label>Video Quality</label>
-							<div class="radio-group" id="default-quality"></div>
+							<label>Encoder</label>
+							<div class="radio-group" id="default-encoder"></div>
+							<div class="setting-help" id="default-encoder-help"></div>
 						</div>
-						<div class="setting-group">
-							<label>Encoder Speed</label>
-							<div class="radio-group" id="default-speed"></div>
+						<div id="default-abe-controls">
+							<div class="setting-group">
+								<label>Video Quality</label>
+								<div class="radio-group" id="default-quality"></div>
+							</div>
+							<div class="setting-group">
+								<label>Encoder Speed</label>
+								<div class="radio-group" id="default-speed"></div>
+							</div>
+							<div class="setting-group">
+								<label>Boosting</label>
+								<div class="toggle-group" id="default-skip-boosting"></div>
+							</div>
+						</div>
+						<div id="default-manual-controls" style="display: none">
+							<div class="setting-group">
+								<label>CRF <span id="default-crf-val"></span></label>
+								<div class="slider-row">
+									<input type="range" id="default-crf-slider" min="0" max="63" step="1" />
+									<input type="number" id="default-crf-input" min="0" max="63" step="1" class="num-input" />
+								</div>
+							</div>
+							<div class="setting-group">
+								<label>Preset <span id="default-preset-val"></span></label>
+								<input type="range" id="default-preset-slider" min="0" max="13" step="1" />
+							</div>
 						</div>
 						<div class="setting-group">
 							<label>Denoise</label>
@@ -131,10 +155,6 @@
 						<div class="setting-group">
 							<label>Resolution</label>
 							<div class="toggle-group" id="default-downscale"></div>
-						</div>
-						<div class="setting-group">
-							<label>Boosting</label>
-							<div class="toggle-group" id="default-skip-boosting"></div>
 						</div>
 						<div class="setting-group">
 							<label>Subtitles</label>
@@ -188,12 +208,36 @@
 							<div class="radio-group" id="job-subtitle-processing"></div>
 						</div>
 						<div class="setting-group">
-							<label>Video Quality</label>
-							<div class="radio-group" id="job-quality"></div>
+							<label>Encoder</label>
+							<div class="radio-group" id="job-encoder"></div>
+							<div class="setting-help" id="job-encoder-help"></div>
 						</div>
-						<div class="setting-group">
-							<label>Encoder Speed</label>
-							<div class="radio-group" id="job-speed"></div>
+						<div id="job-abe-controls">
+							<div class="setting-group">
+								<label>Video Quality</label>
+								<div class="radio-group" id="job-quality"></div>
+							</div>
+							<div class="setting-group">
+								<label>Encoder Speed</label>
+								<div class="radio-group" id="job-speed"></div>
+							</div>
+							<div class="setting-group">
+								<label>Boosting</label>
+								<div class="toggle-group" id="job-skip-boosting"></div>
+							</div>
+						</div>
+						<div id="job-manual-controls" style="display: none">
+							<div class="setting-group">
+								<label>CRF <span id="job-crf-val"></span></label>
+								<div class="slider-row">
+									<input type="range" id="job-crf-slider" min="0" max="63" step="1" />
+									<input type="number" id="job-crf-input" min="0" max="63" step="1" class="num-input" />
+								</div>
+							</div>
+							<div class="setting-group">
+								<label>Preset <span id="job-preset-val"></span></label>
+								<input type="range" id="job-preset-slider" min="0" max="13" step="1" />
+							</div>
 						</div>
 						<div class="setting-group">
 							<label>Denoise</label>
@@ -206,10 +250,6 @@
 						<div class="setting-group">
 							<label>Resolution</label>
 							<div class="toggle-group" id="job-downscale"></div>
-						</div>
-						<div class="setting-group">
-							<label>Boosting</label>
-							<div class="toggle-group" id="job-skip-boosting"></div>
 						</div>
 						<div class="setting-group">
 							<label>Subtitles</label>
@@ -248,6 +288,12 @@
 						<button class="btn-close" id="close-advanced-modal-btn">&times;</button>
 					</div>
 					<div class="modal-body">
+						<div class="setting-group">
+							<label>Custom encoder parameters</label>
+							<textarea id="advanced-custom-encoder-params" rows="3" placeholder="--film-grain 8 --tune 0"></textarea>
+							<div class="setting-help">Raw CLI args appended verbatim to the encoder command.</div>
+						</div>
+
 						<!-- Denoise backend (cpu / auto / vulkan / opencl) -->
 						<div class="setting-group">
 							<label>Denoise Backend</label>

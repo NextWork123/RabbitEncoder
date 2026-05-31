@@ -18,6 +18,7 @@ import { normalizeNlmeansLevelParams, normalizeGradfunLevelParams } from "./filt
 import { runPreviewEncode, deletePreviewDir, previewSettingsFingerprint, DEFAULT_PREVIEW_OPTIONS } from "./preview-encoder";
 import { normalizeVsFilterChain } from "./vs-filters";
 import { getDefaultJobSettings } from "./config";
+import { isValidEncoder } from "./encoders";
 
 const jobs = new Map<string, Job>();
 let paused = false;
@@ -150,6 +151,19 @@ export function getAppConfig(): AppConfig {
 }
 
 export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
+	if (isValidEncoder(settings.encoder)) {
+		appConfig.defaults.encoder = settings.encoder;
+	}
+	if (typeof settings.manualCrf === "number" && Number.isFinite(settings.manualCrf)) {
+		appConfig.defaults.manualCrf = Math.min(63, Math.max(0, settings.manualCrf));
+	}
+	if (typeof settings.manualPreset === "number" && Number.isFinite(settings.manualPreset)) {
+		appConfig.defaults.manualPreset = Math.min(13, Math.max(0, Math.round(settings.manualPreset)));
+	}
+	if (typeof settings.customEncoderParams === "string") {
+		appConfig.defaults.customEncoderParams = settings.customEncoderParams.slice(0, 2000);
+	}
+
 	if (typeof settings.videoEncode === "string" && VALID_VIDEO_ENCODE.includes(settings.videoEncode)) {
 		appConfig.defaults.videoEncode = settings.videoEncode;
 	}
@@ -378,6 +392,19 @@ export function scanLibraryPath(targetPath: string): { added: number; skipped: n
 export function updateJobSettings(id: string, settings: Partial<JobSettings>): Job | null {
 	const job = jobs.get(id);
 	if (!job || job.status !== "queued") return null;
+
+	if (isValidEncoder(settings.encoder)) {
+		job.settings.encoder = settings.encoder;
+	}
+	if (typeof settings.manualCrf === "number" && Number.isFinite(settings.manualCrf)) {
+		job.settings.manualCrf = Math.min(63, Math.max(0, settings.manualCrf));
+	}
+	if (typeof settings.manualPreset === "number" && Number.isFinite(settings.manualPreset)) {
+		job.settings.manualPreset = Math.min(13, Math.max(0, Math.round(settings.manualPreset)));
+	}
+	if (typeof settings.customEncoderParams === "string") {
+		job.settings.customEncoderParams = settings.customEncoderParams.slice(0, 2000);
+	}
 
 	if (typeof settings.videoEncode === "string" && VALID_VIDEO_ENCODE.includes(settings.videoEncode)) {
 		job.settings.videoEncode = settings.videoEncode;
