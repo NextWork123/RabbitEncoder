@@ -9,3 +9,4 @@ vapoursynth-user/
 .gitignore
 README.md
 ffmpeg-dist/
+svt-av1-hdr-dist/

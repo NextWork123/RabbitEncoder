@@ -1,0 +1,13 @@
+services:
+  svt-av1-hdr-builder:
+    build:
+      context: .
+      args:
+        SVTAV1HDR_REPO: https://github.com/juliobbv-p/svt-av1-hdr.git
+        SVTAV1HDR_REF: v4.1.0
+    container_name: rabbit-svt-av1-hdr-builder
+    volumes:
+      - ./svt-av1-hdr-dist:/out
+    environment:
+      DEBIAN_FRONTEND: noninteractive
+    tty: true
