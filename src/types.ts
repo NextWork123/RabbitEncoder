@@ -104,6 +104,8 @@ export interface JobSettings {
 	skipBoosting: boolean;
 	noPhaseInv: boolean;
 	dedupeSubtitles: boolean;
+	keepBestAudioChannelsOnly: boolean;
+	removeCommentaryAudio: boolean;
 	audioLanguages: string[];
 	subtitleLanguages: string[];
 	/**

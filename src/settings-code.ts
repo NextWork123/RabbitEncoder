@@ -53,6 +53,8 @@ const BASELINE: JobSettings = {
 	skipBoosting: false,
 	noPhaseInv: false,
 	dedupeSubtitles: false,
+	keepBestAudioChannelsOnly: false,
+	removeCommentaryAudio: false,
 	audioLanguages: [],
 	subtitleLanguages: [],
 	audioBitrates: {
@@ -191,6 +193,8 @@ export function encodeSettingsCode(s: JobSettings): string {
 	if (s.skipBoosting !== BASELINE.skipBoosting) core.put("sb", s.skipBoosting);
 	if (s.noPhaseInv !== BASELINE.noPhaseInv) core.put("np", s.noPhaseInv);
 	if (s.dedupeSubtitles !== BASELINE.dedupeSubtitles) core.put("dd", s.dedupeSubtitles);
+	if (s.keepBestAudioChannelsOnly !== BASELINE.keepBestAudioChannelsOnly) core.put("kc", s.keepBestAudioChannelsOnly);
+	if (s.removeCommentaryAudio !== BASELINE.removeCommentaryAudio) core.put("rc", s.removeCommentaryAudio);
 	if (!core.empty) sections.push(core.toString());
 
 	// denoise
@@ -400,6 +404,8 @@ function applyCore(out: JobSettings, kv: Record<string, string>): void {
 	if (kv.sb !== undefined) out.skipBoosting = kv.sb === "1";
 	if (kv.np !== undefined) out.noPhaseInv = kv.np === "1";
 	if (kv.dd !== undefined) out.dedupeSubtitles = kv.dd === "1";
+	if (kv.kc !== undefined) out.keepBestAudioChannelsOnly = kv.kc === "1";
+	if (kv.rc !== undefined) out.removeCommentaryAudio = kv.rc === "1";
 }
 
 function applyDenoise(out: JobSettings, kv: Record<string, string>): void {

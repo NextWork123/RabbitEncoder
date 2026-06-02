@@ -180,6 +180,8 @@ app.get("/api/jobs/:id/audio-preview", async (c) => {
 	try {
 		const result = previewAudio(audioStreams, job.settings.audioBitrates, {
 			languages: job.settings.audioLanguages || [],
+			collapseChannels: job.settings.keepBestAudioChannelsOnly,
+			removeCommentary: job.settings.removeCommentaryAudio,
 		});
 		return c.json(result);
 	} catch (err: any) {

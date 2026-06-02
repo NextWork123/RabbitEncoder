@@ -2428,6 +2428,16 @@ async function openSettings() {
 		tempDefaults.dedupeSubtitles || false,
 		(v) => (tempDefaults.dedupeSubtitles = v),
 	);
+	renderKeepBestAudioChannelsToggle(
+		document.getElementById("default-keep-best-audio-channels"),
+		tempDefaults.keepBestAudioChannelsOnly || false,
+		(v) => (tempDefaults.keepBestAudioChannelsOnly = v),
+	);
+	renderRemoveCommentaryAudioToggle(
+		document.getElementById("default-remove-commentary-audio"),
+		tempDefaults.removeCommentaryAudio || false,
+		(v) => (tempDefaults.removeCommentaryAudio = v),
+	);
 	renderAudioLanguagesInput(document.getElementById("default-audio-languages"), tempDefaults.audioLanguages || [], (v) => (tempDefaults.audioLanguages = v));
 	renderLanguageFilterInput(
 		document.getElementById("default-subtitle-languages"),
@@ -2992,6 +3002,16 @@ async function openJobSettings(jobId) {
 		tempSettings.dedupeSubtitles || false,
 		(v) => (tempSettings.dedupeSubtitles = v),
 	);
+	renderKeepBestAudioChannelsToggle(
+		document.getElementById("job-keep-best-audio-channels"),
+		tempSettings.keepBestAudioChannelsOnly || false,
+		(v) => (tempSettings.keepBestAudioChannelsOnly = v),
+	);
+	renderRemoveCommentaryAudioToggle(
+		document.getElementById("job-remove-commentary-audio"),
+		tempSettings.removeCommentaryAudio || false,
+		(v) => (tempSettings.removeCommentaryAudio = v),
+	);
 	renderAudioLanguagesInput(document.getElementById("job-audio-languages"), tempSettings.audioLanguages || [], (v) => (tempSettings.audioLanguages = v));
 	renderLanguageFilterInput(
 		document.getElementById("job-subtitle-languages"),
@@ -3399,6 +3419,42 @@ function renderDedupeSubtitlesToggle(container, checked, onChange) {
 
 	const span = document.createElement("span");
 	span.textContent = "\u00A0Keep one subtitle per language and type";
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}
+
+function renderKeepBestAudioChannelsToggle(container, checked, onChange) {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Keep only highest channel layout per language";
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}
+
+function renderRemoveCommentaryAudioToggle(container, checked, onChange) {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Remove commentary audio tracks";
 
 	label.appendChild(input);
 	label.appendChild(span);

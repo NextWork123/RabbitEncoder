@@ -35,6 +35,8 @@ const DEFAULT_JOB_SETTINGS: JobSettings = {
 	skipBoosting: false,
 	noPhaseInv: false,
 	dedupeSubtitles: false,
+	keepBestAudioChannelsOnly: false,
+	removeCommentaryAudio: false,
 	audioLanguages: [],
 	subtitleLanguages: [],
 	audioBitrates: DEFAULT_BITRATES,

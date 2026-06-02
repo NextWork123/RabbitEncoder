@@ -16,6 +16,7 @@ import {
 	deduplicateSubtitleStreams,
 	filterStreamsByLanguage,
 	sanitizeLanguageTag,
+	filterOutCommentaryAudio,
 } from "./tracks";
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
@@ -814,7 +815,12 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			Logger.info(`[audio] Filtered ${skippedLang} track(s) not in [${allowedAudioLangs.join(", ")}]`);
 		}
 
-		const audioStreams = deduplicateAudioStreams(sortAudioStreams(langFiltered));
+		const commentaryFiltered = job.settings.removeCommentaryAudio ? filterOutCommentaryAudio(langFiltered) : langFiltered;
+		if (job.settings.removeCommentaryAudio && commentaryFiltered.length !== langFiltered.length) {
+			Logger.info(`[audio] Removed ${langFiltered.length - commentaryFiltered.length} commentary track(s)`);
+		}
+
+		const audioStreams = deduplicateAudioStreams(sortAudioStreams(commentaryFiltered), { collapseChannels: job.settings.keepBestAudioChannelsOnly });
 
 		if (langFiltered.length !== audioStreams.length) {
 			Logger.info(`[audio] Deduplicated ${langFiltered.length - audioStreams.length} redundant track(s)`);
