@@ -133,47 +133,51 @@ const LOSSLESS_CODECS = new Set(["flac", "truehd", "mlp", "dts", "pcm_s16le", "p
 /**
  * Deduplicate audio streams: keep only the best source per
  * language + channel count + track type combination.
- * Prefer lossless codecs, then highest bitrate.
+ * Prefer uncensored, then lossless codecs, then highest bitrate.
+ *
+ * When `collapseChannels` is set, channel count is dropped from the key, so
+ * each language+type collapses to a single track — picking the highest
+ * channel layout first (e.g. EN 2.0/5.1/7.1 -> 7.1 only). Uncensored still
+ * wins outright, matching the non-collapsed behavior.
  */
-export function deduplicateAudioStreams(streams: AudioStreamInfo[]): AudioStreamInfo[] {
+export function deduplicateAudioStreams(streams: AudioStreamInfo[], options: { collapseChannels?: boolean } = {}): AudioStreamInfo[] {
+	const { collapseChannels = false } = options;
 	const bestMap = new Map<string, AudioStreamInfo>();
 
-	for (const stream of streams) {
-		const lang = (stream.language || "und").toLowerCase();
-		const type = detectAudioTrackType(stream);
-		const key = `${lang}:${stream.channels}:${type}`;
-
-		const existing = bestMap.get(key);
-		if (!existing) {
-			bestMap.set(key, stream);
-			continue;
-		}
-
-		const isUncensored = uncensoredPriority(stream) === 0;
-		const existingIsUncensored = uncensoredPriority(existing) === 0;
-
-		// Uncensored wins outright (even at a lower bitrate or lossy codec)
-		if (isUncensored !== existingIsUncensored) {
-			if (isUncensored) bestMap.set(key, stream);
-			continue;
-		}
-
-		const isLossless = LOSSLESS_CODECS.has(stream.codec?.toLowerCase() || "");
-		const existingIsLossless = LOSSLESS_CODECS.has(existing.codec?.toLowerCase() || "");
-
-		if (isLossless && !existingIsLossless) {
-			bestMap.set(key, stream);
-		} else if (isLossless === existingIsLossless && (stream.bitrate || 0) > (existing.bitrate || 0)) {
-			bestMap.set(key, stream);
-		}
-	}
-
-	return streams.filter((s) => {
+	const keyOf = (s: AudioStreamInfo): string => {
 		const lang = (s.language || "und").toLowerCase();
 		const type = detectAudioTrackType(s);
-		const key = `${lang}:${s.channels}:${type}`;
-		return bestMap.get(key) === s;
-	});
+		return collapseChannels ? `${lang}:${type}` : `${lang}:${s.channels}:${type}`;
+	};
+
+	const isBetter = (candidate: AudioStreamInfo, existing: AudioStreamInfo): boolean => {
+		const cUnc = uncensoredPriority(candidate) === 0;
+		const eUnc = uncensoredPriority(existing) === 0;
+		if (cUnc !== eUnc) return cUnc; // uncensored wins outright
+
+		if (collapseChannels && (candidate.channels || 0) !== (existing.channels || 0)) {
+			return (candidate.channels || 0) > (existing.channels || 0);
+		}
+
+		const cLossless = LOSSLESS_CODECS.has(candidate.codec?.toLowerCase() || "");
+		const eLossless = LOSSLESS_CODECS.has(existing.codec?.toLowerCase() || "");
+		if (cLossless !== eLossless) return cLossless;
+
+		return (candidate.bitrate || 0) > (existing.bitrate || 0);
+	};
+
+	for (const stream of streams) {
+		const key = keyOf(stream);
+		const existing = bestMap.get(key);
+		if (!existing || isBetter(stream, existing)) bestMap.set(key, stream);
+	}
+
+	return streams.filter((s) => bestMap.get(keyOf(s)) === s);
+}
+
+/** Drop audio tracks classified as commentary. */
+export function filterOutCommentaryAudio(streams: AudioStreamInfo[]): AudioStreamInfo[] {
+	return streams.filter((s) => detectAudioTrackType(s) !== "commentary");
 }
 
 export type SubtitleTrackType = "full" | "forced" | "sdh" | "commentary" | "honorifics" | "storyboard";
@@ -1428,7 +1432,11 @@ export async function previewSubtitles(
 	return { source, output };
 }
 
-export function previewAudio(sourceStreams: AudioStreamInfo[], bitrates: AudioChannelBitrates, options: { languages?: string[] } = {}): AudioPreviewResult {
+export function previewAudio(
+	sourceStreams: AudioStreamInfo[],
+	bitrates: AudioChannelBitrates,
+	options: { languages?: string[]; collapseChannels?: boolean; removeCommentary?: boolean } = {},
+): AudioPreviewResult {
 	const source: AudioPreviewTrack[] = sourceStreams.map((s) => ({
 		index: s.index,
 		codec: s.codec || "unknown",
@@ -1445,7 +1453,8 @@ export function previewAudio(sourceStreams: AudioStreamInfo[], bitrates: AudioCh
 
 	const compatFiltered = sourceStreams.filter((s) => !s.title || !/compatibility/i.test(s.title));
 	const langFiltered = filterStreamsByLanguage(compatFiltered, options.languages || [], "audio");
-	const finalStreams = deduplicateAudioStreams(sortAudioStreams(langFiltered));
+	const commentaryFiltered = options.removeCommentary ? filterOutCommentaryAudio(langFiltered) : langFiltered;
+	const finalStreams = deduplicateAudioStreams(sortAudioStreams(commentaryFiltered), { collapseChannels: options.collapseChannels });
 
 	const defaultAssigned = new Set<string>();
 

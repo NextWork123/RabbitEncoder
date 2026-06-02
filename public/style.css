@@ -685,6 +685,18 @@ code {
 	line-height: 1.2;
 }
 
+.num-input {
+	font-family: var(--font-mono);
+	background: var(--bg-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--text-0);
+	outline: none;
+	padding: 6px 10px;
+	transition: border-color 0.15s;
+	font-size: 0.82rem;
+}
+
 .bitrate-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
@@ -1793,6 +1805,19 @@ code {
 .auto-threshold-row input:focus {
 	outline: none;
 	border-color: var(--accent);
+}
+
+#advanced-custom-encoder-params {
+	font-family: var(--font-mono);
+	background: var(--bg-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--text-0);
+	outline: none;
+	width: 100%;
+	padding: 6px 8px;
+	transition: border-color 0.15s;
+	font-size: 0.82rem;
 }
 
 .nlmeans-params-grid {

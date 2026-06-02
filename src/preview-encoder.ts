@@ -8,6 +8,7 @@ import { buildPrepareFilterConfig } from "./filters";
 import { FFV1_ENCODE_ARGS, runAnalysisPass, runSegmentedAutoDenoiseGpu } from "./auto-denoise";
 import { formatVsProgressDetail, runVsPass, vsRegistry } from "./vs-filters";
 import { applyColorMetadata, svtColorParamsFromProbe } from "./color-metadata";
+import { getEncoder } from "./encoders";
 
 export interface PreviewEncodeOptions {
 	sampleCount: number;
@@ -421,105 +422,230 @@ async function encodeSample(
 		abeInput = filteredClip;
 	}
 
-	// 4. Run Auto-Boost-Essential on the filtered clip.
+	// 4. Encode the filtered clip.
 	checkCancelled();
-	onProgress(0.25, "Encoding (Auto-Boost-Essential)");
 
-	const colorParams = svtColorParamsFromProbe(probe);
-	const abeArgs = [
-		"python3",
-		"-u",
-		"/opt/Auto-Boost-Essential/Auto-Boost-Essential.py",
-		"-i",
-		abeInput,
-		"-t",
-		join(ctx.dir, "abe_temp"),
-		"--quality",
-		job.settings.quality,
-		"--final-speed",
-		job.settings.finalSpeed,
-		"--fast-params",
-		colorParams,
-		"--final-params",
-		colorParams,
-		"--json-stream",
-	];
-	if (job.settings.skipBoosting) abeArgs.push("-nb");
+	const enc = getEncoder(job.settings.encoder);
+	let ivfFile: string;
 
-	const abeProc = Bun.spawn(abeArgs, { stdout: "pipe", stderr: "pipe", cwd: ctx.dir });
+	if (enc.usesAutoBoost) {
+		onProgress(0.25, "Encoding (Auto-Boost-Essential)");
 
-	const onAbortAbe = () => {
-		try {
-			abeProc.kill("SIGTERM");
-		} catch {}
-		setTimeout(() => {
+		const colorParams = svtColorParamsFromProbe(probe);
+		const abeArgs = [
+			"python3",
+			"-u",
+			"/opt/Auto-Boost-Essential/Auto-Boost-Essential.py",
+			"-i",
+			abeInput,
+			"-t",
+			join(ctx.dir, "abe_temp"),
+			"--quality",
+			job.settings.quality,
+			"--final-speed",
+			job.settings.finalSpeed,
+			"--fast-params",
+			colorParams,
+			"--final-params",
+			colorParams,
+			"--json-stream",
+		];
+		if (job.settings.skipBoosting) abeArgs.push("-nb");
+
+		const abeProc = Bun.spawn(abeArgs, { stdout: "pipe", stderr: "pipe", cwd: ctx.dir });
+
+		const onAbortAbe = () => {
 			try {
-				abeProc.kill("SIGKILL");
+				abeProc.kill("SIGTERM");
 			} catch {}
-		}, 3000);
-	};
-	signal.addEventListener("abort", onAbortAbe, { once: true });
+			setTimeout(() => {
+				try {
+					abeProc.kill("SIGKILL");
+				} catch {}
+			}, 3000);
+		};
+		signal.addEventListener("abort", onAbortAbe, { once: true });
 
-	let abeStderr = "";
-	let abeLastError = "";
+		let abeStderr = "";
+		let abeLastError = "";
 
-	const stdoutTask = (async () => {
-		if (!abeProc.stdout) return;
+		const stdoutTask = (async () => {
+			if (!abeProc.stdout) return;
 
-		try {
-			const reader = abeProc.stdout.getReader();
+			try {
+				const reader = abeProc.stdout.getReader();
+				const decoder = new TextDecoder();
+				let buffer = "";
+				while (true) {
+					try {
+						const { done, value } = await reader.read();
+						if (done) break;
+						buffer += decoder.decode(value, { stream: true });
+						const lines = buffer.split("\n");
+						buffer = lines.pop() || "";
+						for (const line of lines) {
+							if (!line.trim()) continue;
+							try {
+								const evt = JSON.parse(line);
+								if (evt.event === "stage_complete" && typeof evt.stage === "number") {
+									const stagePct = Math.min(1, (evt.stage + 1) / 5);
+									onProgress(0.25 + 0.7 * stagePct, `Encoding — stage ${evt.stage + 1}/5 done`);
+								} else if (evt.event === "error" && typeof evt.message === "string") {
+									abeLastError = evt.message;
+								}
+							} catch {
+								// Non-JSON line, just ignore
+							}
+						}
+					} catch {
+						break;
+					}
+				}
+			} catch {}
+		})();
+
+		const stderrTask = (async () => {
+			if (!abeProc.stderr) return;
+
+			try {
+				abeStderr = await new Response(abeProc.stderr).text();
+			} catch {}
+		})();
+
+		const abeCode = await abeProc.exited;
+		await Promise.all([stdoutTask, stderrTask]);
+		signal.removeEventListener("abort", onAbortAbe);
+		checkCancelled();
+
+		if (abeCode !== 0) {
+			const detail = abeLastError || abeStderr.trim().slice(-500) || describeExitCode(abeCode);
+			throw new Error(`Auto-Boost-Essential failed (exit ${abeCode}): ${detail}`);
+		}
+
+		const abeInputParsed = parsePath(abeInput);
+		ivfFile = join(abeInputParsed.dir, `${abeInputParsed.name}.ivf`);
+		if (!existsSync(ivfFile)) {
+			throw new Error(`Encoder did not produce output .ivf file (expected ${ivfFile})`);
+		}
+	} else {
+		// DIRECT ENCODE
+		onProgress(0.25, `Encoding (${enc.label})`);
+
+		ivfFile = join(ctx.dir, "direct.ivf");
+		const totalFrames = Math.max(1, Math.round(ctx.windowSec * probe.videoStreamFps));
+		const startedAt = Date.now();
+
+		const colorParams = svtColorParamsFromProbe(probe);
+		const customParams = (job.settings.customEncoderParams || "").trim();
+		const customList = customParams.length > 0 ? customParams.split(/\s+/) : [];
+
+		const ffArgs = ["ffmpeg", "-nostdin", "-i", abeInput, "-f", "yuv4mpegpipe", "-strict", "-1", "-pix_fmt", "yuv420p10le", "-"];
+		const encArgs = [
+			enc.binary,
+			"-i",
+			"-",
+			"--progress",
+			"2",
+			...colorParams.split(/\s+/).filter(Boolean),
+			"--crf",
+			String(job.settings.manualCrf),
+			"--preset",
+			String(job.settings.manualPreset),
+			...customList,
+			"-b",
+			ivfFile,
+		];
+
+		const ffProc = Bun.spawn(ffArgs, { stdout: "pipe", stderr: "ignore", cwd: ctx.dir });
+		const encProc = Bun.spawn(encArgs, { stdin: ffProc.stdout, stdout: "ignore", stderr: "pipe", cwd: ctx.dir });
+
+		const onAbortDirect = () => {
+			for (const p of [ffProc, encProc]) {
+				try {
+					p.kill("SIGTERM");
+				} catch {}
+			}
+			setTimeout(() => {
+				for (const p of [ffProc, encProc]) {
+					try {
+						p.kill("SIGKILL");
+					} catch {}
+				}
+			}, 3000);
+		};
+		signal.addEventListener("abort", onAbortDirect, { once: true });
+
+		let encStderr = "";
+
+		const stderrTask = (async () => {
+			if (!encProc.stderr) return;
+
+			const reader = encProc.stderr.getReader();
 			const decoder = new TextDecoder();
 			let buffer = "";
+
+			const stripAnsiAndControls = (s: string) =>
+				s
+					// CSI sequences: ESC [ ... command
+					.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+					// OSC sequences: ESC ] ... BEL or ST
+					.replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, "")
+					// Other ESC sequences
+					.replace(/\x1B[@-_][0-?]*[ -/]*[@-~]/g, "")
+					// Remaining non-printing controls except \r and \n
+					.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+
+			const handleProgressLine = (rawLine: string) => {
+				const line = stripAnsiAndControls(rawLine).trim();
+				const m = line.match(/Encoding frame\s+(\d+)/i) || line.match(/Encoding:\s*(\d+)\s+Frames?\b/i);
+				if (!m) return;
+
+				const current = parseInt(m[1]!, 10);
+				if (!Number.isFinite(current) || current <= 0) return;
+
+				const frac = Math.min(1, current / totalFrames);
+				const elapsedSec = (Date.now() - startedAt) / 1000;
+				const fps = elapsedSec > 0 ? current / elapsedSec : 0;
+				const detail = `Encoding (${enc.label}) — frame ${current}/${totalFrames}` + (fps > 0 ? ` @ ${fps.toFixed(1)} fps` : "");
+
+				onProgress(0.25 + 0.7 * frac, detail);
+			};
+
 			while (true) {
+				let chunk;
 				try {
-					const { done, value } = await reader.read();
-					if (done) break;
-					buffer += decoder.decode(value, { stream: true });
-					const lines = buffer.split("\n");
-					buffer = lines.pop() || "";
-					for (const line of lines) {
-						if (!line.trim()) continue;
-						try {
-							const evt = JSON.parse(line);
-							if (evt.event === "stage_complete" && typeof evt.stage === "number") {
-								const stagePct = Math.min(1, (evt.stage + 1) / 5);
-								onProgress(0.25 + 0.7 * stagePct, `Encoding — stage ${evt.stage + 1}/5 done`);
-							} else if (evt.event === "error" && typeof evt.message === "string") {
-								abeLastError = evt.message;
-							}
-						} catch {
-							// Non-JSON line, just ignore
-						}
-					}
+					chunk = await reader.read();
 				} catch {
 					break;
 				}
+				if (chunk.done) break;
+
+				const text = decoder.decode(chunk.value, { stream: true });
+				encStderr += text;
+				buffer += text;
+
+				const lines = buffer.split(/\r|\n/);
+				buffer = lines.pop() || "";
+				for (const line of lines) handleProgressLine(line);
 			}
-		} catch {}
-	})();
 
-	const stderrTask = (async () => {
-		if (!abeProc.stderr) return;
+			if (buffer.trim()) handleProgressLine(buffer);
+		})();
 
-		try {
-			abeStderr = await new Response(abeProc.stderr).text();
-		} catch {}
-	})();
+		const encCode = await encProc.exited;
+		await ffProc.exited;
+		await stderrTask;
+		signal.removeEventListener("abort", onAbortDirect);
+		checkCancelled();
 
-	const abeCode = await abeProc.exited;
-	await Promise.all([stdoutTask, stderrTask]);
-	signal.removeEventListener("abort", onAbortAbe);
-	checkCancelled();
+		if (encCode !== 0) {
+			const detail = encStderr.trim().slice(-500) || describeExitCode(encCode);
+			throw new Error(`${enc.label} failed (exit ${encCode}): ${detail}`);
+		}
 
-	if (abeCode !== 0) {
-		const detail = abeLastError || abeStderr.trim().slice(-500) || describeExitCode(abeCode);
-		throw new Error(`Auto-Boost-Essential failed (exit ${abeCode}): ${detail}`);
-	}
-
-	const abeInputParsed = parsePath(abeInput);
-	const ivfFile = join(abeInputParsed.dir, `${abeInputParsed.name}.ivf`);
-	if (!existsSync(ivfFile)) {
-		throw new Error(`Encoder did not produce output .ivf file (expected ${ivfFile})`);
+		if (!existsSync(ivfFile)) {
+			throw new Error(`${enc.label} did not produce output .ivf file (expected ${ivfFile})`);
+		}
 	}
 
 	// 5. Mux .ivf to .mkv so browsers can play it back.

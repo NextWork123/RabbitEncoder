@@ -14,6 +14,25 @@ let systemPollTimer = null;
 let benchmarkPollTimer = null;
 let vsPresets = null;
 
+const ENCODERS = {
+	"svt-av1-essential": {
+		label: "SVT-AV1-Essential",
+		usesAutoBoost: true,
+		crfMin: 0,
+		crfMax: 63,
+		presetMin: 0,
+		presetMax: 13,
+		defaultCrf: 28,
+		defaultPreset: 4,
+	},
+	"svt-av1-hdr": { label: "SVT-AV1-HDR", usesAutoBoost: false, crfMin: 0, crfMax: 63, presetMin: 0, presetMax: 13, defaultCrf: 24, defaultPreset: 4 },
+};
+const ENCODER_IDS = Object.keys(ENCODERS);
+const ENCODER_HELP = {
+	"svt-av1-essential": "Auto-Boost-Essential: per-scene CRF optimization.",
+	"svt-av1-hdr": "Direct encode with manual CRF / preset. No auto-boost.",
+};
+
 const QUALITIES = ["low", "medium", "high"];
 const SPEEDS = ["slower", "slow", "medium", "fast", "faster"];
 const DENOISE_LEVELS = ["off", "auto", "light", "medium", "heavy"];
@@ -701,6 +720,74 @@ function renderVsParamInput(spec, level, entry) {
 		input.value = String(clamped);
 	};
 	return input;
+}
+
+function wireEncoderControls(prefix, settings) {
+	const id = (s) => document.getElementById(`${prefix}-${s}`);
+
+	const applyVisibility = () => {
+		const def = ENCODERS[settings.encoder] || ENCODERS["svt-av1-essential"];
+		const direct = !def.usesAutoBoost;
+		id("abe-controls").style.display = direct ? "none" : "";
+		id("manual-controls").style.display = direct ? "" : "none";
+		// skip-boosting is an ABE concept — hide it for direct encoders if present
+		const sb = document.getElementById(`${prefix}-skip-boosting`);
+		if (sb && sb.closest(".setting-group")) sb.closest(".setting-group").style.display = direct ? "none" : "";
+	};
+
+	// Encoder picker (render labels, store ids)
+	const encEl = id("encoder");
+	encEl.innerHTML = "";
+	ENCODER_IDS.forEach((eid) => {
+		const pill = document.createElement("div");
+		pill.className = `radio-pill${eid === settings.encoder ? " selected" : ""}`;
+		pill.textContent = ENCODERS[eid].label;
+		pill.onclick = () => {
+			encEl.querySelectorAll(".radio-pill").forEach((p) => p.classList.remove("selected"));
+			pill.classList.add("selected");
+			settings.encoder = eid;
+			const help = document.getElementById(`${prefix}-encoder-help`);
+			if (help) help.textContent = ENCODER_HELP[eid] || "";
+			// seed manual defaults if unset
+			if (settings.manualCrf == null) settings.manualCrf = ENCODERS[eid].defaultCrf;
+			if (settings.manualPreset == null) settings.manualPreset = ENCODERS[eid].defaultPreset;
+			syncManual();
+			applyVisibility();
+		};
+		encEl.appendChild(pill);
+	});
+	const help = document.getElementById(`${prefix}-encoder-help`);
+	if (help) help.textContent = ENCODER_HELP[settings.encoder] || "";
+
+	// Manual CRF (slider + number kept in sync) and preset slider
+	const crfSlider = id("crf-slider"),
+		crfInput = id("crf-input"),
+		crfVal = id("crf-val");
+	const presetSlider = id("preset-slider"),
+		presetVal = id("preset-val");
+	function syncManual() {
+		const crf = settings.manualCrf ?? 24;
+		const preset = settings.manualPreset ?? 4;
+		crfSlider.value = crf;
+		crfInput.value = crf;
+		if (crfVal) crfVal.textContent = `(${crf})`;
+		presetSlider.value = preset;
+		if (presetVal) presetVal.textContent = `(${preset})`;
+	}
+	const setCrf = (v) => {
+		v = Math.min(63, Math.max(0, Math.round(+v || 0)));
+		settings.manualCrf = v;
+		syncManual();
+	};
+	crfSlider.oninput = (e) => setCrf(e.target.value);
+	crfInput.oninput = (e) => setCrf(e.target.value);
+	presetSlider.oninput = (e) => {
+		settings.manualPreset = Math.min(13, Math.max(0, Math.round(+e.target.value || 0)));
+		if (presetVal) presetVal.textContent = `(${settings.manualPreset})`;
+	};
+
+	syncManual();
+	applyVisibility();
 }
 
 function mountSettingsCodePanel(container, opts) {
@@ -2297,6 +2384,9 @@ async function openSettings() {
 
 	renderRadioPills(document.getElementById("default-quality"), QUALITIES, tempDefaults.quality, (v) => (tempDefaults.quality = v));
 	renderRadioPills(document.getElementById("default-speed"), SPEEDS, tempDefaults.finalSpeed, (v) => (tempDefaults.finalSpeed = v));
+
+	wireEncoderControls("default", tempDefaults);
+
 	renderRadioPills(document.getElementById("default-denoise"), DENOISE_LEVELS, tempDefaults.denoise || "off", (v) => (tempDefaults.denoise = v));
 	renderRadioPills(document.getElementById("default-deband"), DEBAND_LEVELS, tempDefaults.deband || "off", (v) => (tempDefaults.deband = v));
 
@@ -2337,6 +2427,16 @@ async function openSettings() {
 		document.getElementById("default-dedupe-subtitles"),
 		tempDefaults.dedupeSubtitles || false,
 		(v) => (tempDefaults.dedupeSubtitles = v),
+	);
+	renderKeepBestAudioChannelsToggle(
+		document.getElementById("default-keep-best-audio-channels"),
+		tempDefaults.keepBestAudioChannelsOnly || false,
+		(v) => (tempDefaults.keepBestAudioChannelsOnly = v),
+	);
+	renderRemoveCommentaryAudioToggle(
+		document.getElementById("default-remove-commentary-audio"),
+		tempDefaults.removeCommentaryAudio || false,
+		(v) => (tempDefaults.removeCommentaryAudio = v),
 	);
 	renderAudioLanguagesInput(document.getElementById("default-audio-languages"), tempDefaults.audioLanguages || [], (v) => (tempDefaults.audioLanguages = v));
 	renderLanguageFilterInput(
@@ -2434,6 +2534,15 @@ async function openAdvancedModal(target /* "default" | "job" */) {
 		await refreshDevicePicker(v);
 	});
 	await refreshDevicePicker(settings.denoiseBackend);
+
+	const cep = document.getElementById("advanced-custom-encoder-params");
+	if (cep) {
+		const s = getCurrentSettings();
+		cep.value = s.customEncoderParams || "";
+		cep.oninput = (e) => {
+			s.customEncoderParams = e.target.value;
+		};
+	}
 
 	renderAutoThresholds(document.getElementById("advanced-auto-thresholds"), settings.autoDenoiseThresholds, (v) => (settings.autoDenoiseThresholds = v));
 
@@ -2854,6 +2963,9 @@ async function openJobSettings(jobId) {
 
 	renderRadioPills(document.getElementById("job-quality"), QUALITIES, tempSettings.quality, (v) => (tempSettings.quality = v));
 	renderRadioPills(document.getElementById("job-speed"), SPEEDS, tempSettings.finalSpeed, (v) => (tempSettings.finalSpeed = v));
+
+	wireEncoderControls("job", tempSettings);
+
 	renderRadioPills(document.getElementById("job-denoise"), DENOISE_LEVELS, tempSettings.denoise || "off", (v) => (tempSettings.denoise = v));
 	renderRadioPills(document.getElementById("job-deband"), DEBAND_LEVELS, tempSettings.deband || "off", (v) => (tempSettings.deband = v));
 
@@ -2889,6 +3001,16 @@ async function openJobSettings(jobId) {
 		document.getElementById("job-dedupe-subtitles"),
 		tempSettings.dedupeSubtitles || false,
 		(v) => (tempSettings.dedupeSubtitles = v),
+	);
+	renderKeepBestAudioChannelsToggle(
+		document.getElementById("job-keep-best-audio-channels"),
+		tempSettings.keepBestAudioChannelsOnly || false,
+		(v) => (tempSettings.keepBestAudioChannelsOnly = v),
+	);
+	renderRemoveCommentaryAudioToggle(
+		document.getElementById("job-remove-commentary-audio"),
+		tempSettings.removeCommentaryAudio || false,
+		(v) => (tempSettings.removeCommentaryAudio = v),
 	);
 	renderAudioLanguagesInput(document.getElementById("job-audio-languages"), tempSettings.audioLanguages || [], (v) => (tempSettings.audioLanguages = v));
 	renderLanguageFilterInput(
@@ -3297,6 +3419,42 @@ function renderDedupeSubtitlesToggle(container, checked, onChange) {
 
 	const span = document.createElement("span");
 	span.textContent = "\u00A0Keep one subtitle per language and type";
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}
+
+function renderKeepBestAudioChannelsToggle(container, checked, onChange) {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Keep only highest channel layout per language";
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}
+
+function renderRemoveCommentaryAudioToggle(container, checked, onChange) {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Remove commentary audio tracks";
 
 	label.appendChild(input);
 	label.appendChild(span);

@@ -1,3 +1,4 @@
+import { isValidEncoder } from "./encoders";
 import type {
 	JobSettings,
 	EncoderQuality,
@@ -24,6 +25,10 @@ export const SETTINGS_CODE_PREFIX = `RE${SETTINGS_CODE_FORMAT}`;
  * format version and add a new baseline instead.
  */
 const BASELINE: JobSettings = {
+	encoder: "svt-av1-essential",
+	manualCrf: 24,
+	manualPreset: 4,
+	customEncoderParams: "",
 	videoEncode: "av1",
 	audioEncode: "opus",
 	subtitleProcessing: "full",
@@ -48,6 +53,8 @@ const BASELINE: JobSettings = {
 	skipBoosting: false,
 	noPhaseInv: false,
 	dedupeSubtitles: false,
+	keepBestAudioChannelsOnly: false,
+	removeCommentaryAudio: false,
 	audioLanguages: [],
 	subtitleLanguages: [],
 	audioBitrates: {
@@ -173,6 +180,10 @@ export function encodeSettingsCode(s: JobSettings): string {
 
 	// core
 	const core = new Section("c");
+	if (s.encoder !== BASELINE.encoder) core.put("en", s.encoder);
+	if (s.manualCrf !== BASELINE.manualCrf) core.put("cr", s.manualCrf);
+	if (s.manualPreset !== BASELINE.manualPreset) core.put("pr", s.manualPreset);
+	if (s.customEncoderParams !== BASELINE.customEncoderParams) core.put("cp", esc(s.customEncoderParams));
 	if (s.quality !== BASELINE.quality) core.put("q", QUALITY_TO_CODE[s.quality] ?? QUALITY_TO_CODE.medium);
 	if (s.finalSpeed !== BASELINE.finalSpeed) core.put("sp", SPEED_TO_CODE[s.finalSpeed] ?? SPEED_TO_CODE.slow);
 	if (s.videoEncode !== BASELINE.videoEncode) core.put("v", s.videoEncode);
@@ -182,6 +193,8 @@ export function encodeSettingsCode(s: JobSettings): string {
 	if (s.skipBoosting !== BASELINE.skipBoosting) core.put("sb", s.skipBoosting);
 	if (s.noPhaseInv !== BASELINE.noPhaseInv) core.put("np", s.noPhaseInv);
 	if (s.dedupeSubtitles !== BASELINE.dedupeSubtitles) core.put("dd", s.dedupeSubtitles);
+	if (s.keepBestAudioChannelsOnly !== BASELINE.keepBestAudioChannelsOnly) core.put("kc", s.keepBestAudioChannelsOnly);
+	if (s.removeCommentaryAudio !== BASELINE.removeCommentaryAudio) core.put("rc", s.removeCommentaryAudio);
 	if (!core.empty) sections.push(core.toString());
 
 	// denoise
@@ -378,6 +391,10 @@ function splitList(v: string | undefined): string[] {
 }
 
 function applyCore(out: JobSettings, kv: Record<string, string>): void {
+	if (kv.en && isValidEncoder(kv.en)) out.encoder = kv.en;
+	if (kv.cr !== undefined) out.manualCrf = numOr(kv.cr, out.manualCrf);
+	if (kv.pr !== undefined) out.manualPreset = numOr(kv.pr, out.manualPreset);
+	if (kv.cp !== undefined) out.customEncoderParams = unesc(kv.cp);
 	if (kv.q && CODE_TO_QUALITY[kv.q]) out.quality = CODE_TO_QUALITY[kv.q]!;
 	if (kv.sp && CODE_TO_SPEED[kv.sp]) out.finalSpeed = CODE_TO_SPEED[kv.sp]!;
 	if (kv.v && (VIDEO_VALUES as string[]).includes(kv.v)) out.videoEncode = kv.v as VideoEncodeMode;
@@ -387,6 +404,8 @@ function applyCore(out: JobSettings, kv: Record<string, string>): void {
 	if (kv.sb !== undefined) out.skipBoosting = kv.sb === "1";
 	if (kv.np !== undefined) out.noPhaseInv = kv.np === "1";
 	if (kv.dd !== undefined) out.dedupeSubtitles = kv.dd === "1";
+	if (kv.kc !== undefined) out.keepBestAudioChannelsOnly = kv.kc === "1";
+	if (kv.rc !== undefined) out.removeCommentaryAudio = kv.rc === "1";
 }
 
 function applyDenoise(out: JobSettings, kv: Record<string, string>): void {

@@ -7,3 +7,4 @@ vapoursynth-user/
 *.log
 bun.lock
 ffmpeg-dist/
+svt-av1-hdr-dist/

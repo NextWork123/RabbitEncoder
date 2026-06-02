@@ -18,6 +18,7 @@ import { normalizeNlmeansLevelParams, normalizeGradfunLevelParams } from "./filt
 import { runPreviewEncode, deletePreviewDir, previewSettingsFingerprint, DEFAULT_PREVIEW_OPTIONS } from "./preview-encoder";
 import { normalizeVsFilterChain } from "./vs-filters";
 import { getDefaultJobSettings } from "./config";
+import { isValidEncoder } from "./encoders";
 
 const jobs = new Map<string, Job>();
 let paused = false;
@@ -150,6 +151,19 @@ export function getAppConfig(): AppConfig {
 }
 
 export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
+	if (isValidEncoder(settings.encoder)) {
+		appConfig.defaults.encoder = settings.encoder;
+	}
+	if (typeof settings.manualCrf === "number" && Number.isFinite(settings.manualCrf)) {
+		appConfig.defaults.manualCrf = Math.min(63, Math.max(0, settings.manualCrf));
+	}
+	if (typeof settings.manualPreset === "number" && Number.isFinite(settings.manualPreset)) {
+		appConfig.defaults.manualPreset = Math.min(13, Math.max(0, Math.round(settings.manualPreset)));
+	}
+	if (typeof settings.customEncoderParams === "string") {
+		appConfig.defaults.customEncoderParams = settings.customEncoderParams.slice(0, 2000);
+	}
+
 	if (typeof settings.videoEncode === "string" && VALID_VIDEO_ENCODE.includes(settings.videoEncode)) {
 		appConfig.defaults.videoEncode = settings.videoEncode;
 	}
@@ -175,6 +189,8 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 	if (typeof settings.skipBoosting === "boolean") appConfig.defaults.skipBoosting = settings.skipBoosting;
 	if (typeof settings.noPhaseInv === "boolean") appConfig.defaults.noPhaseInv = settings.noPhaseInv;
 	if (typeof settings.dedupeSubtitles === "boolean") appConfig.defaults.dedupeSubtitles = settings.dedupeSubtitles;
+	if (typeof settings.keepBestAudioChannelsOnly === "boolean") appConfig.defaults.keepBestAudioChannelsOnly = settings.keepBestAudioChannelsOnly;
+	if (typeof settings.removeCommentaryAudio === "boolean") appConfig.defaults.removeCommentaryAudio = settings.removeCommentaryAudio;
 	if (Array.isArray(settings.audioLanguages)) {
 		appConfig.defaults.audioLanguages = settings.audioLanguages.map((s) => String(s).trim()).filter((s) => s.length > 0);
 	}
@@ -379,6 +395,19 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 	const job = jobs.get(id);
 	if (!job || job.status !== "queued") return null;
 
+	if (isValidEncoder(settings.encoder)) {
+		job.settings.encoder = settings.encoder;
+	}
+	if (typeof settings.manualCrf === "number" && Number.isFinite(settings.manualCrf)) {
+		job.settings.manualCrf = Math.min(63, Math.max(0, settings.manualCrf));
+	}
+	if (typeof settings.manualPreset === "number" && Number.isFinite(settings.manualPreset)) {
+		job.settings.manualPreset = Math.min(13, Math.max(0, Math.round(settings.manualPreset)));
+	}
+	if (typeof settings.customEncoderParams === "string") {
+		job.settings.customEncoderParams = settings.customEncoderParams.slice(0, 2000);
+	}
+
 	if (typeof settings.videoEncode === "string" && VALID_VIDEO_ENCODE.includes(settings.videoEncode)) {
 		job.settings.videoEncode = settings.videoEncode;
 	}
@@ -405,6 +434,8 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 	if (typeof settings.skipBoosting === "boolean") job.settings.skipBoosting = settings.skipBoosting;
 	if (typeof settings.noPhaseInv === "boolean") job.settings.noPhaseInv = settings.noPhaseInv;
 	if (typeof settings.dedupeSubtitles === "boolean") job.settings.dedupeSubtitles = settings.dedupeSubtitles;
+	if (typeof settings.keepBestAudioChannelsOnly === "boolean") job.settings.keepBestAudioChannelsOnly = settings.keepBestAudioChannelsOnly;
+	if (typeof settings.removeCommentaryAudio === "boolean") job.settings.removeCommentaryAudio = settings.removeCommentaryAudio;
 	if (Array.isArray(settings.audioLanguages)) {
 		job.settings.audioLanguages = settings.audioLanguages.map((s) => String(s).trim()).filter((s) => s.length > 0);
 	}

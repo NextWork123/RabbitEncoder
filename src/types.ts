@@ -1,3 +1,4 @@
+export type EncoderId = "svt-av1-essential" | "svt-av1-hdr";
 export type EncoderQuality = "low" | "medium" | "high";
 export type EncoderSpeed = "slower" | "slow" | "medium" | "fast" | "faster";
 export type DenoiseLevel = "off" | "light" | "medium" | "heavy" | "auto";
@@ -78,6 +79,10 @@ export interface GradfunLevelParams {
 }
 
 export interface JobSettings {
+	encoder: EncoderId;
+	manualCrf: number;
+	manualPreset: number;
+	customEncoderParams: string;
 	videoEncode: VideoEncodeMode;
 	audioEncode: AudioEncodeMode;
 	subtitleProcessing: SubtitleProcessingMode;
@@ -99,6 +104,8 @@ export interface JobSettings {
 	skipBoosting: boolean;
 	noPhaseInv: boolean;
 	dedupeSubtitles: boolean;
+	keepBestAudioChannelsOnly: boolean;
+	removeCommentaryAudio: boolean;
 	audioLanguages: string[];
 	subtitleLanguages: string[];
 	/**

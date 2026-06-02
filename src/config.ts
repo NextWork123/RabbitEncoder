@@ -15,6 +15,10 @@ const DEFAULT_BITRATES: AudioChannelBitrates = {
 };
 
 const DEFAULT_JOB_SETTINGS: JobSettings = {
+	encoder: "svt-av1-essential",
+	manualCrf: 24,
+	manualPreset: 4,
+	customEncoderParams: "",
 	videoEncode: "av1",
 	audioEncode: "opus",
 	subtitleProcessing: "full",
@@ -31,6 +35,8 @@ const DEFAULT_JOB_SETTINGS: JobSettings = {
 	skipBoosting: false,
 	noPhaseInv: false,
 	dedupeSubtitles: false,
+	keepBestAudioChannelsOnly: false,
+	removeCommentaryAudio: false,
 	audioLanguages: [],
 	subtitleLanguages: [],
 	audioBitrates: DEFAULT_BITRATES,
