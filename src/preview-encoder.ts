@@ -539,11 +539,18 @@ async function encodeSample(
 		const customParams = (job.settings.customEncoderParams || "").trim();
 		const customList = customParams.length > 0 ? customParams.split(/\s+/) : [];
 
-		const ffArgs = ["ffmpeg", "-nostdin", "-i", abeInput, "-f", "yuv4mpegpipe", "-strict", "-1", "-pix_fmt", "yuv420p10le", "-"];
+		const y4mFifo = join(ctx.dir, "direct_y4m.fifo");
+		rmSync(y4mFifo, { force: true });
+		const mkfifoRes = await run(["mkfifo", y4mFifo], { signal });
+		if (mkfifoRes.code !== 0) {
+			throw new Error(`Failed to create encode FIFO: ${mkfifoRes.stderr || mkfifoRes.stdout}`);
+		}
+
+		const ffArgs = ["ffmpeg", "-nostdin", "-y", "-i", abeInput, "-f", "yuv4mpegpipe", "-strict", "-1", "-pix_fmt", "yuv420p10le", y4mFifo];
 		const encArgs = [
 			enc.binary,
 			"-i",
-			"-",
+			y4mFifo,
 			"--progress",
 			"2",
 			...colorParams.split(/\s+/).filter(Boolean),
@@ -556,8 +563,8 @@ async function encodeSample(
 			ivfFile,
 		];
 
-		const ffProc = Bun.spawn(ffArgs, { stdout: "pipe", stderr: "ignore", cwd: ctx.dir });
-		const encProc = Bun.spawn(encArgs, { stdin: ffProc.stdout, stdout: "ignore", stderr: "pipe", cwd: ctx.dir });
+		const ffProc = Bun.spawn(ffArgs, { stdout: "ignore", stderr: "ignore", cwd: ctx.dir });
+		const encProc = Bun.spawn(encArgs, { stdout: "ignore", stderr: "pipe", cwd: ctx.dir });
 
 		const onAbortDirect = () => {
 			for (const p of [ffProc, encProc]) {
@@ -633,9 +640,17 @@ async function encodeSample(
 		})();
 
 		const encCode = await encProc.exited;
+
+		try {
+			ffProc.kill("SIGTERM");
+		} catch {}
 		await ffProc.exited;
 		await stderrTask;
+
 		signal.removeEventListener("abort", onAbortDirect);
+
+		rmSync(y4mFifo, { force: true });
+
 		checkCancelled();
 
 		if (encCode !== 0) {

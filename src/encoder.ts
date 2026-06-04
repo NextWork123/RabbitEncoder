@@ -642,12 +642,20 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				const customParams = (job.settings.customEncoderParams || "").trim();
 				const customList = customParams.length > 0 ? customParams.split(/\s+/) : [];
 
-				// ffmpeg decodes the prepared video to 10-bit y4m on stdout…
-				const ffArgs = ["ffmpeg", "-nostdin", "-i", preparedVideo, "-f", "yuv4mpegpipe", "-strict", "-1", "-pix_fmt", "yuv420p10le", "-"];
+				const y4mFifo = join(tempDir, "direct_y4m.fifo");
+				try {
+					unlinkSync(y4mFifo);
+				} catch {}
+				const mkfifoRes = await run(["mkfifo", y4mFifo], { signal });
+				if (mkfifoRes.code !== 0) {
+					throw new Error(`Failed to create encode FIFO: ${mkfifoRes.stderr || mkfifoRes.stdout}`);
+				}
+
+				const ffArgs = ["ffmpeg", "-nostdin", "-y", "-i", preparedVideo, "-f", "yuv4mpegpipe", "-strict", "-1", "-pix_fmt", "yuv420p10le", y4mFifo];
 				const encArgs = [
 					enc.binary,
 					"-i",
-					"-",
+					y4mFifo,
 					"--progress",
 					"2",
 					...colorParams.split(/\s+/).filter(Boolean),
@@ -662,9 +670,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 				mkdirSync(join(tempDir, "abe_temp"), { recursive: true });
 
-				const ffProc = Bun.spawn(ffArgs, { stdout: "pipe", stderr: "ignore", cwd: tempDir });
+				const ffProc = Bun.spawn(ffArgs, { stdout: "ignore", stderr: "ignore", cwd: tempDir });
 				const encProc = Bun.spawn(encArgs, {
-					stdin: ffProc.stdout,
 					stdout: "ignore",
 					stderr: "pipe",
 					cwd: tempDir,
@@ -765,9 +772,19 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				})();
 
 				const encCode = await encProc.exited;
+
+				try {
+					ffProc.kill("SIGTERM");
+				} catch {}
 				await ffProc.exited;
 				await stderrTask;
+
 				signal?.removeEventListener("abort", onAbort);
+
+				try {
+					unlinkSync(y4mFifo);
+				} catch {}
+
 				checkCancelled();
 
 				if (encCode !== 0) {
