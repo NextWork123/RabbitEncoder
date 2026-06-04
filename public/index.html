@@ -133,6 +133,10 @@
 						</div>
 						<div id="default-manual-controls" style="display: none">
 							<div class="setting-group">
+								<label>Tune</label>
+								<select id="default-tune" class="num-input"></select>
+							</div>
+							<div class="setting-group">
 								<label>CRF <span id="default-crf-val"></span></label>
 								<div class="slider-row">
 									<input type="range" id="default-crf-slider" min="0" max="63" step="1" />
@@ -230,6 +234,10 @@
 						</div>
 						<div id="job-manual-controls" style="display: none">
 							<div class="setting-group">
+								<label>Tune</label>
+								<select id="job-tune" class="num-input"></select>
+							</div>
+							<div class="setting-group">
 								<label>CRF <span id="job-crf-val"></span></label>
 								<div class="slider-row">
 									<input type="range" id="job-crf-slider" min="0" max="63" step="1" />
@@ -294,7 +302,7 @@
 					<div class="modal-body">
 						<div class="setting-group">
 							<label>Custom encoder parameters</label>
-							<textarea id="advanced-custom-encoder-params" rows="3" placeholder="--film-grain 8 --tune 0"></textarea>
+							<textarea id="advanced-custom-encoder-params" rows="3" placeholder="--film-grain 12 --min-qp 8"></textarea>
 							<div class="setting-help">Raw CLI args appended verbatim to the encoder command.</div>
 						</div>
 

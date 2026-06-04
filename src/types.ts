@@ -82,6 +82,7 @@ export interface JobSettings {
 	encoder: EncoderId;
 	manualCrf: number;
 	manualPreset: number;
+	tune: number;
 	customEncoderParams: string;
 	videoEncode: VideoEncodeMode;
 	audioEncode: AudioEncodeMode;

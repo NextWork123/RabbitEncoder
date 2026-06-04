@@ -558,6 +558,8 @@ async function encodeSample(
 			String(job.settings.manualCrf),
 			"--preset",
 			String(job.settings.manualPreset),
+			"--tune",
+			String(job.settings.tune ?? 1),
 			...customList,
 			"-b",
 			ivfFile,

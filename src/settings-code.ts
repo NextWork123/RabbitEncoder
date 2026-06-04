@@ -28,6 +28,7 @@ const BASELINE: JobSettings = {
 	encoder: "svt-av1-essential",
 	manualCrf: 24,
 	manualPreset: 4,
+	tune: 1,
 	customEncoderParams: "",
 	videoEncode: "av1",
 	audioEncode: "opus",
@@ -181,6 +182,7 @@ export function encodeSettingsCode(s: JobSettings): string {
 	// core
 	const core = new Section("c");
 	if (s.encoder !== BASELINE.encoder) core.put("en", s.encoder);
+	if (s.tune !== BASELINE.tune) core.put("tu", s.tune);
 	if (s.manualCrf !== BASELINE.manualCrf) core.put("cr", s.manualCrf);
 	if (s.manualPreset !== BASELINE.manualPreset) core.put("pr", s.manualPreset);
 	if (s.customEncoderParams !== BASELINE.customEncoderParams) core.put("cp", esc(s.customEncoderParams));
@@ -392,6 +394,7 @@ function splitList(v: string | undefined): string[] {
 
 function applyCore(out: JobSettings, kv: Record<string, string>): void {
 	if (kv.en && isValidEncoder(kv.en)) out.encoder = kv.en;
+	if (kv.tu !== undefined) out.tune = numOr(kv.tu, out.tune);
 	if (kv.cr !== undefined) out.manualCrf = numOr(kv.cr, out.manualCrf);
 	if (kv.pr !== undefined) out.manualPreset = numOr(kv.pr, out.manualPreset);
 	if (kv.cp !== undefined) out.customEncoderParams = unesc(kv.cp);

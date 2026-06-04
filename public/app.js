@@ -33,6 +33,14 @@ const ENCODER_HELP = {
 	"svt-av1-hdr": "Direct encode with manual CRF / preset. No auto-boost.",
 };
 
+const TUNE_OPTIONS = [
+	{ value: 0, label: "0 - VQ (max detail retention)" },
+	{ value: 1, label: "1 - PSNR (default)" },
+	{ value: 2, label: "2 - SSIM" },
+	{ value: 4, label: "4 - MS-SSIM" },
+	{ value: 5, label: "5 - Film Grain" },
+];
+
 const QUALITIES = ["low", "medium", "high"];
 const SPEEDS = ["slower", "slow", "medium", "fast", "faster"];
 const DENOISE_LEVELS = ["off", "auto", "light", "medium", "heavy"];
@@ -785,6 +793,23 @@ function wireEncoderControls(prefix, settings) {
 		settings.manualPreset = Math.min(13, Math.max(0, Math.round(+e.target.value || 0)));
 		if (presetVal) presetVal.textContent = `(${settings.manualPreset})`;
 	};
+
+	const tuneEl = id("tune");
+	if (tuneEl) {
+		tuneEl.innerHTML = "";
+		for (const opt of TUNE_OPTIONS) {
+			const o = document.createElement("option");
+			o.value = String(opt.value);
+			o.textContent = opt.label;
+			tuneEl.appendChild(o);
+		}
+		const curTune = settings.tune ?? 1;
+		tuneEl.value = TUNE_OPTIONS.some((o) => o.value === curTune) ? String(curTune) : "1";
+		settings.tune = parseInt(tuneEl.value, 10);
+		tuneEl.onchange = (e) => {
+			settings.tune = parseInt(e.target.value, 10);
+		};
+	}
 
 	syncManual();
 	applyVisibility();

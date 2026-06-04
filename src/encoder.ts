@@ -663,6 +663,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					String(job.settings.manualCrf),
 					"--preset",
 					String(job.settings.manualPreset),
+					"--tune",
+					String(job.settings.tune ?? 1),
 					...customList,
 					"-b",
 					inProgressIvf,

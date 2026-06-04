@@ -154,6 +154,9 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 	if (isValidEncoder(settings.encoder)) {
 		appConfig.defaults.encoder = settings.encoder;
 	}
+	if (typeof settings.tune === "number" && Number.isFinite(settings.tune)) {
+		appConfig.defaults.tune = Math.min(5, Math.max(0, settings.tune));
+	}
 	if (typeof settings.manualCrf === "number" && Number.isFinite(settings.manualCrf)) {
 		appConfig.defaults.manualCrf = Math.min(63, Math.max(0, settings.manualCrf));
 	}
@@ -397,6 +400,9 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 
 	if (isValidEncoder(settings.encoder)) {
 		job.settings.encoder = settings.encoder;
+	}
+	if (typeof settings.tune === "number" && Number.isFinite(settings.tune)) {
+		job.settings.tune = Math.min(5, Math.max(0, settings.tune));
 	}
 	if (typeof settings.manualCrf === "number" && Number.isFinite(settings.manualCrf)) {
 		job.settings.manualCrf = Math.min(63, Math.max(0, settings.manualCrf));

@@ -18,6 +18,7 @@ const DEFAULT_JOB_SETTINGS: JobSettings = {
 	encoder: "svt-av1-essential",
 	manualCrf: 24,
 	manualPreset: 4,
+	tune: 1,
 	customEncoderParams: "",
 	videoEncode: "av1",
 	audioEncode: "opus",
