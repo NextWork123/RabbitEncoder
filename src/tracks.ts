@@ -450,6 +450,18 @@ export function extractSourceTag(title: string | undefined): string | null {
 }
 
 /**
+ * A subtitle is flagged "original" when it comes from an official source
+ * rather than a fan edit:
+ *   - PGS (Blu-ray) bitmap subtitles
+ *   - DVD (VOBSUB) bitmap subtitles
+ *   - a recognized source/service tag in the title (NF, CR, AMZN, *BD/*DVD/*UHD, ...)
+ */
+export function shouldFlagSubtitleAsOriginal(stream: SubtitleStreamInfo): boolean {
+	if (isPgsSubtitleCodec(stream.codec) || isDvdSubtitleCodec(stream.codec)) return true;
+	return extractSourceTag(stream.title) !== null;
+}
+
+/**
  * Build a clean track name for a subtitle stream.
  *
  * Examples:
@@ -691,11 +703,21 @@ async function detectLanguage(filePath: string, signal?: AbortSignal): Promise<L
 // Subtitle codec helpers & extraction
 
 const TEXT_SUB_CODECS = new Set(["subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text", "subviewer", "microdvd"]);
-
 const ASS_CODECS = new Set(["ass", "ssa"]);
+
+const PGS_SUB_CODECS = new Set(["hdmv_pgs_subtitle", "pgssub", "pgs"]);
+const DVD_SUB_CODECS = new Set(["dvd_subtitle", "dvdsub"]);
 
 export function isTextSubtitleCodec(codec: string): boolean {
 	return TEXT_SUB_CODECS.has(codec.toLowerCase());
+}
+
+export function isPgsSubtitleCodec(codec: string): boolean {
+	return PGS_SUB_CODECS.has(codec.toLowerCase());
+}
+
+export function isDvdSubtitleCodec(codec: string): boolean {
+	return DVD_SUB_CODECS.has(codec.toLowerCase());
 }
 
 interface SubtitleExtraction {
@@ -934,6 +956,17 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 		if (normalized && normalized !== stream.language) {
 			Logger.info(`[subtitle] Track ${stream.index}: normalizing language "${stream.language}" → "${normalized}" (bibliographic → terminology)`);
 			stream.language = normalized;
+		}
+	}
+
+	// Flag subtitles that originate from an official source as "original".
+	// Preserve any original flag already set by the probe disposition.
+	for (const stream of streams) {
+		if (stream.isOriginal) continue;
+		if (shouldFlagSubtitleAsOriginal(stream)) {
+			stream.isOriginal = true;
+			const reason = isPgsSubtitleCodec(stream.codec) ? "PGS" : isDvdSubtitleCodec(stream.codec) ? "DVD" : `source tag ${extractSourceTag(stream.title)}`;
+			Logger.info(`[subtitle] Track ${stream.index}: setting original flag (${reason})`);
 		}
 	}
 
@@ -1382,6 +1415,7 @@ export async function previewSubtitles(
 			isForced: s.isForced || false,
 			isHearingImpaired: s.isHearingImpaired || false,
 			isCommentary: false,
+			isOriginal: s.isOriginal || false,
 			isText: isTextSubtitleCodec(s.codec),
 		};
 	});
@@ -1394,6 +1428,7 @@ export async function previewSubtitles(
 		isForced: s.isForced,
 		isDefault: s.isDefault,
 		isHearingImpaired: s.isHearingImpaired,
+		isOriginal: s.isOriginal,
 	}));
 
 	await analyzeSubtitleStreams(cloned, inputPath, tempDir);
@@ -1425,6 +1460,7 @@ export async function previewSubtitles(
 			trackName,
 			trackType,
 			...flags,
+			isOriginal: s.isOriginal || false,
 			isText: isTextSubtitleCodec(s.codec),
 		};
 	});

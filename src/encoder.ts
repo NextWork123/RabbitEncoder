@@ -1058,7 +1058,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		mkvArgs.push("--language", `0:${sanitizeLanguageTag(probe.videoLanguage, "video")}`);
 		mkvArgs.push("--track-name", `0:${config.organization}`);
-		mkvArgs.push("--original-flag", `0:${probe.videoOriginalFlag ? "1" : "0"}`);
+		mkvArgs.push("--original-flag", `0:1`);
 
 		if (probe.displayAspectRatio && probe.displayAspectRatio !== "0:1" && probe.displayAspectRatio !== "N/A") {
 			const dar = probe.displayAspectRatio.replace(":", "/");

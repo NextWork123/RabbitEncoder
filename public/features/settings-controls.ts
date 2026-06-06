@@ -1,0 +1,584 @@
+import type { AudioChannelBitrates, AutoDenoiseThresholds, GradfunLevelParams, JobSettings, NlmeansLevelParams } from "../types";
+import type { GpuDevice, SettingsCodePanelElement, SettingsCodePanelOptions } from "../ui/models";
+import { encodeSettingsCodeRequest } from "../api/client";
+import { CHANNELS, ENCODERS, ENCODER_HELP, ENCODER_IDS, PARAM_LEVELS, TUNE_OPTIONS } from "../config/options";
+import { clampFloat, clampInt, forceOdd } from "./job-render";
+import { byId } from "../shared/dom";
+import { errorMessage } from "../shared/errors";
+
+export function wireEncoderControls(prefix: "default" | "job", settings: JobSettings): void {
+	const id = (s: string) => byId(`${prefix}-${s}`) as HTMLElement;
+
+	const applyVisibility = () => {
+		const def = ENCODERS[settings.encoder] || ENCODERS["svt-av1-essential"];
+		const direct = !def.usesAutoBoost;
+		id("abe-controls").style.display = direct ? "none" : "";
+		id("manual-controls").style.display = direct ? "" : "none";
+		// skip-boosting is an ABE concept — hide it for direct encoders if present
+		const sb = byId(`${prefix}-skip-boosting`);
+		const sbGroup = sb.closest<HTMLElement>(".setting-group");
+		if (sbGroup) sbGroup.style.display = direct ? "none" : "";
+	};
+
+	// Encoder picker (render labels, store ids)
+	const encEl = id("encoder");
+	encEl.innerHTML = "";
+	ENCODER_IDS.forEach((eid) => {
+		const pill = document.createElement("div");
+		pill.className = `radio-pill${eid === settings.encoder ? " selected" : ""}`;
+		pill.textContent = ENCODERS[eid].label;
+		pill.onclick = () => {
+			encEl.querySelectorAll(".radio-pill").forEach((p) => p.classList.remove("selected"));
+			pill.classList.add("selected");
+			settings.encoder = eid;
+			const help = byId(`${prefix}-encoder-help`);
+			if (help) help.textContent = ENCODER_HELP[eid] || "";
+			// seed manual appState.defaults if unset
+			if (settings.manualCrf == null) settings.manualCrf = ENCODERS[eid].defaultCrf;
+			if (settings.manualPreset == null) settings.manualPreset = ENCODERS[eid].defaultPreset;
+			syncManual();
+			applyVisibility();
+		};
+		encEl.appendChild(pill);
+	});
+	const help = byId(`${prefix}-encoder-help`);
+	if (help) help.textContent = ENCODER_HELP[settings.encoder] || "";
+
+	// Manual CRF (slider + number kept in sync) and preset slider
+	const crfSlider = byId<HTMLInputElement>(`${prefix}-crf-slider`),
+		crfInput = byId<HTMLInputElement>(`${prefix}-crf-input`),
+		crfVal = id("crf-val");
+	const presetSlider = byId<HTMLInputElement>(`${prefix}-preset-slider`),
+		presetVal = id("preset-val");
+	function syncManual() {
+		const crf = settings.manualCrf ?? 24;
+		const preset = settings.manualPreset ?? 4;
+		crfSlider.value = String(crf);
+		crfInput.value = String(crf);
+		if (crfVal) crfVal.textContent = `(${crf})`;
+		presetSlider.value = String(preset);
+		if (presetVal) presetVal.textContent = `(${preset})`;
+	}
+	const setCrf = (v: number | string) => {
+		v = Math.min(63, Math.max(0, Math.round(+v || 0)));
+		settings.manualCrf = v;
+		syncManual();
+	};
+	crfSlider.oninput = () => setCrf(crfSlider.value);
+	crfInput.oninput = () => setCrf(crfInput.value);
+	presetSlider.oninput = () => {
+		settings.manualPreset = Math.min(13, Math.max(0, Math.round(+presetSlider.value || 0)));
+		if (presetVal) presetVal.textContent = `(${settings.manualPreset})`;
+	};
+
+	const tuneEl = byId<HTMLSelectElement>(`${prefix}-tune`);
+	if (tuneEl) {
+		tuneEl.innerHTML = "";
+		for (const opt of TUNE_OPTIONS) {
+			const o = document.createElement("option");
+			o.value = String(opt.value);
+			o.textContent = opt.label;
+			tuneEl.appendChild(o);
+		}
+		const curTune = settings.tune ?? 1;
+		tuneEl.value = TUNE_OPTIONS.some((o) => o.value === curTune) ? String(curTune) : "1";
+		settings.tune = parseInt(tuneEl.value, 10);
+		tuneEl.onchange = () => {
+			settings.tune = parseInt(tuneEl.value, 10);
+		};
+	}
+
+	syncManual();
+	applyVisibility();
+}
+
+export function mountSettingsCodePanel(container: SettingsCodePanelElement | null, opts: SettingsCodePanelOptions): void {
+	if (!container) return;
+	if (container._codeTimer) if (container._codeTimer) clearInterval(container._codeTimer);
+	container._codeTimer = null;
+	container.innerHTML = "";
+
+	const label = document.createElement("label");
+	label.textContent = "Settings Code";
+	container.appendChild(label);
+
+	const hint = document.createElement("div");
+	hint.className = "lang-filter-hint";
+	hint.innerHTML =
+		"A compact, shareable code for these exact settings, also written to every encoded file's <code>SETTINGS</code> tag. Paste one in to reproduce a setup.";
+	container.appendChild(hint);
+
+	const exportRow = document.createElement("div");
+	exportRow.className = "settings-code-row";
+	const codeField = document.createElement("input");
+	codeField.type = "text";
+	codeField.readOnly = true;
+	codeField.className = "settings-code-field";
+	exportRow.appendChild(codeField);
+	const copyBtn = document.createElement("button");
+	copyBtn.type = "button";
+	copyBtn.className = "btn btn-ghost btn-small";
+	copyBtn.textContent = "\u00A0Copy\u00A0";
+	exportRow.appendChild(copyBtn);
+	container.appendChild(exportRow);
+
+	const importRow = document.createElement("div");
+	importRow.className = "settings-code-row";
+	const importField = document.createElement("input");
+	importField.type = "text";
+	importField.className = "settings-code-field";
+	importField.placeholder = "Paste a code (RE1...) to import";
+	importRow.appendChild(importField);
+	const importBtn = document.createElement("button");
+	importBtn.type = "button";
+	importBtn.className = "btn btn-primary btn-small";
+	importBtn.textContent = "Import";
+	importRow.appendChild(importBtn);
+	container.appendChild(importRow);
+
+	const status = document.createElement("div");
+	status.className = "settings-code-status";
+	container.appendChild(status);
+
+	let lastSerialized: string | null = null;
+	const refresh = async () => {
+		const settings = opts.getSettings();
+		if (!settings) {
+			codeField.value = "—";
+			lastSerialized = null;
+			return;
+		}
+		lastSerialized = JSON.stringify(settings);
+		codeField.value = (await encodeSettingsCodeRequest(settings)) || "—";
+	};
+
+	// Live-update the displayed code as other fields change. The edit callbacks
+	// only mutate the settings object, so poll for changes and hit the server
+	// solely when something actually changed.
+	container._codeTimer = setInterval(async () => {
+		if (!container.isConnected) {
+			if (container._codeTimer) clearInterval(container._codeTimer);
+			container._codeTimer = null;
+			return;
+		}
+		const settings = opts.getSettings();
+		if (!settings) return;
+		const serialized = JSON.stringify(settings);
+		if (serialized === lastSerialized) return;
+		lastSerialized = serialized;
+		codeField.value = (await encodeSettingsCodeRequest(settings)) || "—";
+	}, 500);
+
+	copyBtn.onclick = async () => {
+		await refresh();
+		try {
+			await navigator.clipboard.writeText(codeField.value);
+			copyBtn.textContent = "Copied";
+			setTimeout(() => (copyBtn.textContent = "\u00A0Copy\u00A0"), 1200);
+		} catch {
+			codeField.select();
+		}
+	};
+
+	importBtn.onclick = async () => {
+		const code = importField.value.trim();
+		if (!code) return;
+		importBtn.disabled = true;
+		status.textContent = "";
+		status.className = "settings-code-status";
+		try {
+			const applied = await opts.onImport(code);
+			importField.value = "";
+			opts.onApplied(applied);
+		} catch (err) {
+			status.textContent = errorMessage(err) || "Invalid settings code";
+			status.classList.add("err");
+		} finally {
+			importBtn.disabled = false;
+		}
+	};
+
+	refresh();
+}
+
+export function clampToRange(v: number, min?: number, max?: number): number {
+	if (typeof min === "number" && v < min) v = min;
+	if (typeof max === "number" && v > max) v = max;
+	return v;
+}
+export function renderRadioPills<T extends string>(container: HTMLElement, options: readonly T[], selected: T, onChange: (value: T) => void): void {
+	container.innerHTML = "";
+	options.forEach((opt) => {
+		const pill = document.createElement("div");
+		pill.className = `radio-pill${opt === selected ? " selected" : ""}`;
+		pill.textContent = opt;
+		pill.onclick = () => {
+			container.querySelectorAll(".radio-pill").forEach((p) => p.classList.remove("selected"));
+			pill.classList.add("selected");
+			onChange(opt);
+		};
+		container.appendChild(pill);
+	});
+}
+
+export function renderGpuDevicePicker(container: HTMLElement, devices: GpuDevice[], selectedId: string, onChange: (value: string) => void): void {
+	container.innerHTML = "";
+	if (!devices || devices.length === 0) {
+		container.style.display = "none";
+		return;
+	}
+	container.style.display = "";
+	if (devices.length === 1) {
+		const d = devices[0]!;
+		const info = document.createElement("div");
+		info.className = "gpu-device-info";
+		info.textContent = `Device: ${d.deviceName.split("(")[0]?.trim()} (${d.id})`;
+		container.appendChild(info);
+		// ensure config still carries the id
+		if (selectedId !== d.id) onChange(d.id);
+		return;
+	}
+	for (const d of devices) {
+		const label = document.createElement("label");
+		label.className = "radio-pill";
+		const input = document.createElement("input");
+		input.type = "radio";
+		input.name = container.id + "-radio";
+		input.value = d.id;
+		input.checked = d.id === selectedId;
+		input.onchange = () => onChange(d.id);
+		const text = document.createElement("span");
+		text.textContent = `${d.deviceName.split("(")[0]?.trim()} (${d.id})`;
+		label.appendChild(input);
+		label.appendChild(text);
+		container.appendChild(label);
+	}
+}
+
+export function renderAutoThresholds(container: HTMLElement, thresholds: AutoDenoiseThresholds, onChange: (value: AutoDenoiseThresholds) => void): void {
+	container.innerHTML = "";
+	const wrap = document.createElement("div");
+	wrap.className = "auto-threshold-grid";
+	for (const key of PARAM_LEVELS) {
+		const label = document.createElement("label");
+		label.className = "auto-threshold-row";
+		const span = document.createElement("span");
+		span.textContent = key;
+		const input = document.createElement("input");
+		input.type = "number";
+		input.step = "0.01";
+		input.min = "0";
+		input.max = "1";
+		input.value = String(thresholds[key]);
+		input.onchange = () => {
+			const v = clampFloat(input.value, 0, 1);
+			thresholds[key] = v;
+			input.value = String(v);
+			onChange({ ...thresholds });
+		};
+		label.appendChild(span);
+		label.appendChild(input);
+		wrap.appendChild(label);
+	}
+	container.appendChild(wrap);
+}
+
+export function renderBitrateInputs(
+	container: HTMLElement,
+	bitrates: AudioChannelBitrates,
+	onChange: (channel: keyof AudioChannelBitrates, value: number) => void,
+): void {
+	container.innerHTML = "";
+	CHANNELS.forEach((ch) => {
+		const field = document.createElement("div");
+		field.className = "bitrate-field";
+		field.innerHTML = `
+      <span>${ch.label}</span>
+      <input type="number" min="32" max="1024" step="16" value="${bitrates[ch.key] || 128}" data-ch="${ch.key}">
+    `;
+		const input = field.querySelector<HTMLInputElement>("input")!;
+		input.oninput = () => {
+			onChange(ch.key, parseInt(input.value) || 128);
+		};
+		container.appendChild(field);
+	});
+}
+
+export function renderDownscaleToggle(container: HTMLElement, checked: boolean, onChange: (value: boolean) => void): void {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Downscale 4K to 1080p";
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}
+
+export function renderSkipBoostingToggle(container: HTMLElement, checked: boolean, onChange: (value: boolean) => void): void {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Skip boosting";
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}
+
+export function renderNoPhaseInvToggle(container: HTMLElement, checked: boolean, onChange: (value: boolean) => void): void {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Disable phase inversion (--no-phase-inv)";
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}
+
+export function renderDedupeSubtitlesToggle(container: HTMLElement, checked: boolean, onChange: (value: boolean) => void): void {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Keep one subtitle per language and type";
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}
+
+export function renderKeepBestAudioChannelsToggle(container: HTMLElement, checked: boolean, onChange: (value: boolean) => void): void {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Keep only highest channel layout per language";
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}
+
+export function renderRemoveCommentaryAudioToggle(container: HTMLElement, checked: boolean, onChange: (value: boolean) => void): void {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = "\u00A0Remove commentary audio tracks";
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}
+
+export function renderAudioLanguagesInput(container: HTMLElement, value: string[], onChange: (value: string[]) => void): void {
+	container.innerHTML = "";
+
+	const input = document.createElement("input");
+	input.type = "text";
+	input.className = "lang-filter-input";
+	input.placeholder = "jpn, eng (empty = keep all)";
+	input.value = (value || []).join(", ");
+
+	const hint = document.createElement("div");
+	hint.className = "lang-filter-hint";
+	hint.textContent = "Comma-separated ISO codes. Empty keeps every track.";
+
+	input.oninput = () =>
+		onChange(
+			input.value
+				.split(",")
+				.map((s) => s.trim())
+				.filter((s) => s.length > 0),
+		);
+
+	container.appendChild(input);
+	container.appendChild(hint);
+}
+
+export function renderLanguageFilterInput(container: HTMLElement, value: string[], onChange: (value: string[]) => void): void {
+	container.innerHTML = "";
+
+	const input = document.createElement("input");
+	input.type = "text";
+	input.className = "lang-filter-input";
+	input.placeholder = "jpn, eng (empty = keep all)";
+	input.value = (value || []).join(", ");
+
+	const hint = document.createElement("div");
+	hint.className = "lang-filter-hint";
+	hint.textContent = "Comma-separated ISO codes. Empty keeps every track.";
+
+	input.oninput = () =>
+		onChange(
+			input.value
+				.split(",")
+				.map((s) => s.trim())
+				.filter((s) => s.length > 0),
+		);
+
+	container.appendChild(input);
+	container.appendChild(hint);
+}
+
+export function renderNlmeansParamsEditor(container: HTMLElement, params: NlmeansLevelParams, onChange: (value: NlmeansLevelParams) => void): void {
+	container.innerHTML = "";
+	const grid = document.createElement("div");
+	grid.className = "nlmeans-params-grid";
+
+	// Header row
+	for (const label of ["", "s (strength)", "p (patch)", "r (research)"]) {
+		const cell = document.createElement("div");
+		cell.className = "nlmeans-params-header";
+		cell.textContent = label;
+		grid.appendChild(cell);
+	}
+
+	for (const level of PARAM_LEVELS) {
+		const labelCell = document.createElement("div");
+		labelCell.className = "nlmeans-params-label";
+		labelCell.textContent = level;
+		grid.appendChild(labelCell);
+
+		// s : float [1.0, 30.0]
+		const sInput = document.createElement("input");
+		sInput.type = "number";
+		sInput.step = "0.1";
+		sInput.min = "1";
+		sInput.max = "30";
+		sInput.value = String(params[level].s);
+		sInput.onchange = () => {
+			const v = clampFloat(sInput.value, 1.0, 30.0);
+			params[level].s = v;
+			sInput.value = String(v);
+			onChange(params);
+		};
+		grid.appendChild(sInput);
+
+		// p : odd int [1, 99]
+		const pInput = document.createElement("input");
+		pInput.type = "number";
+		pInput.step = "2";
+		pInput.min = "1";
+		pInput.max = "99";
+		pInput.value = String(params[level].p);
+		pInput.onchange = () => {
+			const v = forceOdd(clampInt(pInput.value, 1, 99));
+			params[level].p = v;
+			pInput.value = String(v);
+			onChange(params);
+		};
+		grid.appendChild(pInput);
+
+		// r : odd int [1, 99]
+		const rInput = document.createElement("input");
+		rInput.type = "number";
+		rInput.step = "2";
+		rInput.min = "1";
+		rInput.max = "99";
+		rInput.value = String(params[level].r);
+		rInput.onchange = () => {
+			const v = forceOdd(clampInt(rInput.value, 1, 99));
+			params[level].r = v;
+			rInput.value = String(v);
+			onChange(params);
+		};
+		grid.appendChild(rInput);
+	}
+
+	container.appendChild(grid);
+}
+
+export function renderGradfunParamsEditor(container: HTMLElement, params: GradfunLevelParams, onChange: (value: GradfunLevelParams) => void): void {
+	container.innerHTML = "";
+	const grid = document.createElement("div");
+	grid.className = "gradfun-params-grid";
+
+	// Header row
+	for (const label of ["", "strength", "radius"]) {
+		const cell = document.createElement("div");
+		cell.className = "gradfun-params-header";
+		cell.textContent = label;
+		grid.appendChild(cell);
+	}
+
+	for (const level of PARAM_LEVELS) {
+		const labelCell = document.createElement("div");
+		labelCell.className = "gradfun-params-label";
+		labelCell.textContent = level;
+		grid.appendChild(labelCell);
+
+		// strength : float [0.51, 64]
+		const sInput = document.createElement("input");
+		sInput.type = "number";
+		sInput.step = "0.1";
+		sInput.min = "0.51";
+		sInput.max = "64";
+		sInput.value = String(params[level].strength);
+		sInput.onchange = () => {
+			const v = clampFloat(sInput.value, 0.51, 64);
+			params[level].strength = v;
+			sInput.value = String(v);
+			onChange(params);
+		};
+		grid.appendChild(sInput);
+
+		// radius : int [8, 32]
+		const rInput = document.createElement("input");
+		rInput.type = "number";
+		rInput.step = "1";
+		rInput.min = "8";
+		rInput.max = "32";
+		rInput.value = String(params[level].radius);
+		rInput.onchange = () => {
+			const v = clampInt(rInput.value, 8, 32);
+			params[level].radius = v;
+			rInput.value = String(v);
+			onChange(params);
+		};
+		grid.appendChild(rInput);
+	}
+
+	container.appendChild(grid);
+}

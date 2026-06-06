@@ -1483,6 +1483,12 @@ code {
 	border: 1px solid var(--accent);
 }
 
+.sub-badge-original {
+	background: rgba(16, 185, 129, 0.1);
+	color: var(--green);
+	border: 1px solid var(--green);
+}
+
 .sub-badge-forced {
 	background: rgba(245, 158, 11, 0.1);
 	color: var(--amber);

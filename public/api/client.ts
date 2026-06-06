@@ -1,0 +1,264 @@
+import Blake2b from "@rabbit-company/blake2b";
+import type { Job, JobSettings, PreviewState, VsFilterEntry, VsPresetManifest } from "../types";
+import type { BenchmarkState, FetchOptions, GpuDevice, SystemStats } from "../ui/models";
+import { API } from "../config/api-base";
+import { startPolling, stopPolling } from "../features/polling";
+import { buttonById, byId, inputById } from "../shared/dom";
+import { appState } from "../state";
+
+export function hashPassword(password: string): string {
+	return Blake2b.hash(`rabbitencoder-${password}`);
+}
+
+export function showLogin(message: string): void {
+	const modal = byId("login-modal");
+	const error = byId("login-error");
+	const input = inputById("login-password");
+	error.textContent = message || "";
+	input.value = "";
+	modal.style.display = "";
+	input.focus();
+}
+
+export function hideLogin() {
+	byId("login-modal").style.display = "none";
+}
+
+export async function handleLogin() {
+	const input = inputById("login-password");
+	const password = input.value.trim();
+	if (!password) return;
+
+	const btn = buttonById("login-submit-btn");
+	btn.disabled = true;
+	btn.textContent = "Verifying...";
+
+	appState.authToken = hashPassword(password);
+
+	try {
+		const res = await fetch(`${API}/api/config`, {
+			headers: { Authorization: `Bearer ${appState.authToken}` },
+		});
+
+		if (res.status === 401 || res.status === 403) {
+			byId("login-error").textContent = "Invalid password";
+			input.value = "";
+			input.focus();
+			return;
+		}
+
+		if (!res.ok) {
+			byId("login-error").textContent = `Server error (${res.status})`;
+			return;
+		}
+
+		localStorage.setItem("authToken", appState.authToken);
+		hideLogin();
+		appState.defaults = await res.json();
+		startPolling();
+	} catch (e) {
+		byId("login-error").textContent = "Cannot reach server";
+	} finally {
+		btn.disabled = false;
+		btn.textContent = "Login";
+	}
+}
+
+export function logout() {
+	appState.authToken = "";
+	localStorage.removeItem("authToken");
+	appState.defaults = null;
+	appState.lastJobsJson = "";
+	stopPolling();
+	byId("jobs-list").style.display = "none";
+	byId("empty-state").style.display = "";
+	showLogin("");
+}
+
+export async function authFetch(url: string, opts: FetchOptions = {}): Promise<Response> {
+	const headers = new Headers(opts.headers);
+	if (appState.authToken) {
+		headers.set("Authorization", `Bearer ${appState.authToken}`);
+	}
+	const res = await fetch(url, { ...opts, headers });
+
+	if (res.status === 401 || res.status === 403) {
+		appState.authToken = "";
+		localStorage.removeItem("authToken");
+		stopPolling();
+		showLogin("Session expired, please log in again");
+		throw new Error("Unauthorized");
+	}
+
+	return res;
+}
+
+export async function fetchOpenClDevices(): Promise<GpuDevice[]> {
+	if (appState.openClDevices !== null) return appState.openClDevices;
+	try {
+		const res = await authFetch(`${API}/api/opencl-devices`);
+		const data = await res.json();
+		appState.openClDevices = data.devices || [];
+	} catch {
+		appState.openClDevices = [];
+	}
+	return appState.openClDevices ?? [];
+}
+
+export async function fetchVulkanDevices(): Promise<GpuDevice[]> {
+	if (appState.vulkanDevices !== null) return appState.vulkanDevices;
+	try {
+		const res = await authFetch(`${API}/api/vulkan-devices`);
+		const data = await res.json();
+		appState.vulkanDevices = data.devices || [];
+	} catch {
+		appState.vulkanDevices = [];
+	}
+	return appState.vulkanDevices ?? [];
+}
+
+export async function fetchJobs(): Promise<Job[]> {
+	const res = await authFetch(`${API}/api/jobs`);
+	return res.json();
+}
+
+export async function fetchConfig(): Promise<JobSettings> {
+	const res = await authFetch(`${API}/api/config`);
+	return res.json();
+}
+
+export async function fetchQueueState(): Promise<{ paused: boolean }> {
+	const res = await authFetch(`${API}/api/queue`);
+	return res.json();
+}
+
+export async function pauseQueueRequest() {
+	const res = await authFetch(`${API}/api/queue/pause`, { method: "POST" });
+	return res.json();
+}
+
+export async function resumeQueueRequest() {
+	const res = await authFetch(`${API}/api/queue/resume`, { method: "POST" });
+	return res.json();
+}
+
+export async function fetchSystemStats(): Promise<SystemStats> {
+	const res = await authFetch(`${API}/api/system`);
+	return res.json();
+}
+
+export async function fetchBenchmark(): Promise<BenchmarkState> {
+	const res = await authFetch(`${API}/api/benchmark`);
+	return res.json();
+}
+
+export async function startBenchmarkRun() {
+	const res = await authFetch(`${API}/api/benchmark`, { method: "POST" });
+	return res.json();
+}
+
+export async function cancelBenchmarkRun() {
+	const res = await authFetch(`${API}/api/benchmark`, { method: "DELETE" });
+	return res.json();
+}
+
+export async function patchConfig(settings: JobSettings): Promise<JobSettings> {
+	const res = await authFetch(`${API}/api/config`, {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(settings),
+	});
+	return res.json();
+}
+
+export async function resetConfigRequest() {
+	const res = await authFetch(`${API}/api/config/reset`, { method: "POST" });
+	return res.json();
+}
+
+export async function encodeSettingsCodeRequest(settings: JobSettings): Promise<string> {
+	try {
+		const res = await authFetch(`${API}/api/settings/encode`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(settings),
+		});
+		if (!res.ok) return "";
+		return (await res.json()).code || "";
+	} catch {
+		return "";
+	}
+}
+
+export async function decodeSettingsCodeRequest(code: string): Promise<JobSettings> {
+	const res = await authFetch(`${API}/api/settings/decode`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ code }),
+	});
+	const data = await res.json();
+	if (!res.ok) throw new Error(data.error || "Invalid settings code");
+	return data.settings;
+}
+
+export async function patchJob(id: string, settings: JobSettings): Promise<Job> {
+	const res = await authFetch(`${API}/api/jobs/${id}`, {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(settings),
+	});
+	return res.json();
+}
+
+export async function deleteJob(id: string): Promise<void> {
+	await authFetch(`${API}/api/jobs/${id}`, { method: "DELETE" });
+}
+
+export async function retryJob(id: string): Promise<void> {
+	await authFetch(`${API}/api/jobs/${id}/retry`, { method: "POST" });
+}
+
+export async function cancelJob(id: string): Promise<void> {
+	await authFetch(`${API}/api/jobs/${id}/cancel`, { method: "POST" });
+}
+
+export async function reorderQueue(orderedIds: string[]): Promise<void> {
+	await authFetch(`${API}/api/jobs/reorder`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ ids: orderedIds }),
+	});
+}
+
+export async function fetchPreviewState(jobId: string): Promise<PreviewState> {
+	const res = await authFetch(`${API}/api/jobs/${jobId}/preview`);
+	return res.json();
+}
+
+export async function startPreviewRequest(jobId: string): Promise<PreviewState> {
+	const res = await authFetch(`${API}/api/jobs/${jobId}/preview`, { method: "POST" });
+	return res.json();
+}
+
+export async function cancelPreviewRequest(jobId: string): Promise<PreviewState> {
+	const res = await authFetch(`${API}/api/jobs/${jobId}/preview`, { method: "DELETE" });
+	return res.json();
+}
+
+export async function fetchVsPresets(force = false): Promise<VsPresetManifest[]> {
+	if (appState.vsPresets !== null && !force) return appState.vsPresets;
+	const res = await authFetch(`${API}/api/vs-presets`);
+	const data = await res.json();
+	appState.vsPresets = data.presets || [];
+	return appState.vsPresets ?? [];
+}
+
+export async function reloadVsPresets(): Promise<VsPresetManifest[]> {
+	await authFetch(`${API}/api/vs-presets/reload`, { method: "POST" });
+	return fetchVsPresets(true);
+}
+
+export async function fetchVsDefaultEntry(presetId: string): Promise<VsFilterEntry> {
+	const res = await authFetch(`${API}/api/vs-presets/${encodeURIComponent(presetId)}/default-entry`);
+	return res.json();
+}
