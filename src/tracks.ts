@@ -450,18 +450,6 @@ export function extractSourceTag(title: string | undefined): string | null {
 }
 
 /**
- * A subtitle is flagged "original" when it comes from an official source
- * rather than a fan edit:
- *   - PGS (Blu-ray) bitmap subtitles
- *   - DVD (VOBSUB) bitmap subtitles
- *   - a recognized source/service tag in the title (NF, CR, AMZN, *BD/*DVD/*UHD, ...)
- */
-export function shouldFlagSubtitleAsOriginal(stream: SubtitleStreamInfo): boolean {
-	if (isPgsSubtitleCodec(stream.codec) || isDvdSubtitleCodec(stream.codec)) return true;
-	return extractSourceTag(stream.title) !== null;
-}
-
-/**
  * Build a clean track name for a subtitle stream.
  *
  * Examples:
@@ -956,17 +944,6 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 		if (normalized && normalized !== stream.language) {
 			Logger.info(`[subtitle] Track ${stream.index}: normalizing language "${stream.language}" → "${normalized}" (bibliographic → terminology)`);
 			stream.language = normalized;
-		}
-	}
-
-	// Flag subtitles that originate from an official source as "original".
-	// Preserve any original flag already set by the probe disposition.
-	for (const stream of streams) {
-		if (stream.isOriginal) continue;
-		if (shouldFlagSubtitleAsOriginal(stream)) {
-			stream.isOriginal = true;
-			const reason = isPgsSubtitleCodec(stream.codec) ? "PGS" : isDvdSubtitleCodec(stream.codec) ? "DVD" : `source tag ${extractSourceTag(stream.title)}`;
-			Logger.info(`[subtitle] Track ${stream.index}: setting original flag (${reason})`);
 		}
 	}
 

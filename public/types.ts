@@ -169,6 +169,7 @@ export interface ProbeResult {
 	videoStreamFps: number;
 	videoDisplayFps: number;
 	videoLanguage: string;
+	videoOriginalFlag: boolean;
 	isFrameRateMismatch: boolean;
 	priorSource: string | null;
 	priorRabbitSettings: string | null;

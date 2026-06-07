@@ -20,6 +20,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV RUSTICL_ENABLE=radeonsi,iris,nouveau
 ENV OCL_ICD_VENDORS=/etc/OpenCL/vendors
 
+ENV LC_ALL=C.UTF-8
+ENV LANG=C.UTF-8
+
 # Base packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
 	ca-certificates \

@@ -60,6 +60,7 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 
 	const displayAspectRatio = best.display_aspect_ratio || "";
 	const videoLanguage = best.tags?.language || "und";
+	const videoOriginalFlag = best.disposition?.original === 1;
 
 	// Mediainfo
 	const mi = await mediainfoJson(inputPath);
@@ -157,6 +158,7 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		videoStreamFps,
 		videoDisplayFps,
 		videoLanguage,
+		videoOriginalFlag,
 		isFrameRateMismatch,
 		priorSource: priorTags.source,
 		priorRabbitSettings: priorTags.rabbitSettings,
