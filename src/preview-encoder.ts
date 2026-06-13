@@ -432,6 +432,9 @@ async function encodeSample(
 		onProgress(0.25, "Encoding (Auto-Boost-Essential)");
 
 		const colorParams = svtColorParamsFromProbe(probe);
+		const custom = job.settings.customEncoderParams?.trim() ?? "";
+		const finalParams = custom ? `${colorParams} ${custom}` : colorParams;
+
 		const abeArgs = [
 			"python3",
 			"-u",
@@ -447,7 +450,7 @@ async function encodeSample(
 			"--fast-params",
 			colorParams,
 			"--final-params",
-			colorParams,
+			finalParams,
 			"--json-stream",
 		];
 		if (job.settings.skipBoosting) abeArgs.push("-nb");

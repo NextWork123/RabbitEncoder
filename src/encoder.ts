@@ -430,6 +430,9 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 			if (enc.usesAutoBoost) {
 				const colorParams = svtColorParamsFromProbe(probe);
+				const custom = job.settings.customEncoderParams?.trim() ?? "";
+				const finalParams = custom ? `${colorParams} ${custom}` : colorParams;
+
 				const abeArgs = [
 					"python3",
 					"-u",
@@ -445,7 +448,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					"--fast-params",
 					colorParams,
 					"--final-params",
-					colorParams,
+					finalParams,
 					"--json-stream",
 				];
 
