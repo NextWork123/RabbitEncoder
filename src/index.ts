@@ -255,7 +255,7 @@ app.get("/api/jobs/:id/preview/sample/:index/:kind", (c) => {
 
 	if (Number.isNaN(idx)) return c.json({ error: "Bad request" }, 400);
 
-	const isStandard = kind === "source" || kind === "encode" || kind === "clip";
+	const isStandard = kind === "source" || kind === "encode" || kind === "clip" || kind === "source-clip";
 	const isVsStep = /^vs:\d+$/.test(kind);
 	const isPrepareStep = /^pf:(?:downscale|deband|denoise)$/.test(kind);
 	if (!isStandard && !isVsStep && !isPrepareStep) {
@@ -267,11 +267,12 @@ app.get("/api/jobs/:id/preview/sample/:index/:kind", (c) => {
 
 	const file = Bun.file(path);
 
-	if (kind === "clip") {
+	if (kind === "clip" || kind === "source-clip") {
+		const clipName = kind === "source-clip" ? "source" : "encode";
 		return new Response(file, {
 			headers: {
 				"Content-Type": "video/x-matroska",
-				"Content-Disposition": `attachment; filename="job_${jobId}_sample_${idx + 1}.mkv"`,
+				"Content-Disposition": `attachment; filename="job_${jobId}_sample_${idx + 1}_${clipName}.mkv"`,
 				"Cache-Control": "private, max-age=0, must-revalidate",
 			},
 		});

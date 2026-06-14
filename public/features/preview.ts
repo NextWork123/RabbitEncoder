@@ -193,9 +193,10 @@ export function renderPreviewSamples(jobId: string, samples: PreviewSample[]): v
 					<span class="meta-value">${escapeHtml(projected)}</span>
 				</div>
 				<div class="preview-sample-actions">
-					<button class="btn btn-ghost" data-dl="source">Source</button>
-					<button class="btn btn-ghost" data-dl="encode">Encode</button>
-					<button class="btn btn-ghost" data-dl="clip">Clip</button>
+					<button class="btn btn-ghost" data-dl="source">PNG (S)</button>
+					<button class="btn btn-ghost" data-dl="encode">PNG (E)</button>
+					<button class="btn btn-ghost" data-dl="source-clip">MKV (S)</button>
+					<button class="btn btn-ghost" data-dl="clip">MKV (E)</button>
 				</div>
 			</div>`;
 
@@ -334,8 +335,9 @@ export async function downloadPreviewSampleArtifact(jobId: string, idx: number, 
 		const url = await fetchPreviewArtifactBlob(jobId, idx, kind);
 		const a = document.createElement("a");
 		a.href = url;
-		const ext = kind === "clip" ? "mkv" : "png";
-		const role = kind === "clip" ? "clip" : `${kind}-frame`;
+		const isClip = kind === "clip" || kind === "source-clip";
+		const ext = isClip ? "mkv" : "png";
+		const role = isClip ? kind : `${kind}-frame`;
 		a.download = `preview-${role}-sample${idx + 1}.${ext}`;
 		document.body.appendChild(a);
 		a.click();

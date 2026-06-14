@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync, rmSync, statSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from "fs";
 import { join, parse as parsePath } from "path";
 import type { AppConfig, Job, JobSettings, PreviewSample, PreviewSamplePrepareFrame, PreviewSampleVsFrame, PreviewState, ProbeResult } from "./types";
 import { probeFile } from "./probe";
@@ -162,6 +162,7 @@ async function encodeSample(
 	const encodedClip = join(ctx.dir, "encoded.mkv");
 	const sourceFrame = join(ctx.dir, "source.png");
 	const encodeFrame = join(ctx.dir, "encode.png");
+	const sourceClipKept = join(ctx.dir, "source_clip.mkv");
 
 	const checkCancelled = () => {
 		if (signal.aborted) throw new CancelledError();
@@ -204,6 +205,16 @@ async function encodeSample(
 	const sourceFrameRes = await run(buildPreviewPngExtractArgs(sourceClip, frameOffset, sourceFrame, colorInfo, probe), { signal });
 	if (sourceFrameRes.code !== 0) {
 		throw new Error(`Source frame extraction failed: ${sourceFrameRes.stderr.slice(-500)}`);
+	}
+
+	// 1b. Preserve the raw (pre-filter) source clip for A/B download. The working
+	// `sourceClip` is overwritten by the VS chain and deleted on cleanup, so copy
+	// the untouched FFV1 extract now.
+	checkCancelled();
+	try {
+		copyFileSync(sourceClip, sourceClipKept);
+	} catch (err: any) {
+		Logger.warn(`[preview] Failed to preserve source clip for sample ${ctx.index}: ${err?.message || err}`);
 	}
 
 	// 1.5. VapourSynth filter chain
@@ -800,6 +811,8 @@ export function resolvePreviewArtifact(config: AppConfig, jobId: string, sampleI
 		file = join(dir, "encode.png");
 	} else if (kind === "clip") {
 		file = join(dir, "encoded.mkv");
+	} else if (kind === "source-clip") {
+		file = join(dir, "source_clip.mkv");
 	} else if (kind.startsWith("vs:")) {
 		const m = kind.match(/^vs:(\d+)$/);
 		if (!m) return null;
