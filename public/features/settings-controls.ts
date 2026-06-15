@@ -1,7 +1,7 @@
 import type { AudioChannelBitrates, AutoDenoiseThresholds, GradfunLevelParams, JobSettings, NlmeansLevelParams } from "../types";
 import type { GpuDevice, SettingsCodePanelElement, SettingsCodePanelOptions } from "../ui/models";
 import { encodeSettingsCodeRequest } from "../api/client";
-import { CHANNELS, ENCODERS, ENCODER_HELP, ENCODER_IDS, PARAM_LEVELS, TUNE_OPTIONS } from "../config/options";
+import { CHANNELS, ENCODERS, ENCODER_HELP, ENCODER_IDS, PARAM_LEVELS } from "../config/options";
 import { clampFloat, clampInt, forceOdd } from "./job-render";
 import { byId } from "../shared/dom";
 import { errorMessage } from "../shared/errors";
@@ -60,33 +60,16 @@ export function wireEncoderControls(prefix: "default" | "job", settings: JobSett
 		if (presetVal) presetVal.textContent = `(${preset})`;
 	}
 	const setCrf = (v: number | string) => {
-		v = Math.min(63, Math.max(0, Math.round(+v || 0)));
+		v = Math.min(70, Math.max(1, Math.round(+v || 0)));
 		settings.manualCrf = v;
 		syncManual();
 	};
 	crfSlider.oninput = () => setCrf(crfSlider.value);
 	crfInput.oninput = () => setCrf(crfInput.value);
 	presetSlider.oninput = () => {
-		settings.manualPreset = Math.min(13, Math.max(0, Math.round(+presetSlider.value || 0)));
+		settings.manualPreset = Math.min(13, Math.max(-1, Math.round(+presetSlider.value || 0)));
 		if (presetVal) presetVal.textContent = `(${settings.manualPreset})`;
 	};
-
-	const tuneEl = byId<HTMLSelectElement>(`${prefix}-tune`);
-	if (tuneEl) {
-		tuneEl.innerHTML = "";
-		for (const opt of TUNE_OPTIONS) {
-			const o = document.createElement("option");
-			o.value = String(opt.value);
-			o.textContent = opt.label;
-			tuneEl.appendChild(o);
-		}
-		const curTune = settings.tune ?? 1;
-		tuneEl.value = TUNE_OPTIONS.some((o) => o.value === curTune) ? String(curTune) : "1";
-		settings.tune = parseInt(tuneEl.value, 10);
-		tuneEl.onchange = () => {
-			settings.tune = parseInt(tuneEl.value, 10);
-		};
-	}
 
 	syncManual();
 	applyVisibility();

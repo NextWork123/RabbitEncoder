@@ -154,14 +154,11 @@ export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
 	if (isValidEncoder(settings.encoder)) {
 		appConfig.defaults.encoder = settings.encoder;
 	}
-	if (typeof settings.tune === "number" && Number.isFinite(settings.tune)) {
-		appConfig.defaults.tune = Math.min(5, Math.max(0, settings.tune));
-	}
 	if (typeof settings.manualCrf === "number" && Number.isFinite(settings.manualCrf)) {
-		appConfig.defaults.manualCrf = Math.min(63, Math.max(0, settings.manualCrf));
+		appConfig.defaults.manualCrf = Math.min(70, Math.max(1, settings.manualCrf));
 	}
 	if (typeof settings.manualPreset === "number" && Number.isFinite(settings.manualPreset)) {
-		appConfig.defaults.manualPreset = Math.min(13, Math.max(0, Math.round(settings.manualPreset)));
+		appConfig.defaults.manualPreset = Math.min(13, Math.max(-1, Math.round(settings.manualPreset)));
 	}
 	if (typeof settings.customEncoderParams === "string") {
 		appConfig.defaults.customEncoderParams = settings.customEncoderParams.slice(0, 2000);
@@ -401,14 +398,11 @@ export function updateJobSettings(id: string, settings: Partial<JobSettings>): J
 	if (isValidEncoder(settings.encoder)) {
 		job.settings.encoder = settings.encoder;
 	}
-	if (typeof settings.tune === "number" && Number.isFinite(settings.tune)) {
-		job.settings.tune = Math.min(5, Math.max(0, settings.tune));
-	}
 	if (typeof settings.manualCrf === "number" && Number.isFinite(settings.manualCrf)) {
-		job.settings.manualCrf = Math.min(63, Math.max(0, settings.manualCrf));
+		job.settings.manualCrf = Math.min(70, Math.max(1, settings.manualCrf));
 	}
 	if (typeof settings.manualPreset === "number" && Number.isFinite(settings.manualPreset)) {
-		job.settings.manualPreset = Math.min(13, Math.max(0, Math.round(settings.manualPreset)));
+		job.settings.manualPreset = Math.min(13, Math.max(-1, Math.round(settings.manualPreset)));
 	}
 	if (typeof settings.customEncoderParams === "string") {
 		job.settings.customEncoderParams = settings.customEncoderParams.slice(0, 2000);

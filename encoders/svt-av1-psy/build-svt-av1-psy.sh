@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SRC=/src/svt-av1-hdr
+SRC=/src/svt-av1-psy
 OUT=/out
 mkdir -p "$OUT"
 
@@ -60,7 +60,7 @@ build_one() {
   local level_num="$2"   # e.g. 3
 
   echo
-  echo "==== Building SVT-AV1-HDR for ${level} ===="
+  echo "==== Building SVT-AV1-PSY for ${level} ===="
 
   rm -rf "$SRC/Build/linux/Release" "$SRC/Bin/Release"
 

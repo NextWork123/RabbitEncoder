@@ -200,24 +200,30 @@ COPY vapoursynth/ /app/vapoursynth/
 ARG CDN_BASE="https://cdn.rabbit-company.com/rabbit-encoder/binaries"
 RUN mkdir -p /opt/binaries/x86_64_v2 /opt/binaries/x86_64_v3 /opt/binaries/x86_64_v4 \
  && curl -fsSL --retry 2 "${CDN_BASE}/language-detector" -o /opt/binaries/language-detector \
- && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v2/SvtAv1EncApp" -o /opt/binaries/x86_64_v2/SvtAv1EncApp \
- && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v3/SvtAv1EncApp" -o /opt/binaries/x86_64_v3/SvtAv1EncApp \
- && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v4/SvtAv1EncApp" -o /opt/binaries/x86_64_v4/SvtAv1EncApp \
+ && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v2/SVT-AV1-Essential" -o /opt/binaries/x86_64_v2/SVT-AV1-Essential \
+ && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v3/SVT-AV1-Essential" -o /opt/binaries/x86_64_v3/SVT-AV1-Essential \
+ && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v4/SVT-AV1-Essential" -o /opt/binaries/x86_64_v4/SVT-AV1-Essential \
  && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v2/SVT-AV1-HDR" -o /opt/binaries/x86_64_v2/SVT-AV1-HDR \
  && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v3/SVT-AV1-HDR" -o /opt/binaries/x86_64_v3/SVT-AV1-HDR \
  && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v4/SVT-AV1-HDR" -o /opt/binaries/x86_64_v4/SVT-AV1-HDR \
+ && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v2/SVT-AV1-PSY" -o /opt/binaries/x86_64_v2/SVT-AV1-PSY \
+ && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v3/SVT-AV1-PSY" -o /opt/binaries/x86_64_v3/SVT-AV1-PSY \
+ && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v4/SVT-AV1-PSY" -o /opt/binaries/x86_64_v4/SVT-AV1-PSY \
  && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v2/ffmpeg.tar.zst" -o /opt/binaries/x86_64_v2/ffmpeg.tar.zst \
  && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v3/ffmpeg.tar.zst" -o /opt/binaries/x86_64_v3/ffmpeg.tar.zst \
  && curl -fsSL --retry 2 "${CDN_BASE}/x86_64_v4/ffmpeg.tar.zst" -o /opt/binaries/x86_64_v4/ffmpeg.tar.zst \
 # Make encoder binaries executable
  && chmod +x \
 	/opt/binaries/language-detector \
-	/opt/binaries/x86_64_v2/SvtAv1EncApp \
-	/opt/binaries/x86_64_v3/SvtAv1EncApp \
-	/opt/binaries/x86_64_v4/SvtAv1EncApp \
+	/opt/binaries/x86_64_v2/SVT-AV1-Essential \
+	/opt/binaries/x86_64_v3/SVT-AV1-Essential \
+	/opt/binaries/x86_64_v4/SVT-AV1-Essential \
 	/opt/binaries/x86_64_v2/SVT-AV1-HDR \
 	/opt/binaries/x86_64_v3/SVT-AV1-HDR \
 	/opt/binaries/x86_64_v4/SVT-AV1-HDR \
+	/opt/binaries/x86_64_v2/SVT-AV1-PSY \
+	/opt/binaries/x86_64_v3/SVT-AV1-PSY \
+	/opt/binaries/x86_64_v4/SVT-AV1-PSY \
 # Extract FFmpeg tarballs
  && mkdir -p /opt \
  && tar --zstd -xpf /opt/binaries/x86_64_v2/ffmpeg.tar.zst -C /opt \

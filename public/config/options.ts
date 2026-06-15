@@ -19,28 +19,22 @@ export const ENCODERS: Record<
 	"svt-av1-essential": {
 		label: "SVT-AV1-Essential",
 		usesAutoBoost: true,
-		crfMin: 0,
-		crfMax: 63,
-		presetMin: 0,
+		crfMin: 1,
+		crfMax: 70,
+		presetMin: -1,
 		presetMax: 13,
 		defaultCrf: 28,
 		defaultPreset: 4,
 	},
-	"svt-av1-hdr": { label: "SVT-AV1-HDR", usesAutoBoost: false, crfMin: 0, crfMax: 63, presetMin: 0, presetMax: 13, defaultCrf: 24, defaultPreset: 4 },
+	"svt-av1-hdr": { label: "SVT-AV1-HDR", usesAutoBoost: false, crfMin: 1, crfMax: 70, presetMin: -1, presetMax: 13, defaultCrf: 24, defaultPreset: 4 },
+	"svt-av1-psy": { label: "SVT-AV1-PSY", usesAutoBoost: false, crfMin: 1, crfMax: 70, presetMin: -1, presetMax: 13, defaultCrf: 24, defaultPreset: 4 },
 };
 export const ENCODER_IDS = Object.keys(ENCODERS) as EncoderId[];
 export const ENCODER_HELP: Record<EncoderId, string> = {
-	"svt-av1-essential": "Auto-Boost-Essential: per-scene CRF optimization.",
-	"svt-av1-hdr": "Direct encode with manual CRF / preset. No auto-boost.",
+	"svt-av1-essential": "Easiest to use (automatic per-scene CRF optimization)",
+	"svt-av1-hdr": "Recommended for live-action content.",
+	"svt-av1-psy": "Recommended for anime and animation.",
 };
-
-export const TUNE_OPTIONS = [
-	{ value: 0, label: "0 - VQ (max detail retention)" },
-	{ value: 1, label: "1 - PSNR (default)" },
-	{ value: 2, label: "2 - SSIM" },
-	{ value: 4, label: "4 - MS-SSIM" },
-	{ value: 5, label: "5 - Film Grain" },
-];
 
 export const QUALITIES: readonly EncoderQuality[] = ["low", "medium", "high"];
 export const SPEEDS: readonly EncoderSpeed[] = ["slower", "slow", "medium", "fast", "faster"];

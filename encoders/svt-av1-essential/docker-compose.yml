@@ -1,13 +1,13 @@
 services:
-  svt-av1-hdr-builder:
+  svt-av1-essential-builder:
     build:
       context: .
       args:
-        SVTAV1HDR_REPO: https://github.com/juliobbv-p/svt-av1-hdr.git
-        SVTAV1HDR_REF: v4.1.0
-    container_name: rabbit-svt-av1-hdr-builder
+        SVTAV1ESSENTIAL_REPO: https://github.com/nekotrix/SVT-AV1-Essential.git
+        SVTAV1ESSENTIAL_REF: v4.0.1-Essential
+    container_name: rabbit-svt-av1-essential-builder
     volumes:
-      - ./svt-av1-hdr-dist:/out
+      - ./svt-av1-essential-dist:/out
     environment:
       DEBIAN_FRONTEND: noninteractive
       # Set to 0 to disable profile-guided optimization (faster build, slightly

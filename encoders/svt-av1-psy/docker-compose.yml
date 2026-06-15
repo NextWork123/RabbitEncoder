@@ -1,13 +1,12 @@
 services:
-  svt-av1-hdr-builder:
+  svt-av1-psy-builder:
     build:
       context: .
       args:
-        SVTAV1HDR_REPO: https://github.com/juliobbv-p/svt-av1-hdr.git
-        SVTAV1HDR_REF: v4.1.0
-    container_name: rabbit-svt-av1-hdr-builder
+        SVTAV1PSY_REPO: https://github.com/5fish/svt-av1-psy.git
+    container_name: rabbit-svt-av1-psy-builder
     volumes:
-      - ./svt-av1-hdr-dist:/out
+      - ./svt-av1-psy-dist:/out
     environment:
       DEBIAN_FRONTEND: noninteractive
       # Set to 0 to disable profile-guided optimization (faster build, slightly

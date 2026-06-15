@@ -176,7 +176,7 @@ if args.debug:
     print("=" * 54)
 
     try:
-        result = subprocess.run(['SvtAv1EncApp'], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(['SVT-AV1-Essential'], capture_output=True, text=True, timeout=5)
 
         lines = result.stderr.splitlines()
         info_lines = [line for line in lines if line.startswith('Svt[info]')]
@@ -186,9 +186,9 @@ if args.debug:
     except subprocess.TimeoutExpired:
         print("Command timed out")
     except FileNotFoundError:
-        print("ERROR: SvtAv1EncApp not found. Make sure it's in your PATH")
+        print("ERROR: SVT-AV1-Essential not found. Make sure it's in your PATH")
     except PermissionError:
-        print("ERROR: Permission denied when trying to execute SvtAv1EncApp")
+        print("ERROR: Permission denied when trying to execute SVT-AV1-Essential")
     except Exception as e:
         print(f"An error occurred: {e}")
 
@@ -726,7 +726,7 @@ def fast_pass() -> None:
 
     if file_ext in [".y4m", ".yuv"]:
         fast_pass_command_y4m = [
-            'SvtAv1EncApp', '-i', src_file, *svt_resume_list,
+            'SVT-AV1-Essential', '-i', src_file, *svt_resume_list,
             '--progress', '2', *encoder_params_list, '-b', fast_output_file
         ]
         try:
@@ -738,7 +738,7 @@ def fast_pass() -> None:
             raise SystemExit(1)
     else:
         fast_svt_cmd = [
-            'SvtAv1EncApp', '-i', '-', '--progress', '0',
+            'SVT-AV1-Essential', '-i', '-', '--progress', '0',
             *encoder_params_list, '-b', fast_output_file
         ]
         track_progress(vspipe_resume_value, fast_svt_cmd, "fast")
@@ -770,7 +770,7 @@ def final_pass() -> None:
 
     if file_ext in [".y4m", ".yuv"]:
         final_pass_command_y4m = [
-            'SvtAv1EncApp', '-i', src_file, *svt_resume_list,
+            'SVT-AV1-Essential', '-i', src_file, *svt_resume_list,
             '--progress', '2', *encoder_params_list
         ]
         if not no_boosting:
@@ -785,7 +785,7 @@ def final_pass() -> None:
             raise SystemExit(1)
     else:
         final_svt_cmd = [
-            'SvtAv1EncApp', '-i', '-', '--progress', '0',
+            'SVT-AV1-Essential', '-i', '-', '--progress', '0',
             *encoder_params_list
         ]
         if not no_boosting:
