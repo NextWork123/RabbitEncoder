@@ -235,8 +235,12 @@ export async function fetchPreviewState(jobId: string): Promise<PreviewState> {
 	return res.json();
 }
 
-export async function startPreviewRequest(jobId: string): Promise<PreviewState> {
-	const res = await authFetch(`${API}/api/jobs/${jobId}/preview`, { method: "POST" });
+export async function startPreviewRequest(jobId: string, options?: { clipCount?: number; clipDuration?: number }): Promise<PreviewState> {
+	const res = await authFetch(`${API}/api/jobs/${jobId}/preview`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(options ?? {}),
+	});
 	return res.json();
 }
 

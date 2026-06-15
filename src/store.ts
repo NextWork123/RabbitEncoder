@@ -15,7 +15,7 @@ import { encodeJob, CancelledError } from "./encoder";
 import { isAlreadyEncoded } from "./library";
 import { Logger } from "./logger";
 import { normalizeNlmeansLevelParams, normalizeGradfunLevelParams } from "./filters";
-import { runPreviewEncode, deletePreviewDir, previewSettingsFingerprint, DEFAULT_PREVIEW_OPTIONS } from "./preview-encoder";
+import { runPreviewEncode, deletePreviewDir, previewSettingsFingerprint, DEFAULT_PREVIEW_OPTIONS, type PreviewEncodeOptions } from "./preview-encoder";
 import { normalizeVsFilterChain } from "./vs-filters";
 import { getDefaultJobSettings } from "./config";
 import { isValidEncoder } from "./encoders";
@@ -614,7 +614,7 @@ export function isPreviewRunning(): boolean {
 
 export type StartPreviewResult = { ok: true; state: PreviewState } | { ok: false; error: string; status: 400 | 404 | 409 };
 
-export function startPreview(jobId: string): StartPreviewResult {
+export function startPreview(jobId: string, options?: Partial<PreviewEncodeOptions>): StartPreviewResult {
 	if (activePreviewJobId !== null) {
 		return { ok: false, error: `Another preview is already running (job ${activePreviewJobId})`, status: 409 };
 	}
@@ -622,6 +622,8 @@ export function startPreview(jobId: string): StartPreviewResult {
 	const job = jobs.get(jobId);
 	if (!job) return { ok: false, error: "Job not found", status: 404 };
 	if (job.status === "done") return { ok: false, error: "Preview only available for unfinished jobs", status: 400 };
+
+	const opts: PreviewEncodeOptions = { ...DEFAULT_PREVIEW_OPTIONS, ...(options || {}) };
 
 	const controller = new AbortController();
 	activePreviewJobId = jobId;
@@ -634,8 +636,8 @@ export function startPreview(jobId: string): StartPreviewResult {
 		currentDetail: "Starting…",
 		samples: [],
 		settingsFingerprint: previewSettingsFingerprint(job.settings),
-		sampleCount: DEFAULT_PREVIEW_OPTIONS.sampleCount,
-		windowSeconds: DEFAULT_PREVIEW_OPTIONS.windowSeconds,
+		sampleCount: opts.sampleCount,
+		windowSeconds: opts.windowSeconds,
 		startedAt: Date.now(),
 	};
 	previews.set(jobId, state);
@@ -645,6 +647,7 @@ export function startPreview(jobId: string): StartPreviewResult {
 			await runPreviewEncode({
 				job,
 				config: appConfig,
+				options: opts,
 				signal: controller.signal,
 				onUpdate: (partial) => {
 					const cur = previews.get(jobId);

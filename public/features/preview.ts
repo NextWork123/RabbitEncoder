@@ -4,9 +4,10 @@ import { authFetch, cancelPreviewRequest, fetchJobs, fetchPreviewState, startPre
 import { API } from "../config/api-base";
 import { escapeHtml, formatBitrate2 } from "./job-render";
 import { previewSettingsFingerprintFE } from "./library-search";
-import { buttonById, byId } from "../shared/dom";
+import { buttonById, byId, inputById } from "../shared/dom";
 import { errorMessage } from "../shared/errors";
 import { appState } from "../state";
+import { humanFileSize } from "./library";
 
 export async function fetchPreviewArtifactBlob(jobId: string, idx: number, kind: PreviewArtifactKind): Promise<string> {
 	const cacheKey = `${jobId}:${idx}:${kind}`;
@@ -73,8 +74,63 @@ export async function refreshPreviewModal() {
 	}
 }
 
+export function initPreviewOptionControls() {
+	const countEl = inputById("preview-clip-count");
+	const durationEl = inputById("preview-clip-duration");
+	const countVal = byId("preview-clip-count-val");
+	const durationVal = byId("preview-clip-duration-val");
+
+	const syncCount = () => (countVal.textContent = `(${countEl.value})`);
+	const syncDuration = () => (durationVal.textContent = `(${durationEl.value}s)`);
+
+	countEl.oninput = syncCount;
+	durationEl.oninput = syncDuration;
+	syncCount();
+	syncDuration();
+}
+
+export function renderPreviewSummary(samples: PreviewSample[]): void {
+	const el = byId("preview-summary");
+	if (!samples.length) {
+		el.style.display = "none";
+		return;
+	}
+
+	const count = samples.length;
+	const projections = samples.map((s) => s.projectedTotalBytes || 0);
+	const avgProjected = projections.reduce((a, b) => a + b, 0) / count;
+	const minProjected = Math.min(...projections);
+	const maxProjected = Math.max(...projections);
+
+	const totalEncodedBytes = samples.reduce((a, s) => a + (s.encodedSizeBytes || 0), 0);
+	const totalSampledSec = samples.reduce((a, s) => a + (s.windowSeconds || 0), 0);
+	const avgBitrateKbps = totalSampledSec > 0 ? (totalEncodedBytes * 8) / 1000 / totalSampledSec : 0;
+
+	el.style.display = "";
+	el.innerHTML = `
+		<div class="preview-summary-headline">
+			<span class="preview-summary-label">Estimated final size</span>
+			<span class="preview-summary-value">~${humanFileSize(avgProjected)}</span>
+		</div>
+		<div class="preview-summary-grid">
+			<div class="preview-summary-row">
+				<span class="meta-label">Likely range</span>
+				<span class="meta-value">${humanFileSize(minProjected)} - ${humanFileSize(maxProjected)}</span>
+			</div>
+			<div class="preview-summary-row">
+				<span class="meta-label">Avg bitrate</span>
+				<span class="meta-value">${formatBitrate2(Math.round(avgBitrateKbps))}</span>
+			</div>
+			<div class="preview-summary-row">
+				<span class="meta-label">Based on</span>
+				<span class="meta-value">${count} clip${count === 1 ? "" : "s"} · ${totalSampledSec}s sampled</span>
+			</div>
+		</div>`;
+}
+
 export function renderPreviewState(state: PreviewState): void {
 	const introEl = byId("preview-intro");
+	const optionsEl = byId("preview-options");
 	const statusEl = byId("preview-status");
 	const errorEl = byId("preview-error");
 	const samplesEl = byId("preview-samples");
@@ -92,6 +148,7 @@ export function renderPreviewState(state: PreviewState): void {
 	staleEl.style.display = stale && hasResults ? "" : "none";
 
 	introEl.style.display = status === "idle" ? "" : "none";
+	optionsEl.style.display = isRunning ? "none" : "";
 
 	if (isRunning) {
 		statusEl.style.display = "";
@@ -117,6 +174,7 @@ export function renderPreviewState(state: PreviewState): void {
 	} else {
 		samplesEl.style.display = "none";
 	}
+	renderPreviewSummary(state.samples || []);
 
 	runBtn.disabled = isRunning;
 	runBtn.textContent = isFinished || hasResults ? "Re-run Preview" : "Run Preview";
@@ -356,8 +414,16 @@ export async function handlePreviewRun() {
 	const samplesEl = byId("preview-samples");
 	if (samplesEl) samplesEl.dataset.renderedKey = "";
 
+	const clamp = (raw: string, def: number, min: number, max: number) => {
+		const n = Math.round(Number(raw));
+		if (!Number.isFinite(n)) return def;
+		return Math.min(max, Math.max(min, n));
+	};
+	const clipCount = clamp(inputById("preview-clip-count").value, 6, 1, 20);
+	const clipDuration = clamp(inputById("preview-clip-duration").value, 5, 1, 30);
+
 	try {
-		const result = await startPreviewRequest(appState.currentPreviewJobId);
+		const result = await startPreviewRequest(appState.currentPreviewJobId, { clipCount, clipDuration });
 		if (result.error) {
 			byId("preview-error").textContent = result.error;
 			byId("preview-error").style.display = "";

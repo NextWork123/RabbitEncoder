@@ -25,6 +25,7 @@ import {
 	handlePreviewCancel,
 	handlePreviewClear,
 	handlePreviewRun,
+	initPreviewOptionControls,
 	openPreviewFullscreen,
 	openPreviewModal,
 	togglePreviewSampleView,
@@ -96,6 +97,7 @@ export function initEventListeners() {
 	byId("preview-run-btn").addEventListener("click", handlePreviewRun);
 	byId("preview-cancel-btn").addEventListener("click", handlePreviewCancel);
 	byId("preview-clear-btn").addEventListener("click", handlePreviewClear);
+	initPreviewOptionControls();
 
 	byId("login-submit-btn").addEventListener("click", handleLogin);
 	byId("login-password").addEventListener("keydown", (e) => {

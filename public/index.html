@@ -515,9 +515,20 @@
 
 						<div id="preview-intro" class="preview-intro" style="display: none">
 							<p>
-								Encodes <strong>6 short clips</strong> spread evenly across the source so you can compare quality before committing the full encode. Click any
-								image to step through source → filter passes → encode. In fullscreen, use ← → or Space to navigate.
+								Encodes a set of short clips spread evenly across the source so you can compare quality before committing the full encode. Click any image to
+								step through source → filter passes → encode. In fullscreen, use ← → or Space to navigate.
 							</p>
+						</div>
+
+						<div id="preview-options" class="preview-options" style="display: none">
+							<label class="preview-option">
+								<span>Number of clips <span id="preview-clip-count-val"></span></span>
+								<input type="range" id="preview-clip-count" min="1" max="20" step="1" value="6" />
+							</label>
+							<label class="preview-option">
+								<span>Clip duration <span id="preview-clip-duration-val"></span></span>
+								<input type="range" id="preview-clip-duration" min="1" max="30" step="1" value="5" />
+							</label>
 						</div>
 
 						<div id="preview-status" class="preview-status" style="display: none">
@@ -534,6 +545,7 @@
 						<div id="preview-error" class="preview-error" style="display: none"></div>
 
 						<div id="preview-samples" class="preview-samples" style="display: none"></div>
+						<div id="preview-summary" class="preview-summary" style="display: none"></div>
 					</div>
 					<div class="modal-footer">
 						<span class="modal-note" id="preview-note"></span>

@@ -35,7 +35,7 @@ import { probeFile } from "./probe";
 import { cancelBenchmark, getBenchmarkState, startBenchmark } from "./benchmark";
 import { listOpenClDevices } from "./opencl";
 import { listVulkanDevices } from "./vulkan";
-import { resolvePreviewArtifact } from "./preview-encoder";
+import { resolvePreviewArtifact, type PreviewEncodeOptions } from "./preview-encoder";
 import { makeDefaultVsFilterEntry, vsRegistry } from "./vs-filters";
 import { decodeSettingsCode, encodeSettingsCode, SettingsCodeError } from "./settings-code";
 import { getSystemStats } from "./system";
@@ -233,8 +233,33 @@ app.get("/api/jobs/:id/preview", (c) => {
 	return c.json(state);
 });
 
-app.post("/api/jobs/:id/preview", (c) => {
-	const result = startPreview(c.params.id!);
+app.post("/api/jobs/:id/preview", async (c) => {
+	let body: { clipCount?: number; clipDuration?: number } = {};
+	try {
+		body = (await c.req.json()) as typeof body;
+	} catch {
+		// no body (fall back to defaults)
+	}
+
+	const options: Partial<PreviewEncodeOptions> = {};
+
+	if (body.clipCount !== undefined) {
+		const n = Math.round(Number(body.clipCount));
+		if (!Number.isFinite(n) || n < 1 || n > 20) {
+			return c.json({ error: "clipCount must be a whole number between 1 and 20" }, 400);
+		}
+		options.sampleCount = n;
+	}
+
+	if (body.clipDuration !== undefined) {
+		const d = Number(body.clipDuration);
+		if (!Number.isFinite(d) || d < 1 || d > 30) {
+			return c.json({ error: "clipDuration must be between 1 and 30 seconds" }, 400);
+		}
+		options.windowSeconds = d;
+	}
+
+	const result = startPreview(c.params.id!, options);
 	if (!result.ok) return c.json({ error: result.error }, result.status);
 	return c.json(result.state);
 });
