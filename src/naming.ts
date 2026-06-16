@@ -239,8 +239,36 @@ export function getResolutionTag(width: number, height: number): string {
 
 /**
  * Strip scene/release metadata from a filename stem to get the base title.
- * Removes everything from `- [` or `[` onwards.
+ *
+ * Removes *trailing* metadata only:
+ *   - a trailing release group   (`...[x265]-Judas`  -> `...[x265]`)
+ *   - trailing `[...]` / `(...)` tag blocks, peeled off one at a time
+ *   - any leftover trailing separator dash / whitespace
+ *
+ * It deliberately does NOT cut from the first `[`. Anime-style names lead with
+ * the group (`[SubsPlease] Show - 01 [hash]`); cutting from the first bracket
+ * there wipes the entire title, so every episode collapses to the same base
+ * name and later encodes overwrite earlier ones. The episode/sequence portion
+ * must survive so distinct inputs keep distinct names.
+ *
+ * Never returns an empty string: if stripping would leave nothing, the trimmed
+ * original stem is returned unchanged.
  */
 export function extractBaseTitle(stem: string): string {
-	return stem.replace(/\s*[\-–—]*\s*\[.*/, "").trim();
+	let s = stem.trim();
+
+	// Trailing release group: `]-Group` -> `]`
+	s = s.replace(/(\])-[A-Za-z0-9._-]+$/, "$1");
+
+	// Trailing bracketed / parenthesised tag blocks, peeled one at a time.
+	let prev: string;
+	do {
+		prev = s;
+		s = s.replace(/\s*[\[(][^\[\]()]*[\])]\s*$/, "").trimEnd();
+	} while (s !== prev);
+
+	// Leftover trailing separator (the dash that used to precede the tags).
+	s = s.replace(/\s*[-–—]\s*$/, "").trim();
+
+	return s.length > 0 ? s : stem.trim();
 }

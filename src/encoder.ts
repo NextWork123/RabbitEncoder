@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync, symlinkSync, renameSync } from "fs";
-import { join, parse as parsePath, dirname, extname } from "path";
+import { join, parse as parsePath, dirname, extname, basename, resolve } from "path";
 import type { Job, JobStep, AppConfig } from "./types";
 import { probeFile, getOpusBitrateForLayout, getAudioReplacementLabel, normalizeLayout } from "./probe";
 import { Logger } from "./logger";
@@ -100,6 +100,30 @@ function fmtFramesWithFps(current: number, total: number, startedAt: number | un
 	const fpsStr = fps ? ` (${fps} fps)` : "";
 	const estStr = estVideoSize && estTotalSize ? ` — Video: ~${estVideoSize} · Total: ~${estTotalSize}` : "";
 	return `${base}${fpsStr}${estStr}`;
+}
+
+/**
+ * Resolve a non-colliding absolute output path.
+ *
+ * If `dir/filename` already exists (and is not `ignorePath` - the source we are
+ * about to replace in place), a numeric suffix is appended before the
+ * extension: `name.mkv`, `name (2).mkv`, ... - until a free path
+ * is found. This guarantees two distinct source files can never be written to
+ * the same output, so an encode can never silently overwrite an earlier one
+ * even if the computed names happen to be identical.
+ */
+function resolveUniqueOutputPath(dir: string, filename: string, ignorePath?: string): string {
+	const ext = extname(filename);
+	const stem = filename.slice(0, filename.length - ext.length);
+	const ignore = ignorePath ? resolve(ignorePath) : null;
+
+	let candidate = join(dir, filename);
+	let n = 2;
+	while (existsSync(candidate) && resolve(candidate) !== ignore) {
+		candidate = join(dir, `${stem} (${n})${ext}`);
+		n++;
+	}
+	return candidate;
 }
 
 export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial: Partial<Job>) => void, signal?: AbortSignal): Promise<void> {
@@ -1314,16 +1338,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		if (job.replaceSource) {
 			const sourceDir = dirname(job.inputPath);
-			outputPath = join(sourceDir, outputFilename);
-
-			cleanupAssociatedFiles(job.inputPath);
-
-			try {
-				unlinkSync(job.inputPath);
-				Logger.info(`[library] Removed source: ${job.filename}`);
-			} catch (err: any) {
-				Logger.warn(`[library] Failed to remove source ${job.filename}:`, { "error.message": err?.message });
-			}
+			outputPath = resolveUniqueOutputPath(sourceDir, outputFilename, job.inputPath);
 
 			const moveRes = await run(["mv", finalOutput, outputPath], { signal });
 			if (moveRes.code !== 0) {
@@ -1331,11 +1346,21 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				unlinkSync(finalOutput);
 			}
 
-			Logger.info(`[library] Replaced with: ${outputFilename}`);
+			if (resolve(outputPath) !== resolve(job.inputPath)) {
+				cleanupAssociatedFiles(job.inputPath);
+				try {
+					unlinkSync(job.inputPath);
+					Logger.info(`[library] Removed source: ${job.filename}`);
+				} catch (err: any) {
+					Logger.warn(`[library] Failed to remove source ${job.filename}:`, { "error.message": err?.message });
+				}
+			}
+
+			Logger.info(`[library] Replaced with: ${basename(outputPath)}`);
 		} else {
 			const outputSubDir = job.relativePath ? join(config.outputDir, job.relativePath) : config.outputDir;
 			mkdirSync(outputSubDir, { recursive: true });
-			outputPath = join(outputSubDir, outputFilename);
+			outputPath = resolveUniqueOutputPath(outputSubDir, outputFilename);
 
 			const moveRes = await run(["mv", finalOutput, outputPath], { signal });
 			if (moveRes.code !== 0) {
@@ -1344,13 +1369,15 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			}
 		}
 
+		const finalName = basename(outputPath);
+
 		setStep(S_MUX, { status: "done", progress: 100 });
 
 		updateJob({
 			status: "done",
 			currentStage: "Complete",
 			progress: 100,
-			outputFilename: job.replaceSource ? outputFilename : job.relativePath ? `${job.relativePath}/${outputFilename}` : outputFilename,
+			outputFilename: job.replaceSource ? finalName : job.relativePath ? `${job.relativePath}/${finalName}` : finalName,
 			encodedFileSize: humanSize(statSync(outputPath).size),
 			finishedAt: Date.now(),
 		});
