@@ -11,7 +11,7 @@ import type {
 import { run } from "./process";
 import { Logger } from "./logger";
 import { join } from "path";
-import { readFileSync, unlinkSync, existsSync } from "fs";
+import { readFileSync, unlinkSync, existsSync, statSync } from "fs";
 import { classifyAssLines } from "./ass-classifier";
 import { LANG_ALIASES } from "./naming";
 import { getOpusBitrateForLayout, normalizeLayout } from "./probe";
@@ -714,22 +714,76 @@ interface SubtitleExtraction {
 	filePath: string;
 }
 
+/**
+ * Extract every text subtitle track in ONE ffmpeg pass (one read of the source)
+ * instead of one read per track. Returns index -> on-disk path for tracks that
+ * produced a non-empty file. Failures are non-fatal (except real aborts): a
+ * failed or partial pass just yields fewer entries, and the caller falls back
+ * to per-track extraction for whatever is missing.
+ */
+export async function extractAllSubtitles(
+	inputPath: string,
+	textStreams: SubtitleStreamInfo[],
+	tempDir: string,
+	signal?: AbortSignal,
+): Promise<Map<number, string>> {
+	const planned = new Map<number, string>();
+	const args = ["ffmpeg", "-loglevel", "error", "-y", "-i", inputPath];
+
+	for (const stream of textStreams) {
+		const isAss = ASS_CODECS.has(stream.codec.toLowerCase());
+		const ext = isAss ? "ass" : "srt";
+		const out = join(tempDir, `sub_analyze_all_${stream.index}.${ext}`);
+		const codecArgs = isAss ? ["-c:s", "copy"] : ["-c:s", "srt"];
+		args.push("-map", `0:${stream.index}`, ...codecArgs, out);
+		planned.set(stream.index, out);
+	}
+
+	if (planned.size === 0) return new Map();
+
+	try {
+		const res = await run(args, { signal });
+		if (res.code !== 0) {
+			Logger.warn(
+				`[subtitle] Combined extraction pass exited ${res.code} (${res.stderr || res.stdout}); ` + `falling back to per-track extraction where needed`,
+			);
+		}
+	} catch (err) {
+		if (signal?.aborted) throw err; // genuine cancellation: propagate
+		Logger.warn(`[subtitle] Combined extraction pass failed (${(err as Error).message}); ` + `falling back to per-track extraction`);
+	}
+
+	// Keep only tracks that produced a usable (non-empty) file.
+	const extracted = new Map<number, string>();
+	for (const [index, file] of planned) {
+		try {
+			if (statSync(file).size > 0) extracted.set(index, file);
+		} catch {
+			/* missing -> per-track fallback handles it */
+		}
+	}
+	return extracted;
+}
+
 async function extractSubtitleForAnalysis(
 	inputPath: string,
 	stream: SubtitleStreamInfo,
 	tempDir: string,
 	signal?: AbortSignal,
+	preExtractedPath?: string,
 ): Promise<SubtitleExtraction | null> {
 	const isAss = ASS_CODECS.has(stream.codec.toLowerCase());
 	const ext = isAss ? "ass" : "srt";
-	const outPath = join(tempDir, `sub_analyze_${stream.index}.${ext}`);
-	const codecArgs = isAss ? ["-c:s", "copy"] : ["-c:s", "srt"];
 
-	const res = await run(["ffmpeg", "-y", "-i", inputPath, "-map", `0:${stream.index}`, ...codecArgs, "-vn", "-an", outPath], { signal });
-
-	if (res.code !== 0) {
-		Logger.warn(`[subtitle] Failed to extract track ${stream.index} for analysis: ${res.stderr || res.stdout}`);
-		return null;
+	let outPath = preExtractedPath;
+	if (!outPath) {
+		outPath = join(tempDir, `sub_analyze_${stream.index}.${ext}`);
+		const codecArgs = isAss ? ["-c:s", "copy"] : ["-c:s", "srt"];
+		const res = await run(["ffmpeg", "-y", "-i", inputPath, "-map", `0:${stream.index}`, ...codecArgs, "-vn", "-an", outPath], { signal });
+		if (res.code !== 0) {
+			Logger.warn(`[subtitle] Failed to extract track ${stream.index} for analysis: ${res.stderr || res.stdout}`);
+			return null;
+		}
 	}
 
 	try {
@@ -956,8 +1010,15 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 		Logger.info(`[subtitle] Analyzing ${textStreams.length} text-based subtitle track(s)`);
 	}
 
+	const preExtracted = await extractAllSubtitles(inputPath, textStreams, tempDir, signal);
+
 	for (const stream of textStreams) {
-		const extraction = await extractSubtitleForAnalysis(inputPath, stream, tempDir, signal);
+		const pre = preExtracted.get(stream.index);
+
+		let extraction = pre ? await extractSubtitleForAnalysis(inputPath, stream, tempDir, signal, pre) : null;
+		if (!extraction) {
+			extraction = await extractSubtitleForAnalysis(inputPath, stream, tempDir, signal);
+		}
 		if (!extraction) continue;
 
 		extractions.set(stream.index, extraction);
