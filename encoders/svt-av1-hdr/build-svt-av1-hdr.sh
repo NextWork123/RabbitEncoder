@@ -9,7 +9,14 @@ mkdir -p "$OUT"
 ENABLE_PGO="${ENABLE_PGO:-1}"
 
 COMMON_CFLAGS="-O3 -pipe -mtune=generic"
-COMMON_LDFLAGS="-static -static-libgcc -static-libstdc++"
+COMMON_LDFLAGS="-static -static-libgcc -static-libstdc++ -fuse-ld=lld"
+
+# clang's LTO writes LLVM bitcode into the intermediate static archives, which
+# GNU ar/ranlib/nm cannot read. Point CMake at the LLVM equivalents when
+# they're available so the static link step succeeds.
+LLVM_AR="$(command -v llvm-ar || true)"
+LLVM_RANLIB="$(command -v llvm-ranlib || true)"
+LLVM_NM="$(command -v llvm-nm || true)"
 
 JOBS="$(nproc)"
 
@@ -49,6 +56,7 @@ detect_host_level() {
 
 HOST_LEVEL="$(detect_host_level)"
 echo "==== Build host supports up to x86-64-v${HOST_LEVEL} ===="
+echo "==== Compiler: clang $(clang -dumpversion 2>/dev/null || echo '?') / lld ===="
 if [ "$ENABLE_PGO" = "1" ]; then
   echo "==== PGO: enabled (per-level, gated on host capability) ===="
 else
@@ -82,15 +90,20 @@ build_one() {
   cd "$SRC/Build/linux"
 
   ./build.sh release static \
+    cc=clang cxx=clang++ \
     "jobs=${JOBS}" \
     --disable-native \
     --enable-lto \
     "${avx512_flag}" \
     ${pgo_flag:+$pgo_flag} \
     -- \
+      -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
       -DCMAKE_C_FLAGS="${COMMON_CFLAGS} -march=${level}" \
       -DCMAKE_CXX_FLAGS="${COMMON_CFLAGS} -march=${level}" \
-      -DCMAKE_EXE_LINKER_FLAGS="${COMMON_LDFLAGS}"
+      -DCMAKE_EXE_LINKER_FLAGS="${COMMON_LDFLAGS}" \
+      ${LLVM_AR:+-DCMAKE_AR=$LLVM_AR} \
+      ${LLVM_RANLIB:+-DCMAKE_RANLIB=$LLVM_RANLIB} \
+      ${LLVM_NM:+-DCMAKE_NM=$LLVM_NM}
 
   local out_dir="$OUT/${level//-/_}"
   mkdir -p "$out_dir"
