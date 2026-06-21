@@ -216,6 +216,25 @@ const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	detectSignsSongs: bool,
 	detectSDH: bool,
 	detectHonorifics: bool,
+
+	subtitleSourcePriority: enumOf(["official-first", "fansub-first"]),
+	subtitleFansubTiebreak: enumOf(["alphabetical", "source-order"]),
+	subtitleFormatPriority: enumOf(["text-first", "picture-first"]),
+	dropPictureSubtitles: bool,
+	dedupeAcrossFormat: bool,
+	renameSubtitleTracks: bool,
+	removeSDHSubtitles: bool,
+	removeCommentarySubtitles: bool,
+	removeForcedSignsSongs: bool,
+	removeStoryboardSubtitles: bool,
+	removeHonorificsSubtitles: bool,
+	signsSongsStyleRatio: numIn(0, 1),
+	signsSongsLineRatio: numIn(0, 1),
+	sdhRatioThreshold: numIn(0, 1),
+	sdhMinLines: intIn(0, 10000),
+	honorificsMinCount: intIn(0, 10000),
+	honorificsRatio: numIn(1, 100),
+	assumeMislabeledTracks: bool,
 };
 
 function sanitizeSettingsInto(target: JobSettings, partial: Partial<JobSettings>): void {

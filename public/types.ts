@@ -9,6 +9,9 @@ export type AudioEncodeMode = "opus" | "copy";
 export type SubtitleProcessingMode = "full" | "copy";
 
 export type SubtitleLangDetectMode = "enabled" | "und-only" | "disabled";
+export type SubtitleSourcePriority = "official-first" | "fansub-first";
+export type SubtitleFansubTiebreak = "alphabetical" | "source-order";
+export type SubtitleFormatPriority = "text-first" | "picture-first";
 
 /**
  * Backend used for the nlmeans denoise filter.
@@ -120,6 +123,42 @@ export interface JobSettings {
 	detectSDH: boolean;
 	/** Reclassify the most honorific-dense English full track as Honorifics. */
 	detectHonorifics: boolean;
+	/** Official (BD/streaming) tracks above fansubs, or fansubs first. */
+	subtitleSourcePriority: SubtitleSourcePriority;
+	/** Within fansubs: alphabetical, or keep original source track order. */
+	subtitleFansubTiebreak: SubtitleFansubTiebreak;
+	/** Prefer text-based (SRT/ASS) or picture-based (PGS/VOBSUB) tracks. */
+	subtitleFormatPriority: SubtitleFormatPriority;
+	/** Drop all bitmap (PGS/VOBSUB) subtitle tracks. */
+	dropPictureSubtitles: boolean;
+	/** Dedupe ignores codec (1 per lang+type). When false, keep 1 text + 1 picture. */
+	dedupeAcrossFormat: boolean;
+	/** Rewrite subtitle track names to the clean format. When false, keep originals. */
+	renameSubtitleTracks: boolean;
+	/** Drop SDH subtitle tracks. */
+	removeSDHSubtitles: boolean;
+	/** Drop commentary subtitle tracks. */
+	removeCommentarySubtitles: boolean;
+	/** Drop forced / Signs & Songs subtitle tracks. */
+	removeForcedSignsSongs: boolean;
+	/** Drop storyboard subtitle tracks. */
+	removeStoryboardSubtitles: boolean;
+	/** Drop honorifics subtitle tracks. */
+	removeHonorificsSubtitles: boolean;
+	/** ASS sign-style line ratio to reclassify a full track as Signs & Songs. */
+	signsSongsStyleRatio: number;
+	/** Low-dialogue ratio vs the largest full track to reclassify as Signs & Songs. */
+	signsSongsLineRatio: number;
+	/** SDH-marker ratio to reclassify a track as SDH. */
+	sdhRatioThreshold: number;
+	/** Minimum dialogue line count before SDH reclassification applies. */
+	sdhMinLines: number;
+	/** Minimum honorific suffix count to flag a track as Honorifics. */
+	honorificsMinCount: number;
+	/** Multiplier vs the leanest track required to flag Honorifics. */
+	honorificsRatio: number;
+	/** Relabel JP→EN / bitmap fallback when no English full track is found. */
+	assumeMislabeledTracks: boolean;
 	/**
 	 * Ordered list of VapourSynth filter passes to apply during the prepare
 	 * stage, before the FFmpeg -vf chain. Each entry references a preset by

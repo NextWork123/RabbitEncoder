@@ -152,6 +152,28 @@ app.get("/api/jobs/:id/subtitle-preview", async (c) => {
 			detectSignsSongs: job.settings.detectSignsSongs,
 			detectSDH: job.settings.detectSDH,
 			detectHonorifics: job.settings.detectHonorifics,
+			// Source / format ordering
+			sourcePriority: job.settings.subtitleSourcePriority,
+			fansubTiebreak: job.settings.subtitleFansubTiebreak,
+			formatPriority: job.settings.subtitleFormatPriority,
+			// Drop filters
+			dropPicture: job.settings.dropPictureSubtitles,
+			removeSDH: job.settings.removeSDHSubtitles,
+			removeCommentary: job.settings.removeCommentarySubtitles,
+			removeForcedSignsSongs: job.settings.removeForcedSignsSongs,
+			removeStoryboard: job.settings.removeStoryboardSubtitles,
+			removeHonorifics: job.settings.removeHonorificsSubtitles,
+			// Dedupe + naming
+			dedupeAcrossFormat: job.settings.dedupeAcrossFormat,
+			renameTracks: job.settings.renameSubtitleTracks,
+			// Advanced detection tuning
+			signsSongsStyleRatio: job.settings.signsSongsStyleRatio,
+			signsSongsLineRatio: job.settings.signsSongsLineRatio,
+			sdhRatioThreshold: job.settings.sdhRatioThreshold,
+			sdhMinLines: job.settings.sdhMinLines,
+			honorificsMinCount: job.settings.honorificsMinCount,
+			honorificsRatio: job.settings.honorificsRatio,
+			assumeMislabeled: job.settings.assumeMislabeledTracks,
 		});
 
 		try {

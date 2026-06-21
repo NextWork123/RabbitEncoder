@@ -644,6 +644,43 @@ export function renderDetectHonorificsToggle(container: HTMLElement, checked: bo
 	renderSimpleToggle(container, checked, "\u00A0Detect Honorifics tracks", onChange);
 }
 
+export function renderLabeledToggle(container: HTMLElement, checked: boolean, label: string, onChange: (v: boolean) => void): void {
+	renderSimpleToggle(container, checked, `\u00A0${label}`, onChange);
+}
+
+export function renderNumberControl(
+	container: HTMLElement,
+	label: string,
+	value: number,
+	opts: { min: number; max: number; step: number },
+	onChange: (v: number) => void,
+): void {
+	container.innerHTML = "";
+	const wrap = document.createElement("label");
+	wrap.className = "toggle-label";
+
+	const span = document.createElement("span");
+	span.textContent = `${label}\u00A0`;
+
+	const input = document.createElement("input");
+	input.type = "number";
+	input.min = String(opts.min);
+	input.max = String(opts.max);
+	input.step = String(opts.step);
+	input.className = "num-input";
+	input.value = String(value);
+	input.oninput = () => {
+		let v = parseFloat(input.value);
+		if (!Number.isFinite(v)) v = value;
+		v = Math.min(opts.max, Math.max(opts.min, v));
+		onChange(v);
+	};
+
+	wrap.appendChild(span);
+	wrap.appendChild(input);
+	container.appendChild(wrap);
+}
+
 function renderSimpleToggle(container: HTMLElement, checked: boolean, labelText: string, onChange: (value: boolean) => void): void {
 	container.innerHTML = "";
 	const label = document.createElement("label");

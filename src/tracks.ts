@@ -4,9 +4,12 @@ import type {
 	AudioPreviewTrack,
 	AudioStreamInfo,
 	AudioTrackType,
+	SubtitleFansubTiebreak,
+	SubtitleFormatPriority,
 	SubtitleLangDetectMode,
 	SubtitlePreviewResult,
 	SubtitlePreviewTrack,
+	SubtitleSourcePriority,
 	SubtitleStreamInfo,
 } from "./types";
 import { run } from "./process";
@@ -27,6 +30,13 @@ export interface SubtitleAnalysisOptions {
 	detectSignsSongs?: boolean;
 	detectSDH?: boolean;
 	detectHonorifics?: boolean;
+	signsSongsStyleRatio?: number;
+	signsSongsLineRatio?: number;
+	sdhRatioThreshold?: number;
+	sdhMinLines?: number;
+	honorificsMinCount?: number;
+	honorificsRatio?: number;
+	assumeMislabeled?: boolean;
 }
 
 export function normalizeLanguageCode(input: string | undefined): string {
@@ -53,6 +63,29 @@ export function sanitizeLanguageTag(lang: unknown, ctx?: string): string {
 	if (/^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/.test(tag)) return tag;
 	Logger.warn(`[mux] Invalid language tag ${JSON.stringify(tag)}${ctx ? ` (${ctx})` : ""} — falling back to "und"`);
 	return "und";
+}
+
+export interface SubtitleTypeFilterOptions {
+	removeSDH?: boolean;
+	removeCommentary?: boolean;
+	removeForcedSignsSongs?: boolean;
+	removeStoryboard?: boolean;
+	removeHonorifics?: boolean;
+	dropPicture?: boolean;
+}
+
+/** Drop subtitle tracks by detected type and/or bitmap codec. */
+export function filterSubtitleTypes(streams: SubtitleStreamInfo[], options: SubtitleTypeFilterOptions = {}): SubtitleStreamInfo[] {
+	return streams.filter((s) => {
+		if (options.dropPicture && !isTextSubtitleCodec(s.codec)) return false;
+		const type = detectSubtitleTrackType(s);
+		if (options.removeSDH && type === "sdh") return false;
+		if (options.removeCommentary && type === "commentary") return false;
+		if (options.removeForcedSignsSongs && type === "forced") return false;
+		if (options.removeStoryboard && type === "storyboard") return false;
+		if (options.removeHonorifics && type === "honorifics") return false;
+		return true;
+	});
 }
 
 /**
@@ -544,6 +577,12 @@ function sourceGroupPriority(stream: SubtitleStreamInfo): { tier: number; rank: 
 	return { tier: 3, rank: 0, name: "" };
 }
 
+export interface SubtitleSortOptions {
+	sourcePriority?: SubtitleSourcePriority;
+	fansubTiebreak?: SubtitleFansubTiebreak;
+	formatPriority?: SubtitleFormatPriority;
+}
+
 /**
  * Sort subtitle streams:
  *   1. Language: English first, Japanese second, others alphabetically, undefined last
@@ -555,7 +594,11 @@ function sourceGroupPriority(stream: SubtitleStreamInfo): { tier: number; rank: 
  *      - Release groups (alphabetically)
  *      - Unknown (no source or group) last
  */
-export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStreamInfo[] {
+export function sortSubtitleStreams(streams: SubtitleStreamInfo[], options: SubtitleSortOptions = {}): SubtitleStreamInfo[] {
+	const sourcePriority = options.sourcePriority ?? "official-first";
+	const fansubTiebreak = options.fansubTiebreak ?? "alphabetical";
+	const formatPref = options.formatPriority ?? "text-first";
+
 	const langPriority = (lang: string | undefined): number => {
 		if (isEnglish(lang)) return 0;
 		if (isJapanese(lang)) return 1;
@@ -584,7 +627,24 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStre
 	};
 
 	const formatPriority = (stream: SubtitleStreamInfo): number => {
-		return isTextSubtitleCodec(stream.codec) ? 0 : 1;
+		const isText = isTextSubtitleCodec(stream.codec);
+		return formatPref === "picture-first" ? (isText ? 1 : 0) : isText ? 0 : 1;
+	};
+
+	// Remap source tiers when fansubs should rank first:
+	// groups(2) -> 0, BD(0) -> 1, streaming(1) -> 2, unknown(3) -> 3
+	const effectiveTier = (tier: number): number => {
+		if (sourcePriority !== "fansub-first") return tier;
+		switch (tier) {
+			case 2:
+				return 0;
+			case 0:
+				return 1;
+			case 1:
+				return 2;
+			default:
+				return 3;
+		}
 	};
 
 	return [...streams].sort((a, b) => {
@@ -617,12 +677,14 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStre
 		// 5. Source/group
 		const sgA = sourceGroupPriority(a);
 		const sgB = sourceGroupPriority(b);
-
-		if (sgA.tier !== sgB.tier) return sgA.tier - sgB.tier;
+		const tierA = effectiveTier(sgA.tier);
+		const tierB = effectiveTier(sgB.tier);
+		if (tierA !== tierB) return tierA - tierB;
 		if (sgA.rank !== sgB.rank) return sgA.rank - sgB.rank;
 
-		// Within release groups (tier 2), sort alphabetically
-		if (sgA.tier === 2) {
+		// Within release groups (original tier 2)
+		if (sgA.tier === 2 && sgB.tier === 2) {
+			if (fansubTiebreak === "source-order") return a.index - b.index;
 			return sgA.name.toLowerCase().localeCompare(sgB.name.toLowerCase());
 		}
 
@@ -640,24 +702,24 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStre
  * Regional variants (es-ES vs es-419, pt-PT vs pt-BR, zh-Hant vs zh-Hans)
  * are kept as separate keys since normalizeLanguageGroup preserves them.
  */
-export function deduplicateSubtitleStreams(streams: SubtitleStreamInfo[]): SubtitleStreamInfo[] {
+export function deduplicateSubtitleStreams(streams: SubtitleStreamInfo[], options: { acrossFormat?: boolean } = {}): SubtitleStreamInfo[] {
+	const acrossFormat = options.acrossFormat ?? true;
 	const seen = new Set<string>();
 	const kept: SubtitleStreamInfo[] = [];
 
 	for (const stream of streams) {
 		const langGroup = normalizeLanguageGroup(stream.language);
 		const type = detectSubtitleTrackType(stream);
-		const key = `${langGroup}:${type}`;
+		const fmt = isTextSubtitleCodec(stream.codec) ? "t" : "p";
+		const key = acrossFormat ? `${langGroup}:${type}` : `${langGroup}:${type}:${fmt}`;
 
 		if (seen.has(key)) {
-			Logger.info(`[subtitle] Dedup: dropping track ${stream.index} ` + `(${stream.language || "und"}:${type}) — already kept a better candidate`);
+			Logger.info(`[subtitle] Dedup: dropping track ${stream.index} (${stream.language || "und"}:${type}) — already kept a better candidate`);
 			continue;
 		}
-
 		seen.add(key);
 		kept.push(stream);
 	}
-
 	return kept;
 }
 
@@ -997,6 +1059,13 @@ export async function analyzeSubtitleStreams(
 	const detectSignsSongs = options.detectSignsSongs ?? true;
 	const detectSDH = options.detectSDH ?? true;
 	const detectHonorifics = options.detectHonorifics ?? true;
+	const signsSongsStyleRatio = options.signsSongsStyleRatio ?? 0.8;
+	const signsSongsLineRatio = options.signsSongsLineRatio ?? 0.1;
+	const sdhRatioThreshold = options.sdhRatioThreshold ?? 0.2;
+	const sdhMinLines = options.sdhMinLines ?? 10;
+	const honorificsMinCount = options.honorificsMinCount ?? 5;
+	const honorificsRatio = options.honorificsRatio ?? 3;
+	const assumeMislabeled = options.assumeMislabeled ?? true;
 
 	for (const stream of streams) {
 		const lang = (stream.language || "").toLowerCase();
@@ -1160,13 +1229,15 @@ export async function analyzeSubtitleStreams(
 	const hasFullEnglishSubs = streams.some((s) => isEnglish(s.language) && detectSubtitleTrackType(s) === "full");
 	const hasJapaneseSubs = streams.some((s) => isJapanese(s.language));
 
-	if (!hasFullEnglishSubs && hasJapaneseSubs) {
-		const hasAnyEnglish = streams.some((s) => isEnglish(s.language));
-		const reason = hasAnyEnglish ? "Only Signs & Songs English tracks found" : "No English tracks found (including after language detection)";
-		Logger.warn(`[subtitle] ${reason} but Japanese tracks exist — assuming mislabeled, relabeling Japanese to English`);
-		for (const s of streams) {
-			if (isJapanese(s.language)) {
-				s.language = "en";
+	if (assumeMislabeled) {
+		if (!hasFullEnglishSubs && hasJapaneseSubs) {
+			const hasAnyEnglish = streams.some((s) => isEnglish(s.language));
+			const reason = hasAnyEnglish ? "Only Signs & Songs English tracks found" : "No English tracks found (including after language detection)";
+			Logger.warn(`[subtitle] ${reason} but Japanese tracks exist — assuming mislabeled, relabeling Japanese to English`);
+			for (const s of streams) {
+				if (isJapanese(s.language)) {
+					s.language = "en";
+				}
 			}
 		}
 	}
@@ -1180,7 +1251,7 @@ export async function analyzeSubtitleStreams(
 			if (!analysis?.assStyles) continue;
 
 			const { signStyleLines, dialogueStyleLines, totalLines } = analysis.assStyles;
-			if (totalLines >= 5 && signStyleLines / totalLines >= 0.8 && dialogueStyleLines < 50) {
+			if (totalLines >= 5 && signStyleLines / totalLines >= signsSongsStyleRatio && dialogueStyleLines < 50) {
 				Logger.warn(
 					`[subtitle] Track ${stream.index}: ${signStyleLines}/${totalLines} lines use sign/typeset ` + `ASS styles — reclassifying as Signs & Songs`,
 				);
@@ -1199,7 +1270,7 @@ export async function analyzeSubtitleStreams(
 
 			const maxLines = Math.max(...lineCounts.values());
 			for (const [streamIndex, lineCount] of lineCounts) {
-				if (maxLines > 0 && lineCount > 0 && lineCount * 10 <= maxLines && lineCount < 100) {
+				if (maxLines > 0 && lineCount > 0 && lineCount <= maxLines * signsSongsLineRatio && lineCount < 100) {
 					const stream = streams.find((s) => s.index === streamIndex);
 					if (stream) {
 						Logger.warn(`[subtitle] Track ${streamIndex}: only ${lineCount} lines vs ${maxLines} ` + `in largest full track — reclassifying as Signs & Songs`);
@@ -1219,7 +1290,7 @@ export async function analyzeSubtitleStreams(
 			const analysis = contentCache.get(stream.index);
 			if (!analysis) continue;
 
-			if (analysis.sdhRatio >= 0.2 && analysis.dialogueLineCount >= 10) {
+			if (analysis.sdhRatio >= sdhRatioThreshold && analysis.dialogueLineCount >= sdhMinLines) {
 				Logger.warn(`[subtitle] Track ${stream.index}: ${(analysis.sdhRatio * 100).toFixed(0)}% SDH markers — reclassifying as SDH`);
 				stream.isHearingImpaired = true;
 			}
@@ -1247,7 +1318,7 @@ export async function analyzeSubtitleStreams(
 				}
 			}
 
-			if (maxHonStream && maxHon >= 5 && (minHon === 0 || maxHon >= minHon * 3)) {
+			if (maxHonStream && maxHon >= honorificsMinCount && (minHon === 0 || maxHon >= minHon * honorificsRatio)) {
 				Logger.warn(`[subtitle] Track ${maxHonStream.index}: ${maxHon} honorific suffixes ` + `(vs ${minHon} in others) — reclassifying as Honorifics`);
 				const existingTitle = maxHonStream.title || "";
 				if (!SUB_HONORIFICS_PATTERN.test(existingTitle)) {
@@ -1486,6 +1557,28 @@ export async function previewSubtitles(
 		detectSignsSongs?: boolean;
 		detectSDH?: boolean;
 		detectHonorifics?: boolean;
+		// Source / format ordering
+		sourcePriority?: SubtitleSourcePriority;
+		fansubTiebreak?: SubtitleFansubTiebreak;
+		formatPriority?: SubtitleFormatPriority;
+		// Drop filters
+		dropPicture?: boolean;
+		removeSDH?: boolean;
+		removeCommentary?: boolean;
+		removeForcedSignsSongs?: boolean;
+		removeStoryboard?: boolean;
+		removeHonorifics?: boolean;
+		// Dedupe + naming
+		dedupeAcrossFormat?: boolean;
+		renameTracks?: boolean;
+		// Advanced detection tuning
+		signsSongsStyleRatio?: number;
+		signsSongsLineRatio?: number;
+		sdhRatioThreshold?: number;
+		sdhMinLines?: number;
+		honorificsMinCount?: number;
+		honorificsRatio?: number;
+		assumeMislabeled?: boolean;
 	} = {},
 ): Promise<SubtitlePreviewResult> {
 	const source: SubtitlePreviewTrack[] = sourceStreams.map((s) => {
@@ -1524,11 +1617,35 @@ export async function previewSubtitles(
 		detectSignsSongs: options.detectSignsSongs,
 		detectSDH: options.detectSDH,
 		detectHonorifics: options.detectHonorifics,
+		signsSongsStyleRatio: options.signsSongsStyleRatio,
+		signsSongsLineRatio: options.signsSongsLineRatio,
+		sdhRatioThreshold: options.sdhRatioThreshold,
+		sdhMinLines: options.sdhMinLines,
+		honorificsMinCount: options.honorificsMinCount,
+		honorificsRatio: options.honorificsRatio,
+		assumeMislabeled: options.assumeMislabeled,
 	});
 
-	const sorted = sortSubtitleStreams(cloned);
+	const sorted = sortSubtitleStreams(cloned, {
+		sourcePriority: options.sourcePriority,
+		fansubTiebreak: options.fansubTiebreak,
+		formatPriority: options.formatPriority,
+	});
+
 	const langFiltered = filterStreamsByLanguage(sorted, options.languages || [], "subtitle");
-	const finalStreams = options.dedupe ? deduplicateSubtitleStreams(langFiltered) : langFiltered;
+
+	const typeFiltered = filterSubtitleTypes(langFiltered, {
+		removeSDH: options.removeSDH,
+		removeCommentary: options.removeCommentary,
+		removeForcedSignsSongs: options.removeForcedSignsSongs,
+		removeStoryboard: options.removeStoryboard,
+		removeHonorifics: options.removeHonorifics,
+		dropPicture: options.dropPicture,
+	});
+
+	const finalStreams = options.dedupe ? deduplicateSubtitleStreams(typeFiltered, { acrossFormat: options.dedupeAcrossFormat ?? true }) : typeFiltered;
+
+	const renameTracks = options.renameTracks ?? true;
 
 	const defaultAssigned = new Set<string>();
 	const forcedAssigned = new Set<string>();
@@ -1537,7 +1654,7 @@ export async function previewSubtitles(
 		const trackType = detectSubtitleTrackType(s);
 		const lang = s.language || "und";
 		const langGroup = normalizeLanguageGroup(lang);
-		const trackName = buildSubtitleTrackName(trackType, s.title);
+		const trackName = renameTracks ? buildSubtitleTrackName(trackType, s.title) : s.title || buildSubtitleTrackName(trackType, s.title);
 
 		let effectiveLang = lang;
 		if (trackType === "honorifics") effectiveLang = "en-JP";

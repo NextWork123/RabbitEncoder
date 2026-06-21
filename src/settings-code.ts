@@ -14,6 +14,9 @@ import type {
 	VsFilterEntry,
 	VsParamValue,
 	SubtitleLangDetectMode,
+	SubtitleSourcePriority,
+	SubtitleFansubTiebreak,
+	SubtitleFormatPriority,
 } from "./types";
 import { vsRegistry } from "./vs-filters";
 
@@ -63,6 +66,24 @@ const BASELINE: JobSettings = {
 	detectSignsSongs: true,
 	detectSDH: true,
 	detectHonorifics: true,
+	subtitleSourcePriority: "official-first",
+	subtitleFansubTiebreak: "alphabetical",
+	subtitleFormatPriority: "text-first",
+	dropPictureSubtitles: false,
+	dedupeAcrossFormat: true,
+	renameSubtitleTracks: true,
+	removeSDHSubtitles: false,
+	removeCommentarySubtitles: false,
+	removeForcedSignsSongs: false,
+	removeStoryboardSubtitles: false,
+	removeHonorificsSubtitles: false,
+	signsSongsStyleRatio: 0.8,
+	signsSongsLineRatio: 0.1,
+	sdhRatioThreshold: 0.2,
+	sdhMinLines: 10,
+	honorificsMinCount: 5,
+	honorificsRatio: 3,
+	assumeMislabeledTracks: true,
 	audioBitrates: {
 		mono: 64,
 		stereo: 128,
@@ -92,6 +113,12 @@ const CODE_TO_DEBAND = reverse(DEBAND_TO_CODE);
 
 const LANGDETECT_TO_CODE: Record<SubtitleLangDetectMode, string> = { enabled: "e", "und-only": "u", disabled: "d" };
 const CODE_TO_LANGDETECT = reverse(LANGDETECT_TO_CODE);
+const SUBSRC_TO_CODE: Record<SubtitleSourcePriority, string> = { "official-first": "o", "fansub-first": "f" };
+const CODE_TO_SUBSRC = reverse(SUBSRC_TO_CODE);
+const SUBTIE_TO_CODE: Record<SubtitleFansubTiebreak, string> = { alphabetical: "a", "source-order": "s" };
+const CODE_TO_SUBTIE = reverse(SUBTIE_TO_CODE);
+const SUBFMT_TO_CODE: Record<SubtitleFormatPriority, string> = { "text-first": "t", "picture-first": "p" };
+const CODE_TO_SUBFMT = reverse(SUBFMT_TO_CODE);
 
 const VIDEO_VALUES: VideoEncodeMode[] = ["av1", "off"];
 const AUDIO_VALUES: AudioEncodeMode[] = ["opus", "copy"];
@@ -262,7 +289,29 @@ export function encodeSettingsCode(s: JobSettings): string {
 	if (s.detectSignsSongs !== BASELINE.detectSignsSongs) sd.put("ss", s.detectSignsSongs);
 	if (s.detectSDH !== BASELINE.detectSDH) sd.put("sh", s.detectSDH);
 	if (s.detectHonorifics !== BASELINE.detectHonorifics) sd.put("ho", s.detectHonorifics);
+	if (s.signsSongsStyleRatio !== BASELINE.signsSongsStyleRatio) sd.put("ssr", s.signsSongsStyleRatio);
+	if (s.signsSongsLineRatio !== BASELINE.signsSongsLineRatio) sd.put("slr", s.signsSongsLineRatio);
+	if (s.sdhRatioThreshold !== BASELINE.sdhRatioThreshold) sd.put("sdr", s.sdhRatioThreshold);
+	if (s.sdhMinLines !== BASELINE.sdhMinLines) sd.put("sdl", s.sdhMinLines);
+	if (s.honorificsMinCount !== BASELINE.honorificsMinCount) sd.put("hmc", s.honorificsMinCount);
+	if (s.honorificsRatio !== BASELINE.honorificsRatio) sd.put("hr", s.honorificsRatio);
+	if (s.assumeMislabeledTracks !== BASELINE.assumeMislabeledTracks) sd.put("am", s.assumeMislabeledTracks);
 	if (!sd.empty) sections.push(sd.toString());
+
+	// subtitle manipulation
+	const sm = new Section("sm");
+	if (s.subtitleSourcePriority !== BASELINE.subtitleSourcePriority) sm.put("sp", SUBSRC_TO_CODE[s.subtitleSourcePriority]);
+	if (s.subtitleFansubTiebreak !== BASELINE.subtitleFansubTiebreak) sm.put("tb", SUBTIE_TO_CODE[s.subtitleFansubTiebreak]);
+	if (s.subtitleFormatPriority !== BASELINE.subtitleFormatPriority) sm.put("fp", SUBFMT_TO_CODE[s.subtitleFormatPriority]);
+	if (s.dropPictureSubtitles !== BASELINE.dropPictureSubtitles) sm.put("dp", s.dropPictureSubtitles);
+	if (s.dedupeAcrossFormat !== BASELINE.dedupeAcrossFormat) sm.put("df", s.dedupeAcrossFormat);
+	if (s.renameSubtitleTracks !== BASELINE.renameSubtitleTracks) sm.put("rn", s.renameSubtitleTracks);
+	if (s.removeSDHSubtitles !== BASELINE.removeSDHSubtitles) sm.put("rs", s.removeSDHSubtitles);
+	if (s.removeCommentarySubtitles !== BASELINE.removeCommentarySubtitles) sm.put("rc", s.removeCommentarySubtitles);
+	if (s.removeForcedSignsSongs !== BASELINE.removeForcedSignsSongs) sm.put("rf", s.removeForcedSignsSongs);
+	if (s.removeStoryboardSubtitles !== BASELINE.removeStoryboardSubtitles) sm.put("rb", s.removeStoryboardSubtitles);
+	if (s.removeHonorificsSubtitles !== BASELINE.removeHonorificsSubtitles) sm.put("rh", s.removeHonorificsSubtitles);
+	if (!sm.empty) sections.push(sm.toString());
 
 	// VapourSynth chain (one section per active filter, in order)
 	for (const entry of s.vsFilters ?? []) {
@@ -383,6 +432,9 @@ export function decodeSettingsCode(code: string): Partial<JobSettings> {
 			case "sd":
 				applySubtitleDetect(out, kv);
 				break;
+			case "sm":
+				applySubtitleManip(out, kv);
+				break;
 			case "vs": {
 				const entry = parseVsSection(kv);
 				if (entry) vsFilters.push(entry);
@@ -438,6 +490,36 @@ function applySubtitleDetect(out: JobSettings, kv: Record<string, string>): void
 	if (kv.ss !== undefined) out.detectSignsSongs = kv.ss === "1";
 	if (kv.sh !== undefined) out.detectSDH = kv.sh === "1";
 	if (kv.ho !== undefined) out.detectHonorifics = kv.ho === "1";
+	if (kv.ssr !== undefined) {
+		const n = parseFloat(kv.ssr);
+		if (Number.isFinite(n) && n >= 0 && n <= 1) out.signsSongsStyleRatio = n;
+	}
+	if (kv.slr !== undefined) {
+		const n = parseFloat(kv.slr);
+		if (Number.isFinite(n) && n >= 0 && n <= 1) out.signsSongsLineRatio = n;
+	}
+	if (kv.sdr !== undefined) {
+		const n = parseFloat(kv.sdr);
+		if (Number.isFinite(n) && n >= 0 && n <= 1) out.sdhRatioThreshold = n;
+	}
+	if (kv.sdl !== undefined) out.sdhMinLines = numOr(kv.sdl, out.sdhMinLines);
+	if (kv.hmc !== undefined) out.honorificsMinCount = numOr(kv.hmc, out.honorificsMinCount);
+	if (kv.hr !== undefined) out.honorificsRatio = numOr(kv.hr, out.honorificsRatio);
+	if (kv.am !== undefined) out.assumeMislabeledTracks = kv.am === "1";
+}
+
+function applySubtitleManip(out: JobSettings, kv: Record<string, string>): void {
+	if (kv.sp && CODE_TO_SUBSRC[kv.sp]) out.subtitleSourcePriority = CODE_TO_SUBSRC[kv.sp]!;
+	if (kv.tb && CODE_TO_SUBTIE[kv.tb]) out.subtitleFansubTiebreak = CODE_TO_SUBTIE[kv.tb]!;
+	if (kv.fp && CODE_TO_SUBFMT[kv.fp]) out.subtitleFormatPriority = CODE_TO_SUBFMT[kv.fp]!;
+	if (kv.dp !== undefined) out.dropPictureSubtitles = kv.dp === "1";
+	if (kv.df !== undefined) out.dedupeAcrossFormat = kv.df === "1";
+	if (kv.rn !== undefined) out.renameSubtitleTracks = kv.rn === "1";
+	if (kv.rs !== undefined) out.removeSDHSubtitles = kv.rs === "1";
+	if (kv.rc !== undefined) out.removeCommentarySubtitles = kv.rc === "1";
+	if (kv.rf !== undefined) out.removeForcedSignsSongs = kv.rf === "1";
+	if (kv.rb !== undefined) out.removeStoryboardSubtitles = kv.rb === "1";
+	if (kv.rh !== undefined) out.removeHonorificsSubtitles = kv.rh === "1";
 }
 
 function applyDenoise(out: JobSettings, kv: Record<string, string>): void {

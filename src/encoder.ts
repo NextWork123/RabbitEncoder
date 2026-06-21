@@ -17,6 +17,7 @@ import {
 	filterStreamsByLanguage,
 	sanitizeLanguageTag,
 	filterOutCommentaryAudio,
+	filterSubtitleTypes,
 } from "./tracks";
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
@@ -1141,10 +1142,22 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					detectSignsSongs: job.settings.detectSignsSongs,
 					detectSDH: job.settings.detectSDH,
 					detectHonorifics: job.settings.detectHonorifics,
+					signsSongsStyleRatio: job.settings.signsSongsStyleRatio,
+					signsSongsLineRatio: job.settings.signsSongsLineRatio,
+					sdhRatioThreshold: job.settings.sdhRatioThreshold,
+					sdhMinLines: job.settings.sdhMinLines,
+					honorificsMinCount: job.settings.honorificsMinCount,
+					honorificsRatio: job.settings.honorificsRatio,
+					assumeMislabeled: job.settings.assumeMislabeledTracks,
 				},
 				signal,
 			);
-			const sortedSubtitleStreams = sortSubtitleStreams(allSubtitleStreams);
+
+			const sortedSubtitleStreams = sortSubtitleStreams(allSubtitleStreams, {
+				sourcePriority: job.settings.subtitleSourcePriority,
+				fansubTiebreak: job.settings.subtitleFansubTiebreak,
+				formatPriority: job.settings.subtitleFormatPriority,
+			});
 
 			const allowedSubLangs = job.settings.subtitleLanguages || [];
 			const langFilteredSubs = filterStreamsByLanguage(sortedSubtitleStreams, allowedSubLangs, "subtitle");
@@ -1153,10 +1166,25 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				Logger.info(`[subtitle] Filtered ${skippedSubLang} track(s) not in [${allowedSubLangs.join(", ")}]`);
 			}
 
-			const subtitleStreams = job.settings.dedupeSubtitles ? deduplicateSubtitleStreams(langFilteredSubs) : langFilteredSubs;
+			const typeFilteredSubs = filterSubtitleTypes(langFilteredSubs, {
+				removeSDH: job.settings.removeSDHSubtitles,
+				removeCommentary: job.settings.removeCommentarySubtitles,
+				removeForcedSignsSongs: job.settings.removeForcedSignsSongs,
+				removeStoryboard: job.settings.removeStoryboardSubtitles,
+				removeHonorifics: job.settings.removeHonorificsSubtitles,
+				dropPicture: job.settings.dropPictureSubtitles,
+			});
+			const droppedByType = langFilteredSubs.length - typeFilteredSubs.length;
+			if (droppedByType > 0) {
+				Logger.info(`[subtitle] Dropped ${droppedByType} track(s) by type/format filters`);
+			}
 
-			if (job.settings.dedupeSubtitles && langFilteredSubs.length !== subtitleStreams.length) {
-				Logger.info(`[subtitle] Deduplicated ${langFilteredSubs.length - subtitleStreams.length} redundant track(s)`);
+			const subtitleStreams = job.settings.dedupeSubtitles
+				? deduplicateSubtitleStreams(typeFilteredSubs, { acrossFormat: job.settings.dedupeAcrossFormat })
+				: typeFilteredSubs;
+
+			if (job.settings.dedupeSubtitles && typeFilteredSubs.length !== subtitleStreams.length) {
+				Logger.info(`[subtitle] Deduplicated ${typeFilteredSubs.length - subtitleStreams.length} redundant track(s)`);
 			}
 
 			if (subtitleStreams.length > 0) {
@@ -1180,7 +1208,9 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					const trackType = detectSubtitleTrackType(stream);
 					const lang = stream.language || "und";
 					const langGroup = normalizeLanguageGroup(lang);
-					const trackName = buildSubtitleTrackName(trackType, stream.title);
+					const trackName = job.settings.renameSubtitleTracks
+						? buildSubtitleTrackName(trackType, stream.title)
+						: stream.title || buildSubtitleTrackName(trackType, stream.title);
 
 					let effectiveLang = lang;
 					if (trackType === "honorifics") {

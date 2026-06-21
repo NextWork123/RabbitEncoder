@@ -523,7 +523,7 @@ code {
 	background: var(--bg-1);
 	border: 1px solid var(--border);
 	border-radius: 14px;
-	width: min(480px, calc(100vw - 32px));
+	width: min(580px, calc(100vw - 32px));
 	max-height: calc(100dvh - 64px);
 	overflow-y: auto;
 	box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
@@ -628,10 +628,99 @@ code {
 	color: var(--danger, #e5484d);
 }
 
+.settings-section {
+	border: 1px solid var(--border);
+	border-radius: var(--radius, 12px);
+	background: var(--bg-1);
+	overflow: hidden;
+}
+.settings-section > summary {
+	list-style: none;
+	cursor: pointer;
+	user-select: none;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 14px 16px;
+	font-size: 0.72rem;
+	font-weight: 600;
+	color: var(--text-0);
+	text-transform: uppercase;
+	letter-spacing: 0.07em;
+}
+.settings-section > summary::-webkit-details-marker {
+	display: none;
+}
+.settings-section > summary::after {
+	content: "›";
+	font-size: 1.1rem;
+	color: var(--text-2);
+	transition: transform 0.2s ease;
+}
+.settings-section[open] > summary {
+	border-bottom: 1px solid var(--border-subtle);
+}
+.settings-section[open] > summary::after {
+	transform: rotate(90deg);
+}
+
+.settings-section-body {
+	padding: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+}
+.settings-section-body > .setting-group {
+	margin-top: 12px;
+}
+
+.settings-subsection {
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-sm, 8px);
+	background: var(--bg-2);
+}
+.settings-subsection > summary {
+	list-style: none;
+	cursor: pointer;
+	user-select: none;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 10px 12px;
+	font-size: 0.7rem;
+	font-weight: 600;
+	color: var(--text-1);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+.settings-subsection > summary::-webkit-details-marker {
+	display: none;
+}
+.settings-subsection > summary::after {
+	content: "›";
+	font-size: 1rem;
+	color: var(--text-2);
+	transition: transform 0.2s ease;
+}
+.settings-subsection[open] > summary::after {
+	transform: rotate(90deg);
+}
+
+.settings-subsection-body {
+	padding: 14px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+.settings-subsection-body > .setting-group {
+	margin-top: 0;
+}
+
 .radio-group {
 	display: flex;
 	gap: 6px;
 	flex-wrap: wrap;
+	margin-top: 8px;
 }
 
 .radio-pill {

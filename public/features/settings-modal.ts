@@ -14,7 +14,10 @@ import {
 	PIPELINE_PRESET_HELP,
 	QUALITIES,
 	SPEEDS,
+	SUBTITLE_FANSUB_TIEBREAK_OPTIONS,
+	SUBTITLE_FORMAT_PRIORITY_OPTIONS,
 	SUBTITLE_PROCESSING_OPTIONS,
+	SUBTITLE_SOURCE_PRIORITY_OPTIONS,
 	VIDEO_ENCODE_OPTIONS,
 } from "../config/options";
 import {
@@ -39,6 +42,8 @@ import {
 	renderDetectSignsSongsToggle,
 	renderDetectSDHToggle,
 	renderDetectHonorificsToggle,
+	renderNumberControl,
+	renderLabeledToggle,
 } from "./settings-controls";
 import { renderVsChainEditor } from "./vapoursynth";
 import { byId } from "../shared/dom";
@@ -122,6 +127,123 @@ export async function openSettings() {
 	renderDetectSignsSongsToggle(byId("default-detect-signs-songs"), tempDefaults.detectSignsSongs ?? true, (v) => (tempDefaults.detectSignsSongs = v));
 	renderDetectSDHToggle(byId("default-detect-sdh"), tempDefaults.detectSDH ?? true, (v) => (tempDefaults.detectSDH = v));
 	renderDetectHonorificsToggle(byId("default-detect-honorifics"), tempDefaults.detectHonorifics ?? true, (v) => (tempDefaults.detectHonorifics = v));
+	renderRadioPills(
+		byId("default-sub-source-priority"),
+		SUBTITLE_SOURCE_PRIORITY_OPTIONS,
+		tempDefaults.subtitleSourcePriority ?? "official-first",
+		(v) => (tempDefaults.subtitleSourcePriority = v),
+	);
+	renderRadioPills(
+		byId("default-sub-fansub-tiebreak"),
+		SUBTITLE_FANSUB_TIEBREAK_OPTIONS,
+		tempDefaults.subtitleFansubTiebreak ?? "alphabetical",
+		(v) => (tempDefaults.subtitleFansubTiebreak = v),
+	);
+	renderRadioPills(
+		byId("default-sub-format-priority"),
+		SUBTITLE_FORMAT_PRIORITY_OPTIONS,
+		tempDefaults.subtitleFormatPriority ?? "text-first",
+		(v) => (tempDefaults.subtitleFormatPriority = v),
+	);
+
+	renderLabeledToggle(
+		byId("default-drop-picture-subtitles"),
+		tempDefaults.dropPictureSubtitles ?? false,
+		"Drop picture-based (PGS/VOBSUB) tracks",
+		(v) => (tempDefaults.dropPictureSubtitles = v),
+	);
+	renderLabeledToggle(
+		byId("default-dedupe-across-format"),
+		tempDefaults.dedupeAcrossFormat ?? true,
+		"Dedupe across formats (one per language + type)",
+		(v) => (tempDefaults.dedupeAcrossFormat = v),
+	);
+	renderLabeledToggle(
+		byId("default-rename-subtitle-tracks"),
+		tempDefaults.renameSubtitleTracks ?? true,
+		"Rename tracks to clean format",
+		(v) => (tempDefaults.renameSubtitleTracks = v),
+	);
+
+	renderLabeledToggle(
+		byId("default-remove-sdh-subtitles"),
+		tempDefaults.removeSDHSubtitles ?? false,
+		"Remove SDH",
+		(v) => (tempDefaults.removeSDHSubtitles = v),
+	);
+	renderLabeledToggle(
+		byId("default-remove-commentary-subtitles"),
+		tempDefaults.removeCommentarySubtitles ?? false,
+		"Remove commentary",
+		(v) => (tempDefaults.removeCommentarySubtitles = v),
+	);
+	renderLabeledToggle(
+		byId("default-remove-forced-signs-songs"),
+		tempDefaults.removeForcedSignsSongs ?? false,
+		"Remove forced / Signs & Songs",
+		(v) => (tempDefaults.removeForcedSignsSongs = v),
+	);
+	renderLabeledToggle(
+		byId("default-remove-storyboard-subtitles"),
+		tempDefaults.removeStoryboardSubtitles ?? false,
+		"Remove storyboards",
+		(v) => (tempDefaults.removeStoryboardSubtitles = v),
+	);
+	renderLabeledToggle(
+		byId("default-remove-honorifics-subtitles"),
+		tempDefaults.removeHonorificsSubtitles ?? false,
+		"Remove honorifics",
+		(v) => (tempDefaults.removeHonorificsSubtitles = v),
+	);
+
+	renderLabeledToggle(
+		byId("default-assume-mislabeled"),
+		tempDefaults.assumeMislabeledTracks ?? true,
+		"Assume mislabeled JP tracks are English",
+		(v) => (tempDefaults.assumeMislabeledTracks = v),
+	);
+	renderNumberControl(
+		byId("default-signs-songs-style-ratio"),
+		"Signs & Songs ASS-style ratio",
+		tempDefaults.signsSongsStyleRatio ?? 0.8,
+		{ min: 0, max: 1, step: 0.05 },
+		(v) => (tempDefaults.signsSongsStyleRatio = v),
+	);
+	renderNumberControl(
+		byId("default-signs-songs-line-ratio"),
+		"Signs & Songs line ratio",
+		tempDefaults.signsSongsLineRatio ?? 0.1,
+		{ min: 0, max: 1, step: 0.05 },
+		(v) => (tempDefaults.signsSongsLineRatio = v),
+	);
+	renderNumberControl(
+		byId("default-sdh-ratio"),
+		"SDH marker ratio",
+		tempDefaults.sdhRatioThreshold ?? 0.2,
+		{ min: 0, max: 1, step: 0.05 },
+		(v) => (tempDefaults.sdhRatioThreshold = v),
+	);
+	renderNumberControl(
+		byId("default-sdh-min-lines"),
+		"SDH min lines",
+		tempDefaults.sdhMinLines ?? 10,
+		{ min: 0, max: 10000, step: 1 },
+		(v) => (tempDefaults.sdhMinLines = v),
+	);
+	renderNumberControl(
+		byId("default-honorifics-min-count"),
+		"Honorifics min count",
+		tempDefaults.honorificsMinCount ?? 5,
+		{ min: 0, max: 10000, step: 1 },
+		(v) => (tempDefaults.honorificsMinCount = v),
+	);
+	renderNumberControl(
+		byId("default-honorifics-ratio"),
+		"Honorifics ratio (×)",
+		tempDefaults.honorificsRatio ?? 3,
+		{ min: 1, max: 100, step: 0.5 },
+		(v) => (tempDefaults.honorificsRatio = v),
+	);
 	renderKeepBestAudioChannelsToggle(
 		byId("default-keep-best-audio-channels"),
 		tempDefaults.keepBestAudioChannelsOnly || false,

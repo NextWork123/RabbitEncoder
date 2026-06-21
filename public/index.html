@@ -99,94 +99,160 @@
 						<button class="btn-close" id="close-settings-btn">&times;</button>
 					</div>
 					<div class="modal-body">
-						<div class="setting-group">
-							<label>Pipeline Mode</label>
-							<div class="radio-group" id="default-pipeline-mode"></div>
-							<div class="setting-help" id="default-pipeline-mode-help"></div>
-						</div>
-						<div class="setting-group" id="default-pipeline-custom" style="display: none">
-							<label>Video encoding</label>
-							<div class="radio-group" id="default-video-encode"></div>
-							<label style="margin-top: 8px">Audio encoding</label>
-							<div class="radio-group" id="default-audio-encode"></div>
-							<label style="margin-top: 8px">Subtitle processing</label>
-							<div class="radio-group" id="default-subtitle-processing"></div>
-						</div>
-						<div class="setting-group">
-							<label>Encoder</label>
-							<div class="radio-group" id="default-encoder"></div>
-							<div class="setting-help" id="default-encoder-help"></div>
-						</div>
-						<div id="default-abe-controls">
-							<div class="setting-group">
-								<label>Video Quality</label>
-								<div class="radio-group" id="default-quality"></div>
-							</div>
-							<div class="setting-group">
-								<label>Encoder Speed</label>
-								<div class="radio-group" id="default-speed"></div>
-							</div>
-							<div class="setting-group">
-								<label>Boosting</label>
-								<div class="toggle-group" id="default-skip-boosting"></div>
-							</div>
-						</div>
-						<div id="default-manual-controls" style="display: none">
-							<div class="setting-group">
-								<label>CRF <span id="default-crf-val"></span></label>
-								<div class="slider-row">
-									<input type="range" id="default-crf-slider" min="1" max="70" step="1" />
-									<input type="number" id="default-crf-input" min="1" max="70" step="1" class="num-input" />
+						<details class="settings-section">
+							<summary>Pipeline</summary>
+							<div class="settings-section-body">
+								<div class="setting-group">
+									<label>Pipeline Mode</label>
+									<div class="radio-group" id="default-pipeline-mode"></div>
+									<div class="setting-help" id="default-pipeline-mode-help"></div>
+								</div>
+								<div class="setting-group" id="default-pipeline-custom" style="display: none">
+									<label>Video encoding</label>
+									<div class="radio-group" id="default-video-encode"></div>
+									<label style="margin-top: 12px">Audio encoding</label>
+									<div class="radio-group" id="default-audio-encode"></div>
+									<label style="margin-top: 12px">Subtitle processing</label>
+									<div class="radio-group" id="default-subtitle-processing"></div>
 								</div>
 							</div>
-							<div class="setting-group">
-								<label>Preset <span id="default-preset-val"></span></label>
-								<input type="range" id="default-preset-slider" min="-1" max="13" step="1" />
+						</details>
+
+						<details class="settings-section">
+							<summary>Video handling</summary>
+							<div class="settings-section-body">
+								<div class="setting-group">
+									<label>Encoder</label>
+									<div class="radio-group" id="default-encoder"></div>
+									<div class="setting-help" id="default-encoder-help"></div>
+								</div>
+								<div id="default-abe-controls">
+									<div class="setting-group">
+										<label>Video Quality</label>
+										<div class="radio-group" id="default-quality"></div>
+									</div>
+									<div class="setting-group">
+										<label>Encoder Speed</label>
+										<div class="radio-group" id="default-speed"></div>
+									</div>
+									<div class="setting-group">
+										<label>Boosting</label>
+										<div class="toggle-group" id="default-skip-boosting"></div>
+									</div>
+								</div>
+								<div id="default-manual-controls" style="display: none">
+									<div class="setting-group">
+										<label>CRF <span id="default-crf-val"></span></label>
+										<div class="slider-row">
+											<input type="range" id="default-crf-slider" min="1" max="70" step="1" />
+											<input type="number" id="default-crf-input" min="1" max="70" step="1" class="num-input" />
+										</div>
+									</div>
+									<div class="setting-group">
+										<label>Preset <span id="default-preset-val"></span></label>
+										<input type="range" id="default-preset-slider" min="-1" max="13" step="1" />
+									</div>
+								</div>
+								<div class="setting-group">
+									<label>Denoise</label>
+									<div class="radio-group" id="default-denoise"></div>
+								</div>
+								<div class="setting-group">
+									<label>Deband</label>
+									<div class="radio-group" id="default-deband"></div>
+								</div>
+								<div class="setting-group">
+									<label>Resolution</label>
+									<div class="toggle-group" id="default-downscale"></div>
+								</div>
 							</div>
-						</div>
-						<div class="setting-group">
-							<label>Denoise</label>
-							<div class="radio-group" id="default-denoise"></div>
-						</div>
-						<div class="setting-group">
-							<label>Deband</label>
-							<div class="radio-group" id="default-deband"></div>
-						</div>
-						<div class="setting-group">
-							<label>Resolution</label>
-							<div class="toggle-group" id="default-downscale"></div>
-						</div>
-						<div class="setting-group">
-							<label>Subtitle Tracks</label>
-							<div class="toggle-group" id="default-dedupe-subtitles"></div>
-						</div>
-						<div class="setting-group">
-							<label>Subtitle Detection</label>
-							<div class="toggle-group" id="default-sub-lang-detect"></div>
-							<div class="toggle-group" id="default-sub-lang-confidence"></div>
-							<div class="toggle-group" id="default-detect-signs-songs"></div>
-							<div class="toggle-group" id="default-detect-sdh"></div>
-							<div class="toggle-group" id="default-detect-honorifics"></div>
-						</div>
-						<div class="setting-group">
-							<label>Subtitle Languages</label>
-							<div id="default-subtitle-languages"></div>
-						</div>
-						<div class="setting-group">
-							<label>Audio Tracks</label>
-							<div class="toggle-group" id="default-keep-best-audio-channels"></div>
-							<div class="toggle-group" id="default-remove-commentary-audio"></div>
-							<div class="toggle-group" id="default-no-phase-inv"></div>
-						</div>
-						<div class="setting-group">
-							<label>Audio Languages</label>
-							<div id="default-audio-languages"></div>
-						</div>
-						<div class="setting-group">
-							<label>Audio Bitrates (kbps)</label>
-							<div class="bitrate-grid" id="default-bitrates"></div>
-						</div>
-						<div class="setting-group" id="settings-code-panel-default"></div>
+						</details>
+
+						<details class="settings-section">
+							<summary>Audio handling</summary>
+							<div class="settings-section-body">
+								<div class="setting-group">
+									<label>Audio Tracks</label>
+									<div class="toggle-group" id="default-keep-best-audio-channels"></div>
+									<div class="toggle-group" id="default-remove-commentary-audio"></div>
+									<div class="toggle-group" id="default-no-phase-inv"></div>
+								</div>
+								<div class="setting-group">
+									<label>Audio Languages</label>
+									<div id="default-audio-languages"></div>
+								</div>
+								<div class="setting-group">
+									<label>Audio Bitrates (kbps)</label>
+									<div class="bitrate-grid" id="default-bitrates"></div>
+								</div>
+							</div>
+						</details>
+
+						<details class="settings-section">
+							<summary>Subtitle handling</summary>
+							<div class="settings-section-body">
+								<div class="setting-group">
+									<label>Source priority</label>
+									<div class="radio-group" id="default-sub-source-priority"></div>
+									<div class="radio-group" id="default-sub-fansub-tiebreak"></div>
+								</div>
+								<div class="setting-group">
+									<label>Format priority</label>
+									<div class="radio-group" id="default-sub-format-priority"></div>
+									<div class="toggle-group" id="default-drop-picture-subtitles"></div>
+								</div>
+								<div class="setting-group">
+									<label>Deduplication</label>
+									<div class="toggle-group" id="default-dedupe-subtitles"></div>
+									<div class="toggle-group" id="default-dedupe-across-format"></div>
+								</div>
+								<div class="setting-group">
+									<label>Remove track types</label>
+									<div class="toggle-group" id="default-remove-sdh-subtitles"></div>
+									<div class="toggle-group" id="default-remove-commentary-subtitles"></div>
+									<div class="toggle-group" id="default-remove-forced-signs-songs"></div>
+									<div class="toggle-group" id="default-remove-storyboard-subtitles"></div>
+									<div class="toggle-group" id="default-remove-honorifics-subtitles"></div>
+								</div>
+								<div class="setting-group">
+									<label>Track names</label>
+									<div class="toggle-group" id="default-rename-subtitle-tracks"></div>
+								</div>
+								<div class="setting-group">
+									<label>Type detection</label>
+									<div class="toggle-group" id="default-sub-lang-detect"></div>
+									<div class="toggle-group" id="default-sub-lang-confidence"></div>
+									<div class="toggle-group" id="default-detect-signs-songs"></div>
+									<div class="toggle-group" id="default-detect-sdh"></div>
+									<div class="toggle-group" id="default-detect-honorifics"></div>
+								</div>
+								<details class="settings-subsection">
+									<summary>Advanced detection tuning</summary>
+									<div class="settings-subsection-body">
+										<div class="setting-group">
+											<div class="toggle-group" id="default-assume-mislabeled"></div>
+											<div class="toggle-group" id="default-signs-songs-style-ratio"></div>
+											<div class="toggle-group" id="default-signs-songs-line-ratio"></div>
+											<div class="toggle-group" id="default-sdh-ratio"></div>
+											<div class="toggle-group" id="default-sdh-min-lines"></div>
+											<div class="toggle-group" id="default-honorifics-min-count"></div>
+											<div class="toggle-group" id="default-honorifics-ratio"></div>
+										</div>
+									</div>
+								</details>
+								<div class="setting-group">
+									<label>Subtitle Languages</label>
+									<div id="default-subtitle-languages"></div>
+								</div>
+							</div>
+						</details>
+
+						<details class="settings-section">
+							<summary>Settings code</summary>
+							<div class="settings-section-body">
+								<div class="setting-group" id="settings-code-panel-default"></div>
+							</div>
+						</details>
 					</div>
 					<div class="modal-footer">
 						<button class="btn btn-ghost" id="open-default-advanced-btn">Advanced</button>
@@ -204,94 +270,160 @@
 						<button class="btn-close" id="close-job-modal-btn">&times;</button>
 					</div>
 					<div class="modal-body">
-						<div class="setting-group">
-							<label>Pipeline Mode</label>
-							<div class="radio-group" id="job-pipeline-mode"></div>
-							<div class="setting-help" id="job-pipeline-mode-help"></div>
-						</div>
-						<div class="setting-group" id="job-pipeline-custom" style="display: none">
-							<label>Video encoding</label>
-							<div class="radio-group" id="job-video-encode"></div>
-							<label style="margin-top: 8px">Audio encoding</label>
-							<div class="radio-group" id="job-audio-encode"></div>
-							<label style="margin-top: 8px">Subtitle processing</label>
-							<div class="radio-group" id="job-subtitle-processing"></div>
-						</div>
-						<div class="setting-group">
-							<label>Encoder</label>
-							<div class="radio-group" id="job-encoder"></div>
-							<div class="setting-help" id="job-encoder-help"></div>
-						</div>
-						<div id="job-abe-controls">
-							<div class="setting-group">
-								<label>Video Quality</label>
-								<div class="radio-group" id="job-quality"></div>
-							</div>
-							<div class="setting-group">
-								<label>Encoder Speed</label>
-								<div class="radio-group" id="job-speed"></div>
-							</div>
-							<div class="setting-group">
-								<label>Boosting</label>
-								<div class="toggle-group" id="job-skip-boosting"></div>
-							</div>
-						</div>
-						<div id="job-manual-controls" style="display: none">
-							<div class="setting-group">
-								<label>CRF <span id="job-crf-val"></span></label>
-								<div class="slider-row">
-									<input type="range" id="job-crf-slider" min="1" max="70" step="1" />
-									<input type="number" id="job-crf-input" min="1" max="70" step="1" class="num-input" />
+						<details class="settings-section">
+							<summary>Pipeline</summary>
+							<div class="settings-section-body">
+								<div class="setting-group">
+									<label>Pipeline Mode</label>
+									<div class="radio-group" id="job-pipeline-mode"></div>
+									<div class="setting-help" id="job-pipeline-mode-help"></div>
+								</div>
+								<div class="setting-group" id="job-pipeline-custom" style="display: none">
+									<label>Video encoding</label>
+									<div class="radio-group" id="job-video-encode"></div>
+									<label style="margin-top: 12px">Audio encoding</label>
+									<div class="radio-group" id="job-audio-encode"></div>
+									<label style="margin-top: 12px">Subtitle processing</label>
+									<div class="radio-group" id="job-subtitle-processing"></div>
 								</div>
 							</div>
-							<div class="setting-group">
-								<label>Preset <span id="job-preset-val"></span></label>
-								<input type="range" id="job-preset-slider" min="-1" max="13" step="1" />
+						</details>
+
+						<details class="settings-section">
+							<summary>Video handling</summary>
+							<div class="settings-section-body">
+								<div class="setting-group">
+									<label>Encoder</label>
+									<div class="radio-group" id="job-encoder"></div>
+									<div class="setting-help" id="job-encoder-help"></div>
+								</div>
+								<div id="job-abe-controls">
+									<div class="setting-group">
+										<label>Video Quality</label>
+										<div class="radio-group" id="job-quality"></div>
+									</div>
+									<div class="setting-group">
+										<label>Encoder Speed</label>
+										<div class="radio-group" id="job-speed"></div>
+									</div>
+									<div class="setting-group">
+										<label>Boosting</label>
+										<div class="toggle-group" id="job-skip-boosting"></div>
+									</div>
+								</div>
+								<div id="job-manual-controls" style="display: none">
+									<div class="setting-group">
+										<label>CRF <span id="job-crf-val"></span></label>
+										<div class="slider-row">
+											<input type="range" id="job-crf-slider" min="1" max="70" step="1" />
+											<input type="number" id="job-crf-input" min="1" max="70" step="1" class="num-input" />
+										</div>
+									</div>
+									<div class="setting-group">
+										<label>Preset <span id="job-preset-val"></span></label>
+										<input type="range" id="job-preset-slider" min="-1" max="13" step="1" />
+									</div>
+								</div>
+								<div class="setting-group">
+									<label>Denoise</label>
+									<div class="radio-group" id="job-denoise"></div>
+								</div>
+								<div class="setting-group">
+									<label>Deband</label>
+									<div class="radio-group" id="job-deband"></div>
+								</div>
+								<div class="setting-group">
+									<label>Resolution</label>
+									<div class="toggle-group" id="job-downscale"></div>
+								</div>
 							</div>
-						</div>
-						<div class="setting-group">
-							<label>Denoise</label>
-							<div class="radio-group" id="job-denoise"></div>
-						</div>
-						<div class="setting-group">
-							<label>Deband</label>
-							<div class="radio-group" id="job-deband"></div>
-						</div>
-						<div class="setting-group">
-							<label>Resolution</label>
-							<div class="toggle-group" id="job-downscale"></div>
-						</div>
-						<div class="setting-group">
-							<label>Subtitle Tracks</label>
-							<div class="toggle-group" id="job-dedupe-subtitles"></div>
-						</div>
-						<div class="setting-group">
-							<label>Subtitle Detection</label>
-							<div class="toggle-group" id="job-sub-lang-detect"></div>
-							<div class="toggle-group" id="job-sub-lang-confidence"></div>
-							<div class="toggle-group" id="job-detect-signs-songs"></div>
-							<div class="toggle-group" id="job-detect-sdh"></div>
-							<div class="toggle-group" id="job-detect-honorifics"></div>
-						</div>
-						<div class="setting-group">
-							<label>Subtitle Languages</label>
-							<div id="job-subtitle-languages"></div>
-						</div>
-						<div class="setting-group">
-							<label>Audio Tracks</label>
-							<div class="toggle-group" id="job-keep-best-audio-channels"></div>
-							<div class="toggle-group" id="job-remove-commentary-audio"></div>
-							<div class="toggle-group" id="job-no-phase-inv"></div>
-						</div>
-						<div class="setting-group">
-							<label>Audio Languages</label>
-							<div id="job-audio-languages"></div>
-						</div>
-						<div class="setting-group">
-							<label>Audio Bitrates (kbps)</label>
-							<div class="bitrate-grid" id="job-bitrates"></div>
-						</div>
-						<div class="setting-group" id="settings-code-panel-job"></div>
+						</details>
+
+						<details class="settings-section">
+							<summary>Audio handling</summary>
+							<div class="settings-section-body">
+								<div class="setting-group">
+									<label>Audio Tracks</label>
+									<div class="toggle-group" id="job-keep-best-audio-channels"></div>
+									<div class="toggle-group" id="job-remove-commentary-audio"></div>
+									<div class="toggle-group" id="job-no-phase-inv"></div>
+								</div>
+								<div class="setting-group">
+									<label>Audio Languages</label>
+									<div id="job-audio-languages"></div>
+								</div>
+								<div class="setting-group">
+									<label>Audio Bitrates (kbps)</label>
+									<div class="bitrate-grid" id="job-bitrates"></div>
+								</div>
+							</div>
+						</details>
+
+						<details class="settings-section">
+							<summary>Subtitle handling</summary>
+							<div class="settings-section-body">
+								<div class="setting-group">
+									<label>Source priority</label>
+									<div class="radio-group" id="job-sub-source-priority"></div>
+									<div class="radio-group" id="job-sub-fansub-tiebreak"></div>
+								</div>
+								<div class="setting-group">
+									<label>Format priority</label>
+									<div class="radio-group" id="job-sub-format-priority"></div>
+									<div class="toggle-group" id="job-drop-picture-subtitles"></div>
+								</div>
+								<div class="setting-group">
+									<label>Deduplication</label>
+									<div class="toggle-group" id="job-dedupe-subtitles"></div>
+									<div class="toggle-group" id="job-dedupe-across-format"></div>
+								</div>
+								<div class="setting-group">
+									<label>Remove track types</label>
+									<div class="toggle-group" id="job-remove-sdh-subtitles"></div>
+									<div class="toggle-group" id="job-remove-commentary-subtitles"></div>
+									<div class="toggle-group" id="job-remove-forced-signs-songs"></div>
+									<div class="toggle-group" id="job-remove-storyboard-subtitles"></div>
+									<div class="toggle-group" id="job-remove-honorifics-subtitles"></div>
+								</div>
+								<div class="setting-group">
+									<label>Track names</label>
+									<div class="toggle-group" id="job-rename-subtitle-tracks"></div>
+								</div>
+								<div class="setting-group">
+									<label>Type detection</label>
+									<div class="toggle-group" id="job-sub-lang-detect"></div>
+									<div class="toggle-group" id="job-sub-lang-confidence"></div>
+									<div class="toggle-group" id="job-detect-signs-songs"></div>
+									<div class="toggle-group" id="job-detect-sdh"></div>
+									<div class="toggle-group" id="job-detect-honorifics"></div>
+								</div>
+								<details class="settings-subsection">
+									<summary>Advanced detection tuning</summary>
+									<div class="settings-subsection-body">
+										<div class="setting-group">
+											<div class="toggle-group" id="job-assume-mislabeled"></div>
+											<div class="toggle-group" id="job-signs-songs-style-ratio"></div>
+											<div class="toggle-group" id="job-signs-songs-line-ratio"></div>
+											<div class="toggle-group" id="job-sdh-ratio"></div>
+											<div class="toggle-group" id="job-sdh-min-lines"></div>
+											<div class="toggle-group" id="job-honorifics-min-count"></div>
+											<div class="toggle-group" id="job-honorifics-ratio"></div>
+										</div>
+									</div>
+								</details>
+								<div class="setting-group">
+									<label>Subtitle Languages</label>
+									<div id="job-subtitle-languages"></div>
+								</div>
+							</div>
+						</details>
+
+						<details class="settings-section">
+							<summary>Settings code</summary>
+							<div class="settings-section-body">
+								<div class="setting-group" id="settings-code-panel-job"></div>
+							</div>
+						</details>
 					</div>
 					<div class="modal-footer">
 						<button class="btn btn-ghost" id="open-job-advanced-btn">Advanced</button>

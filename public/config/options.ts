@@ -70,6 +70,9 @@ export const PIPELINE_PRESETS: readonly PipelinePreset[] = ["full", "prepare", "
 export const VIDEO_ENCODE_OPTIONS: readonly VideoEncodeMode[] = ["av1", "off"];
 export const AUDIO_ENCODE_OPTIONS: readonly AudioEncodeMode[] = ["opus", "copy"];
 export const SUBTITLE_PROCESSING_OPTIONS: readonly SubtitleProcessingMode[] = ["full", "copy"];
+export const SUBTITLE_SOURCE_PRIORITY_OPTIONS = ["official-first", "fansub-first"] as const;
+export const SUBTITLE_FANSUB_TIEBREAK_OPTIONS = ["alphabetical", "source-order"] as const;
+export const SUBTITLE_FORMAT_PRIORITY_OPTIONS = ["text-first", "picture-first"] as const;
 
 export const PIPELINE_PRESET_HELP: Record<PipelinePreset, string> = {
 	full: "Denoise, AV1, Opus, full subtitle pipeline.",
