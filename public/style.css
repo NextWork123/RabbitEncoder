@@ -1468,6 +1468,43 @@ code {
 	flex-wrap: wrap;
 }
 
+.select-input {
+	font-family: var(--font-mono);
+	font-size: 0.82rem;
+	padding: 6px 8px;
+	background: var(--bg-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	color: var(--text-0);
+	outline: none;
+	transition: border-color 0.15s;
+	box-sizing: border-box;
+}
+
+.sub-track-id {
+	font-family: var(--font-mono);
+	font-size: 0.68rem;
+	color: var(--text-2);
+	background: var(--bg-3);
+	padding: 1px 6px;
+	border-radius: 8px;
+	flex-shrink: 0;
+}
+
+.sub-track-removed {
+	opacity: 0.55;
+}
+
+.sub-track-removed .sub-track-name {
+	text-decoration: line-through;
+}
+
+.sub-badge-removed {
+	background: rgba(239, 68, 68, 0.12);
+	color: #ef4444;
+	border: 1px solid #ef4444;
+}
+
 .sub-badge {
 	font-family: var(--font-mono);
 	font-size: 0.62rem;

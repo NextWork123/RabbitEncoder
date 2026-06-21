@@ -8,6 +8,8 @@ export type VideoEncodeMode = "av1" | "off";
 export type AudioEncodeMode = "opus" | "copy";
 export type SubtitleProcessingMode = "full" | "copy";
 
+export type SubtitleLangDetectMode = "enabled" | "und-only" | "disabled";
+
 /**
  * Backend used for the nlmeans denoise filter.
  *
@@ -108,6 +110,16 @@ export interface JobSettings {
 	removeCommentaryAudio: boolean;
 	audioLanguages: string[];
 	subtitleLanguages: string[];
+	/** Language detector mode for subtitle tracks. */
+	subtitleLangDetect: SubtitleLangDetectMode;
+	/** Minimum language-detector confidence (0–1) required to relabel a track. */
+	subtitleLangDetectConfidence: number;
+	/** Reclassify low-dialogue / sign-styled "full" tracks as Signs & Songs. */
+	detectSignsSongs: boolean;
+	/** Reclassify tracks with many SDH markers as SDH. */
+	detectSDH: boolean;
+	/** Reclassify the most honorific-dense English full track as Honorifics. */
+	detectHonorifics: boolean;
 	/**
 	 * Ordered list of VapourSynth filter passes to apply during the prepare
 	 * stage, before the FFmpeg -vf chain. Each entry references a preset by

@@ -39,6 +39,11 @@ const DEFAULT_JOB_SETTINGS: JobSettings = {
 	removeCommentaryAudio: false,
 	audioLanguages: [],
 	subtitleLanguages: [],
+	subtitleLangDetect: "enabled",
+	subtitleLangDetectConfidence: 0.05,
+	detectSignsSongs: true,
+	detectSDH: true,
+	detectHonorifics: true,
 	audioBitrates: DEFAULT_BITRATES,
 	vsFilters: [],
 };

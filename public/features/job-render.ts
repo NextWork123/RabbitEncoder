@@ -194,11 +194,24 @@ export function renderAudioPreview(data: AudioPreviewResult): void {
 	byId("audio-preview-loading").style.display = "none";
 	byId("audio-preview-content").style.display = "";
 
+	const outputIndices = new Set(data.output.map((t) => t.index));
+
 	byId("audio-preview-source").innerHTML =
-		data.source.length > 0 ? data.source.map((t) => renderAudioTrack(t, false)).join("") : '<div class="sub-track"><em>No audio tracks</em></div>';
+		data.source.length > 0
+			? data.source.map((t) => renderAudioTrack(t, false, { removed: !outputIndices.has(t.index) })).join("")
+			: '<div class="sub-track"><em>No audio tracks</em></div>';
 
 	byId("audio-preview-output").innerHTML =
-		data.output.length > 0 ? data.output.map((t) => renderAudioTrack(t, true)).join("") : '<div class="sub-track"><em>No audio tracks</em></div>';
+		data.output.length > 0
+			? data.output
+					.map((t) => {
+						// Same source stream id on both sides — flag a channel-layout change (downmix).
+						const src = data.source.find((s) => s.index === t.index);
+						const changed = !!src && src.channelLayout !== t.channelLayout;
+						return renderAudioTrack(t, true, { highlight: changed });
+					})
+					.join("")
+			: '<div class="sub-track"><em>No audio tracks</em></div>';
 }
 
 export function formatBitrate(raw?: number | null): string {
@@ -218,8 +231,9 @@ export function formatBitrate2(kbps?: number | null): string {
 	return `${kbps} kbps`;
 }
 
-export function renderAudioTrack(track: AudioPreviewTrack, isOutput: boolean): string {
+export function renderAudioTrack(track: AudioPreviewTrack, isOutput: boolean, opts: { removed?: boolean; highlight?: boolean } = {}): string {
 	const badges = [];
+	if (opts.removed) badges.push('<span class="sub-badge sub-badge-removed">Removed</span>');
 	if (track.isDefault) badges.push('<span class="sub-badge sub-badge-default">Default</span>');
 	if (track.trackType === "commentary") badges.push('<span class="sub-badge sub-badge-commentary">Commentary</span>');
 	if (track.trackType === "descriptive") badges.push('<span class="sub-badge sub-badge-hi">Descriptive</span>');
@@ -229,9 +243,14 @@ export function renderAudioTrack(track: AudioPreviewTrack, isOutput: boolean): s
 	const name = track.title || track.trackType;
 	const bitrate = isOutput ? formatBitrate(track.outputBitrate === undefined ? undefined : track.outputBitrate * 1000) : formatBitrate(track.bitrate);
 
+	const cls = ["sub-track"];
+	if (opts.highlight) cls.push("sub-track-changed");
+	if (opts.removed) cls.push("sub-track-removed");
+
 	return `
-		<div class="sub-track">
+		<div class="${cls.join(" ")}">
 			<div class="sub-track-top">
+				<span class="sub-track-id">#${track.index}</span>
 				<span class="sub-track-flag">${track.flag}</span>
 				<span class="sub-track-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
 				<span class="sub-track-lang">${escapeHtml(track.language)}</span>
@@ -253,24 +272,29 @@ export function renderSubtitlePreview(data: SubtitlePreviewResult): void {
 	byId("sub-preview-loading").style.display = "none";
 	byId("sub-preview-content").style.display = "";
 
+	const outputIndices = new Set(data.output.map((t) => t.index));
+
 	byId("sub-preview-source").innerHTML =
-		data.source.length > 0 ? data.source.map((t) => renderSubTrack(t, false)).join("") : '<div class="sub-track"><em>No subtitle tracks</em></div>';
+		data.source.length > 0
+			? data.source.map((t) => renderSubTrack(t, { removed: !outputIndices.has(t.index) })).join("")
+			: '<div class="sub-track"><em>No subtitle tracks</em></div>';
 
 	byId("sub-preview-output").innerHTML =
 		data.output.length > 0
 			? data.output
-					.map((t, i) => {
-						// Highlight changes
+					.map((t) => {
+						// Same source stream id on both sides — flag a language relabel.
 						const src = data.source.find((s) => s.index === t.index);
-						const changed = !!src && (src.language !== t.language || src.trackName !== t.trackName || data.source.indexOf(src) !== i);
-						return renderSubTrack(t, changed);
+						const changed = !!src && src.language !== t.language;
+						return renderSubTrack(t, { highlight: changed });
 					})
 					.join("")
 			: '<div class="sub-track"><em>No subtitle tracks</em></div>';
 }
 
-export function renderSubTrack(track: SubtitlePreviewTrack, highlight: boolean): string {
+export function renderSubTrack(track: SubtitlePreviewTrack, opts: { highlight?: boolean; removed?: boolean } = {}): string {
 	const badges = [];
+	if (opts.removed) badges.push('<span class="sub-badge sub-badge-removed">Removed</span>');
 	if (track.isDefault) badges.push('<span class="sub-badge sub-badge-default">Default</span>');
 	if (track.isForced) badges.push('<span class="sub-badge sub-badge-forced">Forced</span>');
 	if (track.isHearingImpaired) badges.push('<span class="sub-badge sub-badge-hi">HI</span>');
@@ -278,9 +302,14 @@ export function renderSubTrack(track: SubtitlePreviewTrack, highlight: boolean):
 	if (track.isOriginal) badges.push('<span class="sub-badge sub-badge-original">Original</span>');
 	badges.push(`<span class="sub-badge sub-badge-type">${escapeHtml(track.trackType)}</span>`);
 
+	const cls = ["sub-track"];
+	if (opts.highlight) cls.push("sub-track-changed");
+	if (opts.removed) cls.push("sub-track-removed");
+
 	return `
-    <div class="sub-track${highlight ? " sub-track-changed" : ""}">
+    <div class="${cls.join(" ")}">
       <div class="sub-track-top">
+        <span class="sub-track-id">#${track.index}</span>
         <span class="sub-track-flag">${track.flag}</span>
         <span class="sub-track-name" title="${escapeHtml(track.trackName)}">${escapeHtml(track.trackName)}</span>
         <span class="sub-track-lang">${escapeHtml(track.language)}</span>

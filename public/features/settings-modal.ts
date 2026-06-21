@@ -34,6 +34,11 @@ import {
 	renderRemoveCommentaryAudioToggle,
 	renderSkipBoostingToggle,
 	wireEncoderControls,
+	renderSubtitleLangDetectControl,
+	renderSubtitleConfidenceControl,
+	renderDetectSignsSongsToggle,
+	renderDetectSDHToggle,
+	renderDetectHonorificsToggle,
 } from "./settings-controls";
 import { renderVsChainEditor } from "./vapoursynth";
 import { byId } from "../shared/dom";
@@ -108,6 +113,15 @@ export async function openSettings() {
 	renderSkipBoostingToggle(byId("default-skip-boosting"), tempDefaults.skipBoosting || false, (v) => (tempDefaults.skipBoosting = v));
 	renderNoPhaseInvToggle(byId("default-no-phase-inv"), tempDefaults.noPhaseInv || false, (v) => (tempDefaults.noPhaseInv = v));
 	renderDedupeSubtitlesToggle(byId("default-dedupe-subtitles"), tempDefaults.dedupeSubtitles || false, (v) => (tempDefaults.dedupeSubtitles = v));
+	renderSubtitleLangDetectControl(byId("default-sub-lang-detect"), tempDefaults.subtitleLangDetect ?? "enabled", (v) => (tempDefaults.subtitleLangDetect = v));
+	renderSubtitleConfidenceControl(
+		byId("default-sub-lang-confidence"),
+		tempDefaults.subtitleLangDetectConfidence ?? 0.05,
+		(v) => (tempDefaults.subtitleLangDetectConfidence = v),
+	);
+	renderDetectSignsSongsToggle(byId("default-detect-signs-songs"), tempDefaults.detectSignsSongs ?? true, (v) => (tempDefaults.detectSignsSongs = v));
+	renderDetectSDHToggle(byId("default-detect-sdh"), tempDefaults.detectSDH ?? true, (v) => (tempDefaults.detectSDH = v));
+	renderDetectHonorificsToggle(byId("default-detect-honorifics"), tempDefaults.detectHonorifics ?? true, (v) => (tempDefaults.detectHonorifics = v));
 	renderKeepBestAudioChannelsToggle(
 		byId("default-keep-best-audio-channels"),
 		tempDefaults.keepBestAudioChannelsOnly || false,

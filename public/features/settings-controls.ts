@@ -565,3 +565,99 @@ export function renderGradfunParamsEditor(container: HTMLElement, params: Gradfu
 
 	container.appendChild(grid);
 }
+
+export function renderSubtitleLangDetectControl(
+	container: HTMLElement,
+	value: "enabled" | "und-only" | "disabled",
+	onChange: (value: "enabled" | "und-only" | "disabled") => void,
+): void {
+	container.innerHTML = "";
+	const modes: { value: "enabled" | "und-only" | "disabled"; label: string }[] = [
+		{ value: "enabled", label: "Enabled" },
+		{ value: "und-only", label: "Only if language undefined" },
+		{ value: "disabled", label: "Disabled" },
+	];
+
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const span = document.createElement("span");
+	span.textContent = "Language detector\u00A0";
+
+	const select = document.createElement("select");
+	select.className = "select-input";
+	for (const m of modes) {
+		const o = document.createElement("option");
+		o.value = m.value;
+		o.textContent = m.label;
+		if (m.value === value) o.selected = true;
+		select.appendChild(o);
+	}
+	select.onchange = () => onChange(select.value as "enabled" | "und-only" | "disabled");
+
+	label.appendChild(span);
+	label.appendChild(select);
+	container.appendChild(label);
+}
+
+export function renderSubtitleConfidenceControl(container: HTMLElement, value: number, onChange: (value: number) => void): void {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const span = document.createElement("span");
+	span.textContent = "Min detector confidence\u00A0";
+
+	const input = document.createElement("input");
+	input.type = "number";
+	input.min = "0";
+	input.max = "100";
+	input.step = "1";
+	input.className = "num-input";
+	input.value = String(Math.round((value ?? 0.05) * 100));
+
+	const pct = document.createElement("span");
+	pct.textContent = "\u00A0%";
+
+	input.oninput = () => {
+		let v = parseFloat(input.value);
+		if (!Number.isFinite(v)) v = 5;
+		v = Math.min(100, Math.max(0, v));
+		onChange(v / 100);
+	};
+
+	label.appendChild(span);
+	label.appendChild(input);
+	label.appendChild(pct);
+	container.appendChild(label);
+}
+
+export function renderDetectSignsSongsToggle(container: HTMLElement, checked: boolean, onChange: (value: boolean) => void): void {
+	renderSimpleToggle(container, checked, "\u00A0Detect Signs & Songs tracks", onChange);
+}
+
+export function renderDetectSDHToggle(container: HTMLElement, checked: boolean, onChange: (value: boolean) => void): void {
+	renderSimpleToggle(container, checked, "\u00A0Detect SDH tracks", onChange);
+}
+
+export function renderDetectHonorificsToggle(container: HTMLElement, checked: boolean, onChange: (value: boolean) => void): void {
+	renderSimpleToggle(container, checked, "\u00A0Detect Honorifics tracks", onChange);
+}
+
+function renderSimpleToggle(container: HTMLElement, checked: boolean, labelText: string, onChange: (value: boolean) => void): void {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const input = document.createElement("input");
+	input.type = "checkbox";
+	input.checked = checked;
+	input.onchange = () => onChange(input.checked);
+
+	const span = document.createElement("span");
+	span.textContent = labelText;
+
+	label.appendChild(input);
+	label.appendChild(span);
+	container.appendChild(label);
+}

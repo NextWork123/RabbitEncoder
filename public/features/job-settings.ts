@@ -28,6 +28,11 @@ import {
 	renderRemoveCommentaryAudioToggle,
 	renderSkipBoostingToggle,
 	wireEncoderControls,
+	renderSubtitleLangDetectControl,
+	renderSubtitleConfidenceControl,
+	renderDetectSignsSongsToggle,
+	renderDetectSDHToggle,
+	renderDetectHonorificsToggle,
 } from "./settings-controls";
 import { applyPresetToSettings, inferPreset } from "./settings-modal";
 import { byId } from "../shared/dom";
@@ -85,6 +90,15 @@ export async function openJobSettings(jobId: string): Promise<void> {
 	renderSkipBoostingToggle(byId("job-skip-boosting"), tempSettings.skipBoosting || false, (v) => (tempSettings.skipBoosting = v));
 	renderNoPhaseInvToggle(byId("job-no-phase-inv"), tempSettings.noPhaseInv || false, (v) => (tempSettings.noPhaseInv = v));
 	renderDedupeSubtitlesToggle(byId("job-dedupe-subtitles"), tempSettings.dedupeSubtitles || false, (v) => (tempSettings.dedupeSubtitles = v));
+	renderSubtitleLangDetectControl(byId("job-sub-lang-detect"), tempSettings.subtitleLangDetect ?? "enabled", (v) => (tempSettings.subtitleLangDetect = v));
+	renderSubtitleConfidenceControl(
+		byId("job-sub-lang-confidence"),
+		tempSettings.subtitleLangDetectConfidence ?? 0.05,
+		(v) => (tempSettings.subtitleLangDetectConfidence = v),
+	);
+	renderDetectSignsSongsToggle(byId("job-detect-signs-songs"), tempSettings.detectSignsSongs ?? true, (v) => (tempSettings.detectSignsSongs = v));
+	renderDetectSDHToggle(byId("job-detect-sdh"), tempSettings.detectSDH ?? true, (v) => (tempSettings.detectSDH = v));
+	renderDetectHonorificsToggle(byId("job-detect-honorifics"), tempSettings.detectHonorifics ?? true, (v) => (tempSettings.detectHonorifics = v));
 	renderKeepBestAudioChannelsToggle(
 		byId("job-keep-best-audio-channels"),
 		tempSettings.keepBestAudioChannelsOnly || false,

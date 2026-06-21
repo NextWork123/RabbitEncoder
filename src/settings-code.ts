@@ -13,6 +13,7 @@ import type {
 	AudioChannelBitrates,
 	VsFilterEntry,
 	VsParamValue,
+	SubtitleLangDetectMode,
 } from "./types";
 import { vsRegistry } from "./vs-filters";
 
@@ -57,6 +58,11 @@ const BASELINE: JobSettings = {
 	removeCommentaryAudio: false,
 	audioLanguages: [],
 	subtitleLanguages: [],
+	subtitleLangDetect: "enabled",
+	subtitleLangDetectConfidence: 0.05,
+	detectSignsSongs: true,
+	detectSDH: true,
+	detectHonorifics: true,
 	audioBitrates: {
 		mono: 64,
 		stereo: 128,
@@ -83,6 +89,9 @@ const CODE_TO_QUALITY = reverse(QUALITY_TO_CODE);
 const CODE_TO_SPEED = reverse(SPEED_TO_CODE);
 const CODE_TO_DENOISE = reverse(DENOISE_TO_CODE);
 const CODE_TO_DEBAND = reverse(DEBAND_TO_CODE);
+
+const LANGDETECT_TO_CODE: Record<SubtitleLangDetectMode, string> = { enabled: "e", "und-only": "u", disabled: "d" };
+const CODE_TO_LANGDETECT = reverse(LANGDETECT_TO_CODE);
 
 const VIDEO_VALUES: VideoEncodeMode[] = ["av1", "off"];
 const AUDIO_VALUES: AudioEncodeMode[] = ["opus", "copy"];
@@ -246,6 +255,15 @@ export function encodeSettingsCode(s: JobSettings): string {
 	if (s.audioLanguages.length > 0) sections.push(new Section("al").putRaw("v", s.audioLanguages.map(esc).join("+")).toString());
 	if (s.subtitleLanguages.length > 0) sections.push(new Section("sl").putRaw("v", s.subtitleLanguages.map(esc).join("+")).toString());
 
+	// subtitle detection
+	const sd = new Section("sd");
+	if (s.subtitleLangDetect !== BASELINE.subtitleLangDetect) sd.put("ld", LANGDETECT_TO_CODE[s.subtitleLangDetect] ?? "e");
+	if (s.subtitleLangDetectConfidence !== BASELINE.subtitleLangDetectConfidence) sd.put("lc", s.subtitleLangDetectConfidence);
+	if (s.detectSignsSongs !== BASELINE.detectSignsSongs) sd.put("ss", s.detectSignsSongs);
+	if (s.detectSDH !== BASELINE.detectSDH) sd.put("sh", s.detectSDH);
+	if (s.detectHonorifics !== BASELINE.detectHonorifics) sd.put("ho", s.detectHonorifics);
+	if (!sd.empty) sections.push(sd.toString());
+
 	// VapourSynth chain (one section per active filter, in order)
 	for (const entry of s.vsFilters ?? []) {
 		if (!entry || entry.level === "off") continue;
@@ -362,6 +380,9 @@ export function decodeSettingsCode(code: string): Partial<JobSettings> {
 			case "sl":
 				out.subtitleLanguages = splitList(kv.v);
 				break;
+			case "sd":
+				applySubtitleDetect(out, kv);
+				break;
 			case "vs": {
 				const entry = parseVsSection(kv);
 				if (entry) vsFilters.push(entry);
@@ -406,6 +427,17 @@ function applyCore(out: JobSettings, kv: Record<string, string>): void {
 	if (kv.dd !== undefined) out.dedupeSubtitles = kv.dd === "1";
 	if (kv.kc !== undefined) out.keepBestAudioChannelsOnly = kv.kc === "1";
 	if (kv.rc !== undefined) out.removeCommentaryAudio = kv.rc === "1";
+}
+
+function applySubtitleDetect(out: JobSettings, kv: Record<string, string>): void {
+	if (kv.ld && CODE_TO_LANGDETECT[kv.ld]) out.subtitleLangDetect = CODE_TO_LANGDETECT[kv.ld]!;
+	if (kv.lc !== undefined) {
+		const c = parseFloat(kv.lc);
+		if (Number.isFinite(c) && c >= 0 && c <= 1) out.subtitleLangDetectConfidence = c;
+	}
+	if (kv.ss !== undefined) out.detectSignsSongs = kv.ss === "1";
+	if (kv.sh !== undefined) out.detectSDH = kv.sh === "1";
+	if (kv.ho !== undefined) out.detectHonorifics = kv.ho === "1";
 }
 
 function applyDenoise(out: JobSettings, kv: Record<string, string>): void {

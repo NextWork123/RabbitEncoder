@@ -4,6 +4,7 @@ import type {
 	AudioPreviewTrack,
 	AudioStreamInfo,
 	AudioTrackType,
+	SubtitleLangDetectMode,
 	SubtitlePreviewResult,
 	SubtitlePreviewTrack,
 	SubtitleStreamInfo,
@@ -19,6 +20,14 @@ import { getOpusBitrateForLayout, normalizeLayout } from "./probe";
 const MIN_LINES_FOR_LANG_DETECTION = 5;
 
 type WithLanguage = { language?: string };
+
+export interface SubtitleAnalysisOptions {
+	langDetect?: SubtitleLangDetectMode;
+	langDetectConfidence?: number;
+	detectSignsSongs?: boolean;
+	detectSDH?: boolean;
+	detectHonorifics?: boolean;
+}
 
 export function normalizeLanguageCode(input: string | undefined): string {
 	if (!input) return "und";
@@ -974,8 +983,20 @@ function extractRegionalVariant(stream: SubtitleStreamInfo): string | null {
  *   6. SDH content detection
  *   7. Honorifics detection (pair comparison)
  */
-export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inputPath: string, tempDir: string, signal?: AbortSignal): Promise<void> {
+export async function analyzeSubtitleStreams(
+	streams: SubtitleStreamInfo[],
+	inputPath: string,
+	tempDir: string,
+	options: SubtitleAnalysisOptions = {},
+	signal?: AbortSignal,
+): Promise<void> {
 	if (streams.length === 0) return;
+
+	const langDetect = options.langDetect ?? "enabled";
+	const langDetectConfidence = options.langDetectConfidence ?? 0.05;
+	const detectSignsSongs = options.detectSignsSongs ?? true;
+	const detectSDH = options.detectSDH ?? true;
+	const detectHonorifics = options.detectHonorifics ?? true;
 
 	for (const stream of streams) {
 		const lang = (stream.language || "").toLowerCase();
@@ -1087,6 +1108,15 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 			continue;
 		}
 
+		if (langDetect === "disabled") {
+			Logger.info(`[subtitle] Track ${stream.index}: language detector disabled — keeping declared "${stream.language || "und"}"`);
+			continue;
+		}
+		if (langDetect === "und-only" && origIsKnown) {
+			Logger.info(`[subtitle] Track ${stream.index}: language detector in "only if undefined" mode — keeping declared "${stream.language}"`);
+			continue;
+		}
+
 		const result = await detectLanguage(extraction.filePath, signal);
 
 		if (result === null) {
@@ -1101,8 +1131,11 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 		const confidence = result.detected.confidence;
 		const origLang = stream.language || "und";
 
-		if (confidence < 0.05) {
-			Logger.info(`[subtitle] Track ${stream.index}: language-detector confidence too low ` + `(${(confidence * 100).toFixed(1)}%) — keeping "${origLang}"`);
+		if (confidence < langDetectConfidence) {
+			Logger.info(
+				`[subtitle] Track ${stream.index}: language-detector confidence too low ` +
+					`(${(confidence * 100).toFixed(1)}% < ${(langDetectConfidence * 100).toFixed(1)}%) — keeping "${origLang}"`,
+			);
 			continue;
 		}
 
@@ -1139,79 +1172,87 @@ export async function analyzeSubtitleStreams(streams: SubtitleStreamInfo[], inpu
 	}
 
 	// Step 4: ASS style-based Signs & Songs
-	for (const stream of streams) {
-		if (detectSubtitleTrackType(stream) !== "full") continue;
+	if (detectSignsSongs) {
+		for (const stream of streams) {
+			if (detectSubtitleTrackType(stream) !== "full") continue;
 
-		const analysis = contentCache.get(stream.index);
-		if (!analysis?.assStyles) continue;
+			const analysis = contentCache.get(stream.index);
+			if (!analysis?.assStyles) continue;
 
-		const { signStyleLines, dialogueStyleLines, totalLines } = analysis.assStyles;
-		if (totalLines >= 5 && signStyleLines / totalLines >= 0.8 && dialogueStyleLines < 50) {
-			Logger.warn(`[subtitle] Track ${stream.index}: ${signStyleLines}/${totalLines} lines use sign/typeset ` + `ASS styles — reclassifying as Signs & Songs`);
-			stream.isForced = true;
-		}
-	}
-
-	// Step 5: Line-count-based Signs & Songs
-	const fullStreams = streams.filter((s) => detectSubtitleTrackType(s) === "full" && contentCache.has(s.index));
-
-	if (fullStreams.length >= 2) {
-		const lineCounts = new Map<number, number>();
-		for (const s of fullStreams) {
-			lineCounts.set(s.index, contentCache.get(s.index)!.dialogueLineCount);
+			const { signStyleLines, dialogueStyleLines, totalLines } = analysis.assStyles;
+			if (totalLines >= 5 && signStyleLines / totalLines >= 0.8 && dialogueStyleLines < 50) {
+				Logger.warn(
+					`[subtitle] Track ${stream.index}: ${signStyleLines}/${totalLines} lines use sign/typeset ` + `ASS styles — reclassifying as Signs & Songs`,
+				);
+				stream.isForced = true;
+			}
 		}
 
-		const maxLines = Math.max(...lineCounts.values());
-		for (const [streamIndex, lineCount] of lineCounts) {
-			if (maxLines > 0 && lineCount > 0 && lineCount * 10 <= maxLines && lineCount < 100) {
-				const stream = streams.find((s) => s.index === streamIndex);
-				if (stream) {
-					Logger.warn(`[subtitle] Track ${streamIndex}: only ${lineCount} lines vs ${maxLines} ` + `in largest full track — reclassifying as Signs & Songs`);
-					stream.isForced = true;
+		// Step 5: Line-count-based Signs & Songs
+		const fullStreams = streams.filter((s) => detectSubtitleTrackType(s) === "full" && contentCache.has(s.index));
+
+		if (fullStreams.length >= 2) {
+			const lineCounts = new Map<number, number>();
+			for (const s of fullStreams) {
+				lineCounts.set(s.index, contentCache.get(s.index)!.dialogueLineCount);
+			}
+
+			const maxLines = Math.max(...lineCounts.values());
+			for (const [streamIndex, lineCount] of lineCounts) {
+				if (maxLines > 0 && lineCount > 0 && lineCount * 10 <= maxLines && lineCount < 100) {
+					const stream = streams.find((s) => s.index === streamIndex);
+					if (stream) {
+						Logger.warn(`[subtitle] Track ${streamIndex}: only ${lineCount} lines vs ${maxLines} ` + `in largest full track — reclassifying as Signs & Songs`);
+						stream.isForced = true;
+					}
 				}
 			}
 		}
 	}
 
 	// Step 6: SDH content detection
-	for (const stream of streams) {
-		const currentType = detectSubtitleTrackType(stream);
-		if (currentType === "sdh" || currentType === "forced") continue;
+	if (detectSDH) {
+		for (const stream of streams) {
+			const currentType = detectSubtitleTrackType(stream);
+			if (currentType === "sdh" || currentType === "forced") continue;
 
-		const analysis = contentCache.get(stream.index);
-		if (!analysis) continue;
+			const analysis = contentCache.get(stream.index);
+			if (!analysis) continue;
 
-		if (analysis.sdhRatio >= 0.2 && analysis.dialogueLineCount >= 10) {
-			Logger.warn(`[subtitle] Track ${stream.index}: ${(analysis.sdhRatio * 100).toFixed(0)}% SDH markers — reclassifying as SDH`);
-			stream.isHearingImpaired = true;
+			if (analysis.sdhRatio >= 0.2 && analysis.dialogueLineCount >= 10) {
+				Logger.warn(`[subtitle] Track ${stream.index}: ${(analysis.sdhRatio * 100).toFixed(0)}% SDH markers — reclassifying as SDH`);
+				stream.isHearingImpaired = true;
+			}
 		}
 	}
 
 	// Step 7: Honorifics detection
-	const englishFullStreams = streams.filter((s) => isEnglish(s.language) && detectSubtitleTrackType(s) === "full" && contentCache.has(s.index));
-	const hasExistingHonorifics = streams.some((s) => isEnglish(s.language) && detectSubtitleTrackType(s) === "honorifics");
+	if (detectHonorifics) {
+		const englishFullStreams = streams.filter((s) => isEnglish(s.language) && detectSubtitleTrackType(s) === "full" && contentCache.has(s.index));
+		const hasExistingHonorifics = streams.some((s) => isEnglish(s.language) && detectSubtitleTrackType(s) === "honorifics");
 
-	if (englishFullStreams.length >= 2 && !hasExistingHonorifics) {
-		let maxHonStream: SubtitleStreamInfo | null = null;
-		let maxHon = 0;
-		let minHon = Infinity;
+		if (englishFullStreams.length >= 2 && !hasExistingHonorifics) {
+			let maxHonStream: SubtitleStreamInfo | null = null;
+			let maxHon = 0;
+			let minHon = Infinity;
 
-		for (const stream of englishFullStreams) {
-			const count = contentCache.get(stream.index)!.honorificCount;
-			if (count > maxHon) {
-				maxHon = count;
-				maxHonStream = stream;
+			for (const stream of englishFullStreams) {
+				const count = contentCache.get(stream.index)!.honorificCount;
+				if (count > maxHon) {
+					maxHon = count;
+					maxHonStream = stream;
+				}
+				if (count < minHon) {
+					minHon = count;
+				}
 			}
-			if (count < minHon) {
-				minHon = count;
-			}
-		}
 
-		if (maxHonStream && maxHon >= 5 && (minHon === 0 || maxHon >= minHon * 3)) {
-			Logger.warn(`[subtitle] Track ${maxHonStream.index}: ${maxHon} honorific suffixes ` + `(vs ${minHon} in others) — reclassifying as Honorifics`);
-			const existingTitle = maxHonStream.title || "";
-			if (!SUB_HONORIFICS_PATTERN.test(existingTitle)) {
-				maxHonStream.title = existingTitle ? `${existingTitle} [Honorifics]` : "Honorifics";
+			if (maxHonStream && maxHon >= 5 && (minHon === 0 || maxHon >= minHon * 3)) {
+				Logger.warn(`[subtitle] Track ${maxHonStream.index}: ${maxHon} honorific suffixes ` + `(vs ${minHon} in others) — reclassifying as Honorifics`);
+				const existingTitle = maxHonStream.title || "";
+				if (!SUB_HONORIFICS_PATTERN.test(existingTitle)) {
+					maxHonStream.title = existingTitle ? `${existingTitle} [Honorifics]` : "Honorifics";
+				}
 			}
 		}
 	}
@@ -1437,7 +1478,15 @@ export async function previewSubtitles(
 	inputPath: string,
 	sourceStreams: SubtitleStreamInfo[],
 	tempDir: string,
-	options: { dedupe?: boolean; languages?: string[] } = {},
+	options: {
+		dedupe?: boolean;
+		languages?: string[];
+		langDetect?: SubtitleLangDetectMode;
+		langDetectConfidence?: number;
+		detectSignsSongs?: boolean;
+		detectSDH?: boolean;
+		detectHonorifics?: boolean;
+	} = {},
 ): Promise<SubtitlePreviewResult> {
 	const source: SubtitlePreviewTrack[] = sourceStreams.map((s) => {
 		const trackType = detectSubtitleTrackType(s);
@@ -1469,7 +1518,13 @@ export async function previewSubtitles(
 		isOriginal: s.isOriginal,
 	}));
 
-	await analyzeSubtitleStreams(cloned, inputPath, tempDir);
+	await analyzeSubtitleStreams(cloned, inputPath, tempDir, {
+		langDetect: options.langDetect,
+		langDetectConfidence: options.langDetectConfidence,
+		detectSignsSongs: options.detectSignsSongs,
+		detectSDH: options.detectSDH,
+		detectHonorifics: options.detectHonorifics,
+	});
 
 	const sorted = sortSubtitleStreams(cloned);
 	const langFiltered = filterStreamsByLanguage(sorted, options.languages || [], "subtitle");

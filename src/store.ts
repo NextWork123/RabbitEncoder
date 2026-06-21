@@ -10,6 +10,7 @@ import {
 	type VideoEncodeMode,
 	type AudioEncodeMode,
 	type SubtitleProcessingMode,
+	type EncoderId,
 } from "./types";
 import { encodeJob, CancelledError } from "./encoder";
 import { isAlreadyEncoded } from "./library";
@@ -150,77 +151,93 @@ export function getAppConfig(): AppConfig {
 	return appConfig;
 }
 
-export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
-	if (isValidEncoder(settings.encoder)) {
-		appConfig.defaults.encoder = settings.encoder;
-	}
-	if (typeof settings.manualCrf === "number" && Number.isFinite(settings.manualCrf)) {
-		appConfig.defaults.manualCrf = Math.min(70, Math.max(1, settings.manualCrf));
-	}
-	if (typeof settings.manualPreset === "number" && Number.isFinite(settings.manualPreset)) {
-		appConfig.defaults.manualPreset = Math.min(13, Math.max(-1, Math.round(settings.manualPreset)));
-	}
-	if (typeof settings.customEncoderParams === "string") {
-		appConfig.defaults.customEncoderParams = settings.customEncoderParams.slice(0, 2000);
-	}
+type Sanitizer = (value: unknown, current: any) => any;
 
-	if (typeof settings.videoEncode === "string" && VALID_VIDEO_ENCODE.includes(settings.videoEncode)) {
-		appConfig.defaults.videoEncode = settings.videoEncode;
-	}
-	if (typeof settings.audioEncode === "string" && VALID_AUDIO_ENCODE.includes(settings.audioEncode)) {
-		appConfig.defaults.audioEncode = settings.audioEncode;
-	}
-	if (typeof settings.subtitleProcessing === "string" && VALID_SUBTITLE_PROCESSING.includes(settings.subtitleProcessing)) {
-		appConfig.defaults.subtitleProcessing = settings.subtitleProcessing;
-	}
-	if (settings.quality) appConfig.defaults.quality = settings.quality;
-	if (settings.finalSpeed) appConfig.defaults.finalSpeed = settings.finalSpeed;
-	if (settings.denoise) appConfig.defaults.denoise = settings.denoise;
+const bool: Sanitizer = (v) => (typeof v === "boolean" ? v : undefined);
+const str =
+	(max = 2000): Sanitizer =>
+	(v) =>
+		typeof v === "string" ? v.slice(0, max) : undefined;
+const enumOf =
+	(values: readonly string[]): Sanitizer =>
+	(v) =>
+		typeof v === "string" && values.includes(v) ? v : undefined;
+const numIn =
+	(min: number, max: number): Sanitizer =>
+	(v) =>
+		typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : undefined;
+const intIn =
+	(min: number, max: number): Sanitizer =>
+	(v) =>
+		typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : undefined;
+const strList: Sanitizer = (v) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter((x) => x.length > 0) : undefined);
 
-	if (settings.denoiseBackend && VALID_DENOISE_BACKENDS.includes(settings.denoiseBackend)) {
-		appConfig.defaults.denoiseBackend = settings.denoiseBackend;
-	}
-	if (typeof settings.gpuDevice === "string" && settings.gpuDevice.length > 0) {
-		appConfig.defaults.gpuDevice = settings.gpuDevice;
-	}
+const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
+	encoder: (v) => (isValidEncoder(v as string) ? (v as EncoderId) : undefined),
+	manualCrf: numIn(1, 70), // NOTE: original did not round CRF — numIn preserves that
+	manualPreset: intIn(-1, 13), // original rounded preset
+	customEncoderParams: str(2000),
 
-	if (settings.deband) appConfig.defaults.deband = settings.deband;
-	if (typeof settings.downscale === "boolean") appConfig.defaults.downscale = settings.downscale;
-	if (typeof settings.skipBoosting === "boolean") appConfig.defaults.skipBoosting = settings.skipBoosting;
-	if (typeof settings.noPhaseInv === "boolean") appConfig.defaults.noPhaseInv = settings.noPhaseInv;
-	if (typeof settings.dedupeSubtitles === "boolean") appConfig.defaults.dedupeSubtitles = settings.dedupeSubtitles;
-	if (typeof settings.keepBestAudioChannelsOnly === "boolean") appConfig.defaults.keepBestAudioChannelsOnly = settings.keepBestAudioChannelsOnly;
-	if (typeof settings.removeCommentaryAudio === "boolean") appConfig.defaults.removeCommentaryAudio = settings.removeCommentaryAudio;
-	if (Array.isArray(settings.audioLanguages)) {
-		appConfig.defaults.audioLanguages = settings.audioLanguages.map((s) => String(s).trim()).filter((s) => s.length > 0);
-	}
-	if (Array.isArray(settings.subtitleLanguages)) {
-		appConfig.defaults.subtitleLanguages = settings.subtitleLanguages.map((s) => String(s).trim()).filter((s) => s.length > 0);
-	}
-	if (settings.autoDenoiseThresholds) {
-		const t = settings.autoDenoiseThresholds;
-		if (typeof t.light === "number" && typeof t.medium === "number" && typeof t.heavy === "number") {
-			appConfig.defaults.autoDenoiseThresholds = { light: t.light, medium: t.medium, heavy: t.heavy };
+	quality: enumOf(["low", "medium", "high"]),
+	finalSpeed: enumOf(["slower", "slow", "medium", "fast", "faster"]),
+	videoEncode: enumOf(["av1", "off"]),
+	audioEncode: enumOf(["opus", "copy"]),
+	subtitleProcessing: enumOf(["full", "copy"]),
+
+	denoise: enumOf(["off", "auto", "light", "medium", "heavy"]),
+	deband: enumOf(["off", "light", "medium", "heavy"]),
+	denoiseBackend: enumOf(["cpu", "auto", "vulkan", "opencl"]),
+	gpuDevice: str(64),
+
+	downscale: bool,
+	skipBoosting: bool,
+	noPhaseInv: bool,
+	dedupeSubtitles: bool,
+	keepBestAudioChannelsOnly: bool,
+	removeCommentaryAudio: bool,
+
+	audioLanguages: strList,
+	subtitleLanguages: strList,
+
+	autoDenoiseThresholds: (v, cur) => {
+		const t = v as { light?: unknown; medium?: unknown; heavy?: unknown };
+		if (t && typeof t.light === "number" && typeof t.medium === "number" && typeof t.heavy === "number") {
+			return { light: t.light, medium: t.medium, heavy: t.heavy };
 		}
-	}
-	if (settings.nlmeansParams) {
-		appConfig.defaults.nlmeansParams = normalizeNlmeansLevelParams(settings.nlmeansParams, appConfig.defaults.nlmeansParams);
-	}
-	if (settings.gradfunParams) {
-		appConfig.defaults.gradfunParams = normalizeGradfunLevelParams(settings.gradfunParams, appConfig.defaults.gradfunParams);
-	}
-	if (Array.isArray(settings.vsFilters)) {
-		appConfig.defaults.vsFilters = normalizeVsFilterChain(settings.vsFilters);
-	}
-	if (settings.audioBitrates) {
-		appConfig.defaults.audioBitrates = {
-			...appConfig.defaults.audioBitrates,
-			...settings.audioBitrates,
-		};
-	}
+		return undefined;
+	},
+	nlmeansParams: (v, cur) => (v ? normalizeNlmeansLevelParams(v as any, cur) : undefined),
+	gradfunParams: (v, cur) => (v ? normalizeGradfunLevelParams(v as any, cur) : undefined),
+	vsFilters: (v) => (Array.isArray(v) ? normalizeVsFilterChain(v as any) : undefined),
+	audioBitrates: (v, cur) => (v && typeof v === "object" ? { ...cur, ...(v as object) } : undefined),
 
+	subtitleLangDetect: enumOf(["enabled", "und-only", "disabled"]),
+	subtitleLangDetectConfidence: numIn(0, 1),
+	detectSignsSongs: bool,
+	detectSDH: bool,
+	detectHonorifics: bool,
+};
+
+function sanitizeSettingsInto(target: JobSettings, partial: Partial<JobSettings>): void {
+	for (const key of Object.keys(SETTINGS_SANITIZERS) as (keyof JobSettings)[]) {
+		if (!(key in partial)) continue;
+		const next = SETTINGS_SANITIZERS[key]!((partial as Record<string, unknown>)[key], (target as any)[key]);
+		if (next !== undefined) (target as any)[key] = next;
+	}
+}
+
+export function updateDefaults(settings: Partial<JobSettings>): JobSettings {
+	sanitizeSettingsInto(appConfig.defaults, settings);
 	saveSettings();
 	return appConfig.defaults;
+}
+
+export function updateJobSettings(id: string, settings: Partial<JobSettings>): Job | null {
+	const job = jobs.get(id);
+	if (!job || job.status !== "queued") return null;
+	sanitizeSettingsInto(job.settings, settings);
+	saveQueue();
+	return job;
 }
 
 export function resetDefaults(): JobSettings {
@@ -389,85 +406,6 @@ export function scanLibraryPath(targetPath: string): { added: number; skipped: n
 	const folderName = basename(dir);
 	addJob(filename, resolved, folderName, true);
 	return { added: 1, skipped: 0, alreadyEncoded: 0 };
-}
-
-export function updateJobSettings(id: string, settings: Partial<JobSettings>): Job | null {
-	const job = jobs.get(id);
-	if (!job || job.status !== "queued") return null;
-
-	if (isValidEncoder(settings.encoder)) {
-		job.settings.encoder = settings.encoder;
-	}
-	if (typeof settings.manualCrf === "number" && Number.isFinite(settings.manualCrf)) {
-		job.settings.manualCrf = Math.min(70, Math.max(1, settings.manualCrf));
-	}
-	if (typeof settings.manualPreset === "number" && Number.isFinite(settings.manualPreset)) {
-		job.settings.manualPreset = Math.min(13, Math.max(-1, Math.round(settings.manualPreset)));
-	}
-	if (typeof settings.customEncoderParams === "string") {
-		job.settings.customEncoderParams = settings.customEncoderParams.slice(0, 2000);
-	}
-
-	if (typeof settings.videoEncode === "string" && VALID_VIDEO_ENCODE.includes(settings.videoEncode)) {
-		job.settings.videoEncode = settings.videoEncode;
-	}
-	if (typeof settings.audioEncode === "string" && VALID_AUDIO_ENCODE.includes(settings.audioEncode)) {
-		job.settings.audioEncode = settings.audioEncode;
-	}
-	if (typeof settings.subtitleProcessing === "string" && VALID_SUBTITLE_PROCESSING.includes(settings.subtitleProcessing)) {
-		job.settings.subtitleProcessing = settings.subtitleProcessing;
-	}
-
-	if (settings.quality) job.settings.quality = settings.quality;
-	if (settings.finalSpeed) job.settings.finalSpeed = settings.finalSpeed;
-	if (settings.denoise) job.settings.denoise = settings.denoise;
-
-	if (settings.denoiseBackend && VALID_DENOISE_BACKENDS.includes(settings.denoiseBackend)) {
-		job.settings.denoiseBackend = settings.denoiseBackend;
-	}
-	if (typeof settings.gpuDevice === "string" && settings.gpuDevice.length > 0) {
-		job.settings.gpuDevice = settings.gpuDevice;
-	}
-
-	if (settings.deband) job.settings.deband = settings.deband;
-	if (typeof settings.downscale === "boolean") job.settings.downscale = settings.downscale;
-	if (typeof settings.skipBoosting === "boolean") job.settings.skipBoosting = settings.skipBoosting;
-	if (typeof settings.noPhaseInv === "boolean") job.settings.noPhaseInv = settings.noPhaseInv;
-	if (typeof settings.dedupeSubtitles === "boolean") job.settings.dedupeSubtitles = settings.dedupeSubtitles;
-	if (typeof settings.keepBestAudioChannelsOnly === "boolean") job.settings.keepBestAudioChannelsOnly = settings.keepBestAudioChannelsOnly;
-	if (typeof settings.removeCommentaryAudio === "boolean") job.settings.removeCommentaryAudio = settings.removeCommentaryAudio;
-	if (Array.isArray(settings.audioLanguages)) {
-		job.settings.audioLanguages = settings.audioLanguages.map((s) => String(s).trim()).filter((s) => s.length > 0);
-	}
-	if (Array.isArray(settings.subtitleLanguages)) {
-		job.settings.subtitleLanguages = settings.subtitleLanguages.map((s) => String(s).trim()).filter((s) => s.length > 0);
-	}
-	if (settings.autoDenoiseThresholds) {
-		const t = settings.autoDenoiseThresholds;
-		if (typeof t.light === "number" && typeof t.medium === "number" && typeof t.heavy === "number") {
-			job.settings.autoDenoiseThresholds = { light: t.light, medium: t.medium, heavy: t.heavy };
-		}
-	}
-	if (settings.nlmeansParams) {
-		job.settings.nlmeansParams = normalizeNlmeansLevelParams(settings.nlmeansParams, job.settings.nlmeansParams);
-	}
-	if (settings.gradfunParams) {
-		job.settings.gradfunParams = normalizeGradfunLevelParams(settings.gradfunParams, job.settings.gradfunParams);
-	}
-
-	if (Array.isArray(settings.vsFilters)) {
-		job.settings.vsFilters = normalizeVsFilterChain(settings.vsFilters);
-	}
-
-	if (settings.audioBitrates) {
-		job.settings.audioBitrates = {
-			...job.settings.audioBitrates,
-			...settings.audioBitrates,
-		};
-	}
-
-	saveQueue();
-	return job;
 }
 
 export function removeJob(id: string): boolean {

@@ -1131,7 +1131,19 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			// Subtitle tracks
 			const allSubtitleStreams = probe.subtitleStreams || [];
 
-			await analyzeSubtitleStreams(allSubtitleStreams, job.inputPath, tempDir, signal);
+			await analyzeSubtitleStreams(
+				allSubtitleStreams,
+				job.inputPath,
+				tempDir,
+				{
+					langDetect: job.settings.subtitleLangDetect,
+					langDetectConfidence: job.settings.subtitleLangDetectConfidence,
+					detectSignsSongs: job.settings.detectSignsSongs,
+					detectSDH: job.settings.detectSDH,
+					detectHonorifics: job.settings.detectHonorifics,
+				},
+				signal,
+			);
 			const sortedSubtitleStreams = sortSubtitleStreams(allSubtitleStreams);
 
 			const allowedSubLangs = job.settings.subtitleLanguages || [];
