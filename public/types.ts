@@ -8,6 +8,9 @@ export type VideoEncodeMode = "av1" | "off";
 export type AudioEncodeMode = "opus" | "copy";
 export type SubtitleProcessingMode = "full" | "copy";
 
+export type AudioTrackType = "main" | "commentary" | "descriptive" | "karaoke";
+export type AudioCodecPriority = "lossless-first" | "smallest-first";
+
 export type SubtitleLangDetectMode = "enabled" | "und-only" | "disabled";
 export type SubtitleSourcePriority = "official-first" | "fansub-first";
 export type SubtitleFansubTiebreak = "alphabetical" | "source-order";
@@ -26,8 +29,6 @@ export type DenoiseBackend = "cpu" | "auto" | "vulkan" | "opencl";
 export type GpuBackend = "auto" | "vulkan" | "opencl";
 
 export type JobStatus = "queued" | "probing" | "encoding_video" | "encoding_audio" | "muxing" | "done" | "error" | "cancelled";
-
-export type AudioTrackType = "main" | "commentary" | "descriptive";
 
 export const MEDIA_EXTENSIONS = new Set([".mp4", ".mkv", ".avi", ".webm", ".flv", ".ts", ".mov"]);
 
@@ -111,6 +112,26 @@ export interface JobSettings {
 	dedupeSubtitles: boolean;
 	keepBestAudioChannelsOnly: boolean;
 	removeCommentaryAudio: boolean;
+	/** Drop audio-description / visually-impaired tracks. */
+	removeDescriptiveAudio: boolean;
+	/** Drop karaoke / off-vocal / instrumental tracks. */
+	removeKaraokeAudio: boolean;
+	/** Drop "compatibility" downmix tracks. Default true (current behavior). */
+	dropCompatibilityAudio: boolean;
+	/** Dedupe winner preference: keep lossless+highest-bitrate, or smallest. */
+	audioCodecPriority: AudioCodecPriority;
+	/** Prefer uncensored audio when deduping/sorting. */
+	preferUncensoredAudio: boolean;
+	/** Enable audio dedupe at all. When false, every selected track is kept. */
+	dedupeAudio: boolean;
+	/** Ordered language priority for audio. "*" = the rest, alphabetically. */
+	audioLanguagePriority: string[];
+	/** Rewrite audio track names to the clean format. When false, names are blanked. */
+	renameAudioTracks: boolean;
+	/** Title-regex classification toggles. */
+	detectCommentaryAudio: boolean;
+	detectDescriptiveAudio: boolean;
+	detectKaraokeAudio: boolean;
 	audioLanguages: string[];
 	subtitleLanguages: string[];
 	/** Language detector mode for subtitle tracks. */
@@ -135,6 +156,8 @@ export interface JobSettings {
 	dedupeAcrossFormat: boolean;
 	/** Rewrite subtitle track names to the clean format. When false, keep originals. */
 	renameSubtitleTracks: boolean;
+	/** Ordered language priority for subtitles. "*" = the rest, alphabetically. */
+	subtitleLanguagePriority: string[];
 	/** Drop SDH subtitle tracks. */
 	removeSDHSubtitles: boolean;
 	/** Drop commentary subtitle tracks. */

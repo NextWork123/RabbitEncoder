@@ -1,5 +1,6 @@
 import type {
 	AudioChannelBitrates,
+	AudioCodecPriority,
 	AudioEncodeMode,
 	DebandLevel,
 	DenoiseBackend,
@@ -55,6 +56,8 @@ export const DEFAULT_GRADFUN_PARAMS = {
 	heavy: { strength: 2.8, radius: 24 },
 };
 export const DEFAULT_AUTO_THRESHOLDS = { light: 0.5, medium: 0.7, heavy: 0.9 };
+
+export const AUDIO_CODEC_PRIORITY_OPTIONS: AudioCodecPriority[] = ["lossless-first", "smallest-first"];
 
 export const CHANNELS: readonly { key: keyof AudioChannelBitrates; label: string }[] = [
 	{ key: "mono", label: "Mono" },

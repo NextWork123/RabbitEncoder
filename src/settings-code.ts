@@ -17,6 +17,7 @@ import type {
 	SubtitleSourcePriority,
 	SubtitleFansubTiebreak,
 	SubtitleFormatPriority,
+	AudioCodecPriority,
 } from "./types";
 import { vsRegistry } from "./vs-filters";
 
@@ -60,6 +61,18 @@ const BASELINE: JobSettings = {
 	keepBestAudioChannelsOnly: false,
 	removeCommentaryAudio: false,
 	audioLanguages: [],
+	removeDescriptiveAudio: false,
+	removeKaraokeAudio: false,
+	dropCompatibilityAudio: true,
+	audioCodecPriority: "lossless-first",
+	preferUncensoredAudio: true,
+	dedupeAudio: true,
+	audioLanguagePriority: ["jpn", "eng", "*"],
+	renameAudioTracks: false,
+	detectCommentaryAudio: true,
+	detectDescriptiveAudio: true,
+	detectKaraokeAudio: true,
+	subtitleLanguagePriority: ["eng", "jpn", "*"],
 	subtitleLanguages: [],
 	subtitleLangDetect: "enabled",
 	subtitleLangDetectConfidence: 0.05,
@@ -110,6 +123,9 @@ const CODE_TO_QUALITY = reverse(QUALITY_TO_CODE);
 const CODE_TO_SPEED = reverse(SPEED_TO_CODE);
 const CODE_TO_DENOISE = reverse(DENOISE_TO_CODE);
 const CODE_TO_DEBAND = reverse(DEBAND_TO_CODE);
+
+const AUDIOCODEC_TO_CODE: Record<AudioCodecPriority, string> = { "lossless-first": "l", "smallest-first": "s" };
+const CODE_TO_AUDIOCODEC = reverse(AUDIOCODEC_TO_CODE);
 
 const LANGDETECT_TO_CODE: Record<SubtitleLangDetectMode, string> = { enabled: "e", "und-only": "u", disabled: "d" };
 const CODE_TO_LANGDETECT = reverse(LANGDETECT_TO_CODE);
@@ -311,7 +327,27 @@ export function encodeSettingsCode(s: JobSettings): string {
 	if (s.removeForcedSignsSongs !== BASELINE.removeForcedSignsSongs) sm.put("rf", s.removeForcedSignsSongs);
 	if (s.removeStoryboardSubtitles !== BASELINE.removeStoryboardSubtitles) sm.put("rb", s.removeStoryboardSubtitles);
 	if (s.removeHonorificsSubtitles !== BASELINE.removeHonorificsSubtitles) sm.put("rh", s.removeHonorificsSubtitles);
+	if (s.subtitleLanguagePriority.join("+") !== BASELINE.subtitleLanguagePriority.join("+")) {
+		sm.putRaw("lp", s.subtitleLanguagePriority.map(esc).join("+"));
+	}
 	if (!sm.empty) sections.push(sm.toString());
+
+	// audio manipulation
+	const am = new Section("am");
+	if (s.removeDescriptiveAudio !== BASELINE.removeDescriptiveAudio) am.put("rd", s.removeDescriptiveAudio);
+	if (s.removeKaraokeAudio !== BASELINE.removeKaraokeAudio) am.put("rk", s.removeKaraokeAudio);
+	if (s.dropCompatibilityAudio !== BASELINE.dropCompatibilityAudio) am.put("dc", s.dropCompatibilityAudio);
+	if (s.audioCodecPriority !== BASELINE.audioCodecPriority) am.put("co", AUDIOCODEC_TO_CODE[s.audioCodecPriority]);
+	if (s.preferUncensoredAudio !== BASELINE.preferUncensoredAudio) am.put("pu", s.preferUncensoredAudio);
+	if (s.dedupeAudio !== BASELINE.dedupeAudio) am.put("de", s.dedupeAudio);
+	if (s.renameAudioTracks !== BASELINE.renameAudioTracks) am.put("rn", s.renameAudioTracks);
+	if (s.detectCommentaryAudio !== BASELINE.detectCommentaryAudio) am.put("dco", s.detectCommentaryAudio);
+	if (s.detectDescriptiveAudio !== BASELINE.detectDescriptiveAudio) am.put("dde", s.detectDescriptiveAudio);
+	if (s.detectKaraokeAudio !== BASELINE.detectKaraokeAudio) am.put("dka", s.detectKaraokeAudio);
+	if (s.audioLanguagePriority.join("+") !== BASELINE.audioLanguagePriority.join("+")) {
+		am.putRaw("lp", s.audioLanguagePriority.map(esc).join("+"));
+	}
+	if (!am.empty) sections.push(am.toString());
 
 	// VapourSynth chain (one section per active filter, in order)
 	for (const entry of s.vsFilters ?? []) {
@@ -435,6 +471,9 @@ export function decodeSettingsCode(code: string): Partial<JobSettings> {
 			case "sm":
 				applySubtitleManip(out, kv);
 				break;
+			case "am":
+				applyAudioManip(out, kv);
+				break;
 			case "vs": {
 				const entry = parseVsSection(kv);
 				if (entry) vsFilters.push(entry);
@@ -520,6 +559,21 @@ function applySubtitleManip(out: JobSettings, kv: Record<string, string>): void 
 	if (kv.rf !== undefined) out.removeForcedSignsSongs = kv.rf === "1";
 	if (kv.rb !== undefined) out.removeStoryboardSubtitles = kv.rb === "1";
 	if (kv.rh !== undefined) out.removeHonorificsSubtitles = kv.rh === "1";
+	if (kv.lp !== undefined) out.subtitleLanguagePriority = splitList(kv.lp);
+}
+
+function applyAudioManip(out: JobSettings, kv: Record<string, string>): void {
+	if (kv.rd !== undefined) out.removeDescriptiveAudio = kv.rd === "1";
+	if (kv.rk !== undefined) out.removeKaraokeAudio = kv.rk === "1";
+	if (kv.dc !== undefined) out.dropCompatibilityAudio = kv.dc === "1";
+	if (kv.co && CODE_TO_AUDIOCODEC[kv.co]) out.audioCodecPriority = CODE_TO_AUDIOCODEC[kv.co]!;
+	if (kv.pu !== undefined) out.preferUncensoredAudio = kv.pu === "1";
+	if (kv.de !== undefined) out.dedupeAudio = kv.de === "1";
+	if (kv.rn !== undefined) out.renameAudioTracks = kv.rn === "1";
+	if (kv.dco !== undefined) out.detectCommentaryAudio = kv.dco === "1";
+	if (kv.dde !== undefined) out.detectDescriptiveAudio = kv.dde === "1";
+	if (kv.dka !== undefined) out.detectKaraokeAudio = kv.dka === "1";
+	if (kv.lp !== undefined) out.audioLanguagePriority = splitList(kv.lp);
 }
 
 function applyDenoise(out: JobSettings, kv: Record<string, string>): void {

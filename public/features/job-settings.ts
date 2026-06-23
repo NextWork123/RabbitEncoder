@@ -1,6 +1,7 @@
 import type { SettingsCodePanelElement } from "../ui/models";
 import { decodeSettingsCodeRequest, deleteJob, fetchJobs, patchJob, retryJob } from "../api/client";
 import {
+	AUDIO_CODEC_PRIORITY_OPTIONS,
 	AUDIO_ENCODE_OPTIONS,
 	DEBAND_LEVELS,
 	DEFAULT_AUTO_THRESHOLDS,
@@ -38,6 +39,7 @@ import {
 	renderDetectHonorificsToggle,
 	renderNumberControl,
 	renderLabeledToggle,
+	renderLanguagePriorityInput,
 } from "./settings-controls";
 import { applyPresetToSettings, inferPreset } from "./settings-modal";
 import { byId } from "../shared/dom";
@@ -226,6 +228,79 @@ export async function openJobSettings(jobId: string): Promise<void> {
 		tempSettings.removeCommentaryAudio || false,
 		(v) => (tempSettings.removeCommentaryAudio = v),
 	);
+
+	// Audio manipulation
+	renderLabeledToggle(
+		byId("job-remove-descriptive-audio"),
+		tempSettings.removeDescriptiveAudio ?? false,
+		"Remove audio description",
+		(v) => (tempSettings.removeDescriptiveAudio = v),
+	);
+	renderLabeledToggle(
+		byId("job-remove-karaoke-audio"),
+		tempSettings.removeKaraokeAudio ?? false,
+		"Remove karaoke / off-vocal",
+		(v) => (tempSettings.removeKaraokeAudio = v),
+	);
+	renderLabeledToggle(
+		byId("job-drop-compatibility-audio"),
+		tempSettings.dropCompatibilityAudio ?? true,
+		"Drop compatibility downmix tracks",
+		(v) => (tempSettings.dropCompatibilityAudio = v),
+	);
+	renderLabeledToggle(
+		byId("job-prefer-uncensored-audio"),
+		tempSettings.preferUncensoredAudio ?? true,
+		"Prefer uncensored tracks",
+		(v) => (tempSettings.preferUncensoredAudio = v),
+	);
+	renderLabeledToggle(byId("job-dedupe-audio"), tempSettings.dedupeAudio ?? true, "Deduplicate audio tracks", (v) => (tempSettings.dedupeAudio = v));
+	renderRadioPills(
+		byId("job-audio-codec-priority"),
+		AUDIO_CODEC_PRIORITY_OPTIONS,
+		tempSettings.audioCodecPriority ?? "lossless-first",
+		(v) => (tempSettings.audioCodecPriority = v),
+	);
+	renderLabeledToggle(
+		byId("job-rename-audio-tracks"),
+		tempSettings.renameAudioTracks ?? false,
+		"Rename tracks to clean format",
+		(v) => (tempSettings.renameAudioTracks = v),
+	);
+	renderLanguagePriorityInput(
+		byId("job-audio-lang-priority"),
+		tempSettings.audioLanguagePriority ?? ["jpn", "eng", "*"],
+		(v) => (tempSettings.audioLanguagePriority = v),
+	);
+
+	// Audio type detection
+	renderLabeledToggle(
+		byId("job-detect-commentary-audio"),
+		tempSettings.detectCommentaryAudio ?? true,
+		"Detect commentary",
+		(v) => (tempSettings.detectCommentaryAudio = v),
+	);
+	renderLabeledToggle(
+		byId("job-detect-descriptive-audio"),
+		tempSettings.detectDescriptiveAudio ?? true,
+		"Detect audio description",
+		(v) => (tempSettings.detectDescriptiveAudio = v),
+	);
+	renderLabeledToggle(
+		byId("job-detect-karaoke-audio"),
+		tempSettings.detectKaraokeAudio ?? true,
+		"Detect karaoke",
+		(v) => (tempSettings.detectKaraokeAudio = v),
+	);
+
+	// Subtitle additions
+	renderLanguagePriorityInput(
+		byId("job-subtitle-lang-priority"),
+		tempSettings.subtitleLanguagePriority ?? ["eng", "jpn", "*"],
+		(v) => (tempSettings.subtitleLanguagePriority = v),
+		"eng, jpn, *",
+	);
+
 	renderAudioLanguagesInput(byId("job-audio-languages"), tempSettings.audioLanguages || [], (v) => (tempSettings.audioLanguages = v));
 	renderLanguageFilterInput(byId("job-subtitle-languages"), tempSettings.subtitleLanguages || [], (v) => (tempSettings.subtitleLanguages = v));
 	renderBitrateInputs(byId("job-bitrates"), tempSettings.audioBitrates, (ch, val) => (tempSettings.audioBitrates[ch] = val));

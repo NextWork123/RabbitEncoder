@@ -170,7 +170,13 @@ const intIn =
 	(min: number, max: number): Sanitizer =>
 	(v) =>
 		typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : undefined;
-const strList: Sanitizer = (v) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter((x) => x.length > 0) : undefined);
+const strList = (v: unknown): string[] | undefined =>
+	Array.isArray(v)
+		? v
+				.filter((x): x is string => typeof x === "string")
+				.map((s) => s.trim())
+				.filter((s) => s.length > 0)
+		: undefined;
 
 const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	encoder: (v) => (isValidEncoder(v as string) ? (v as EncoderId) : undefined),
@@ -210,6 +216,20 @@ const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	gradfunParams: (v, cur) => (v ? normalizeGradfunLevelParams(v as any, cur) : undefined),
 	vsFilters: (v) => (Array.isArray(v) ? normalizeVsFilterChain(v as any) : undefined),
 	audioBitrates: (v, cur) => (v && typeof v === "object" ? { ...cur, ...(v as object) } : undefined),
+
+	removeDescriptiveAudio: bool,
+	removeKaraokeAudio: bool,
+	dropCompatibilityAudio: bool,
+	audioCodecPriority: enumOf(["lossless-first", "smallest-first"]),
+	preferUncensoredAudio: bool,
+	dedupeAudio: bool,
+	renameAudioTracks: bool,
+	detectCommentaryAudio: bool,
+	detectDescriptiveAudio: bool,
+	detectKaraokeAudio: bool,
+	audioLanguagePriority: strList,
+
+	subtitleLanguagePriority: strList,
 
 	subtitleLangDetect: enumOf(["enabled", "und-only", "disabled"]),
 	subtitleLangDetectConfidence: numIn(0, 1),

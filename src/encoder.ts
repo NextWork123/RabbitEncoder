@@ -18,6 +18,8 @@ import {
 	sanitizeLanguageTag,
 	filterOutCommentaryAudio,
 	filterSubtitleTypes,
+	filterAudioTypes,
+	buildAudioTrackName,
 } from "./tracks";
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
@@ -847,31 +849,50 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		const allAudioStreams = probe.audioStreams || [];
 
-		const compatFiltered = allAudioStreams.filter((s) => !s.title || !/compatibility/i.test(s.title));
-		const skippedCompat = allAudioStreams.length - compatFiltered.length;
-		if (skippedCompat > 0) {
-			Logger.info(`[audio] Skipped ${skippedCompat} compatibility track(s)`);
-		}
+		const audioDetect = {
+			commentary: job.settings.detectCommentaryAudio,
+			descriptive: job.settings.detectDescriptiveAudio,
+			karaoke: job.settings.detectKaraokeAudio,
+		};
 
 		const allowedAudioLangs = job.settings.audioLanguages || [];
-		const langFiltered = filterStreamsByLanguage(compatFiltered, allowedAudioLangs, "audio");
-		const skippedLang = compatFiltered.length - langFiltered.length;
-		if (skippedLang > 0) {
-			Logger.info(`[audio] Filtered ${skippedLang} track(s) not in [${allowedAudioLangs.join(", ")}]`);
+		const langFiltered = filterStreamsByLanguage(allAudioStreams, allowedAudioLangs, "audio");
+		const skippedLang = allAudioStreams.length - langFiltered.length;
+		if (skippedLang > 0) Logger.info(`[audio] Filtered ${skippedLang} track(s) not in [${allowedAudioLangs.join(", ")}]`);
+
+		const typeFiltered = filterAudioTypes(
+			langFiltered,
+			{
+				removeCommentary: job.settings.removeCommentaryAudio,
+				removeDescriptive: job.settings.removeDescriptiveAudio,
+				removeKaraoke: job.settings.removeKaraokeAudio,
+				dropCompatibility: job.settings.dropCompatibilityAudio,
+			},
+			audioDetect,
+		);
+		const droppedByType = langFiltered.length - typeFiltered.length;
+		if (droppedByType > 0) Logger.info(`[audio] Dropped ${droppedByType} track(s) by type/compatibility filters`);
+
+		const sorted = sortAudioStreams(typeFiltered, {
+			languagePriority: job.settings.audioLanguagePriority,
+			preferUncensored: job.settings.preferUncensoredAudio,
+			detect: audioDetect,
+		});
+
+		const audioStreams = job.settings.dedupeAudio
+			? deduplicateAudioStreams(sorted, {
+					collapseChannels: job.settings.keepBestAudioChannelsOnly,
+					codecPriority: job.settings.audioCodecPriority,
+					preferUncensored: job.settings.preferUncensoredAudio,
+					detect: audioDetect,
+				})
+			: sorted;
+
+		if (job.settings.dedupeAudio && sorted.length !== audioStreams.length) {
+			Logger.info(`[audio] Deduplicated ${sorted.length - audioStreams.length} redundant track(s)`);
 		}
 
-		const commentaryFiltered = job.settings.removeCommentaryAudio ? filterOutCommentaryAudio(langFiltered) : langFiltered;
-		if (job.settings.removeCommentaryAudio && commentaryFiltered.length !== langFiltered.length) {
-			Logger.info(`[audio] Removed ${langFiltered.length - commentaryFiltered.length} commentary track(s)`);
-		}
-
-		const audioStreams = deduplicateAudioStreams(sortAudioStreams(commentaryFiltered), { collapseChannels: job.settings.keepBestAudioChannelsOnly });
-
-		if (langFiltered.length !== audioStreams.length) {
-			Logger.info(`[audio] Deduplicated ${langFiltered.length - audioStreams.length} redundant track(s)`);
-		}
-
-		const sortedTypes = audioStreams.map((s) => `${s.language || "und"}:${detectAudioTrackType(s)}:${s.channels || "?"}ch`);
+		const sortedTypes = audioStreams.map((s) => `${s.language || "und"}:${detectAudioTrackType(s, audioDetect)}:${s.channels || "?"}ch`);
 		Logger.info(`[audio] Track order: ${sortedTypes.join(", ")}`);
 
 		const encodedAudioFiles: string[] = [];
@@ -1100,7 +1121,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 			for (let i = 0; i < audioStreams.length; i++) {
 				const stream = audioStreams[i]!;
-				const trackType = detectAudioTrackType(stream);
+				const trackType = detectAudioTrackType(stream, audioDetect);
 				const lang = stream.language || "und";
 				const langGroup = normalizeLanguageGroup(lang);
 
@@ -1111,18 +1132,13 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					mkvArgs.push("--language", `0:${sanitizeLanguageTag(stream.language, `audio idx ${stream.index}`)}`);
 				}
 
-				mkvArgs.push("--track-name", `0:`);
+				const audioName = buildAudioTrackName(trackType, stream.title);
+				mkvArgs.push("--track-name", `0:${audioName}`);
 				mkvArgs.push("--default-track-flag", `0:${isDefault ? "1" : "0"}`);
 				mkvArgs.push("--forced-display-flag", "0:0");
 				mkvArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
-
-				if (trackType === "commentary") {
-					mkvArgs.push("--commentary-flag", "0:1");
-				}
-
-				if (trackType === "descriptive") {
-					mkvArgs.push("--visual-impaired-flag", "0:1");
-				}
+				if (trackType === "commentary") mkvArgs.push("--commentary-flag", "0:1");
+				if (trackType === "descriptive") mkvArgs.push("--visual-impaired-flag", "0:1");
 
 				mkvArgs.push(encodedAudioFiles[i]!);
 			}
@@ -1157,6 +1173,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 				sourcePriority: job.settings.subtitleSourcePriority,
 				fansubTiebreak: job.settings.subtitleFansubTiebreak,
 				formatPriority: job.settings.subtitleFormatPriority,
+				languagePriority: job.settings.subtitleLanguagePriority,
 			});
 
 			const allowedSubLangs = job.settings.subtitleLanguages || [];

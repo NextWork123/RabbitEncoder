@@ -237,6 +237,7 @@ export function renderAudioTrack(track: AudioPreviewTrack, isOutput: boolean, op
 	if (track.isDefault) badges.push('<span class="sub-badge sub-badge-default">Default</span>');
 	if (track.trackType === "commentary") badges.push('<span class="sub-badge sub-badge-commentary">Commentary</span>');
 	if (track.trackType === "descriptive") badges.push('<span class="sub-badge sub-badge-hi">Descriptive</span>');
+	if (track.trackType === "karaoke") badges.push('<span class="sub-badge sub-badge-type">Karaoke</span>');
 	if (track.isOriginal) badges.push('<span class="sub-badge sub-badge-original">Original</span>');
 	badges.push(`<span class="sub-badge sub-badge-type">${escapeHtml(track.channelLayout)}</span>`);
 

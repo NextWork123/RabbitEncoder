@@ -1,5 +1,6 @@
 import type {
 	AudioChannelBitrates,
+	AudioCodecPriority,
 	AudioPreviewResult,
 	AudioPreviewTrack,
 	AudioStreamInfo,
@@ -114,11 +115,24 @@ export function filterStreamsByLanguage<T extends WithLanguage>(streams: T[], al
 const UNCENSORED_PATTERN = /\b(uncensored|uncen|uncut)\b/i;
 const COMMENTARY_PATTERN = /\b(commentary|director'?s?\s+commentary)\b/i;
 const DESCRIPTIVE_PATTERN = /\b(descriptive|description|audio\s*desc(?:ription)?|visually\s*impaired|\bAD\b)\b/i;
+const KARAOKE_PATTERN = /\b(karaoke|off[\s-]?vocal|instrumental|no[\s-]?vocal)\b/i;
+const COMPATIBILITY_PATTERN = /compatibility/i;
 
-export function detectAudioTrackType(stream: AudioStreamInfo): AudioTrackType {
-	if (!stream.title) return "main";
-	if (COMMENTARY_PATTERN.test(stream.title)) return "commentary";
-	if (DESCRIPTIVE_PATTERN.test(stream.title)) return "descriptive";
+export interface AudioDetectOptions {
+	commentary?: boolean; // default true
+	descriptive?: boolean; // default true
+	karaoke?: boolean; // default true
+}
+
+export function detectAudioTrackType(stream: AudioStreamInfo, detect: AudioDetectOptions = {}): AudioTrackType {
+	const title = stream.title;
+	if (!title) return "main";
+	const wantCommentary = detect.commentary ?? true;
+	const wantDescriptive = detect.descriptive ?? true;
+	const wantKaraoke = detect.karaoke ?? true;
+	if (wantCommentary && COMMENTARY_PATTERN.test(title)) return "commentary";
+	if (wantDescriptive && DESCRIPTIVE_PATTERN.test(title)) return "descriptive";
+	if (wantKaraoke && KARAOKE_PATTERN.test(title)) return "karaoke";
 	return "main";
 }
 
@@ -127,75 +141,79 @@ function uncensoredPriority(stream: { title?: string }): number {
 	return stream.title && UNCENSORED_PATTERN.test(stream.title) ? 0 : 1;
 }
 
+export interface AudioSortOptions {
+	languagePriority?: string[];
+	preferUncensored?: boolean; // default true
+	detect?: AudioDetectOptions;
+}
+
 /**
- * Sort audio streams: Japanese first, English second, then everything else
- * alphabetically by language code. Within each language group, main tracks
- * come before commentary/descriptive tracks, then sorted by channel count.
+ * Sort audio streams by language priority, then main > commentary/descriptive/karaoke,
+ * then channel count, then (optionally) uncensored.
  */
-export function sortAudioStreams(streams: AudioStreamInfo[]): AudioStreamInfo[] {
-	const langPriority = (lang: string | undefined): number => {
-		const l = (lang || "und").toLowerCase();
-		if (l === "jpn" || l === "ja" || l === "japanese") return 0;
-		if (l === "eng" || l === "en" || l === "english") return 1;
-		return 2;
-	};
+export function sortAudioStreams(streams: AudioStreamInfo[], opts: AudioSortOptions = {}): AudioStreamInfo[] {
+	const tier = buildLangTier(opts.languagePriority ?? ["jpn", "eng", "*"], { undLast: false });
+	const preferUncensored = opts.preferUncensored ?? true;
+	const detect = opts.detect;
 
 	const typePriority = (stream: AudioStreamInfo): number => {
-		const type = detectAudioTrackType(stream);
+		const type = detectAudioTrackType(stream, detect);
 		if (type === "main") return 0;
 		if (type === "commentary") return 1;
-		return 2;
+		return 2; // descriptive / karaoke
 	};
 
 	return [...streams].sort((a, b) => {
-		const langA = langPriority(a.language);
-		const langB = langPriority(b.language);
-		if (langA !== langB) return langA - langB;
+		const ta = tier(a.language);
+		const tb = tier(b.language);
+		if (ta !== tb) return ta - tb;
 
-		if (langA === 2 && langB === 2) {
-			const la = (a.language || "und").toLowerCase();
-			const lb = (b.language || "und").toLowerCase();
-			if (la !== lb) return la.localeCompare(lb);
-		}
+		// Alphabetical tiebreak within the same tier (the wildcard bucket).
+		const la = canonLang(a.language);
+		const lb = canonLang(b.language);
+		if (la !== lb) return la.localeCompare(lb);
 
-		const typeA = typePriority(a);
-		const typeB = typePriority(b);
-		if (typeA !== typeB) return typeA - typeB;
+		const tyA = typePriority(a);
+		const tyB = typePriority(b);
+		if (tyA !== tyB) return tyA - tyB;
 
 		const chanA = a.channels || 2;
 		const chanB = b.channels || 2;
 		if (chanA !== chanB) return chanA - chanB;
 
-		return uncensoredPriority(a) - uncensoredPriority(b);
+		if (preferUncensored) return uncensoredPriority(a) - uncensoredPriority(b);
+		return 0;
 	});
 }
 
 const LOSSLESS_CODECS = new Set(["flac", "truehd", "mlp", "dts", "pcm_s16le", "pcm_s24le", "pcm_s32le"]);
 
-/**
- * Deduplicate audio streams: keep only the best source per
- * language + channel count + track type combination.
- * Prefer uncensored, then lossless codecs, then highest bitrate.
- *
- * When `collapseChannels` is set, channel count is dropped from the key, so
- * each language+type collapses to a single track — picking the highest
- * channel layout first (e.g. EN 2.0/5.1/7.1 -> 7.1 only). Uncensored still
- * wins outright, matching the non-collapsed behavior.
- */
-export function deduplicateAudioStreams(streams: AudioStreamInfo[], options: { collapseChannels?: boolean } = {}): AudioStreamInfo[] {
-	const { collapseChannels = false } = options;
+export interface AudioDedupeOptions {
+	collapseChannels?: boolean;
+	codecPriority?: AudioCodecPriority; // default "lossless-first"
+	preferUncensored?: boolean; // default true
+	detect?: AudioDetectOptions;
+}
+
+export function deduplicateAudioStreams(streams: AudioStreamInfo[], options: AudioDedupeOptions = {}): AudioStreamInfo[] {
+	const collapseChannels = options.collapseChannels ?? false;
+	const codecPriority = options.codecPriority ?? "lossless-first";
+	const preferUncensored = options.preferUncensored ?? true;
+	const detect = options.detect;
 	const bestMap = new Map<string, AudioStreamInfo>();
 
 	const keyOf = (s: AudioStreamInfo): string => {
 		const lang = (s.language || "und").toLowerCase();
-		const type = detectAudioTrackType(s);
+		const type = detectAudioTrackType(s, detect);
 		return collapseChannels ? `${lang}:${type}` : `${lang}:${s.channels}:${type}`;
 	};
 
 	const isBetter = (candidate: AudioStreamInfo, existing: AudioStreamInfo): boolean => {
-		const cUnc = uncensoredPriority(candidate) === 0;
-		const eUnc = uncensoredPriority(existing) === 0;
-		if (cUnc !== eUnc) return cUnc; // uncensored wins outright
+		if (preferUncensored) {
+			const cUnc = uncensoredPriority(candidate) === 0;
+			const eUnc = uncensoredPriority(existing) === 0;
+			if (cUnc !== eUnc) return cUnc; // uncensored wins outright
+		}
 
 		if (collapseChannels && (candidate.channels || 0) !== (existing.channels || 0)) {
 			return (candidate.channels || 0) > (existing.channels || 0);
@@ -203,8 +221,15 @@ export function deduplicateAudioStreams(streams: AudioStreamInfo[], options: { c
 
 		const cLossless = LOSSLESS_CODECS.has(candidate.codec?.toLowerCase() || "");
 		const eLossless = LOSSLESS_CODECS.has(existing.codec?.toLowerCase() || "");
-		if (cLossless !== eLossless) return cLossless;
 
+		if (codecPriority === "smallest-first") {
+			// Prefer lossy, then the lower bitrate (smaller file).
+			if (cLossless !== eLossless) return !cLossless;
+			return (candidate.bitrate || Infinity) < (existing.bitrate || Infinity);
+		}
+
+		// lossless-first (current default): lossless, then highest bitrate.
+		if (cLossless !== eLossless) return cLossless;
 		return (candidate.bitrate || 0) > (existing.bitrate || 0);
 	};
 
@@ -217,9 +242,28 @@ export function deduplicateAudioStreams(streams: AudioStreamInfo[], options: { c
 	return streams.filter((s) => bestMap.get(keyOf(s)) === s);
 }
 
-/** Drop audio tracks classified as commentary. */
+export interface AudioTypeFilterOptions {
+	removeCommentary?: boolean;
+	removeDescriptive?: boolean;
+	removeKaraoke?: boolean;
+	dropCompatibility?: boolean;
+}
+
+/** Drop audio tracks by detected type and/or "compatibility" downmixes. */
+export function filterAudioTypes(streams: AudioStreamInfo[], options: AudioTypeFilterOptions = {}, detect?: AudioDetectOptions): AudioStreamInfo[] {
+	return streams.filter((s) => {
+		if (options.dropCompatibility && s.title && COMPATIBILITY_PATTERN.test(s.title)) return false;
+		const type = detectAudioTrackType(s, detect);
+		if (options.removeCommentary && type === "commentary") return false;
+		if (options.removeDescriptive && type === "descriptive") return false;
+		if (options.removeKaraoke && type === "karaoke") return false;
+		return true;
+	});
+}
+
+/** @deprecated use filterAudioTypes. Kept for callers expecting the old name. */
 export function filterOutCommentaryAudio(streams: AudioStreamInfo[]): AudioStreamInfo[] {
-	return streams.filter((s) => detectAudioTrackType(s) !== "commentary");
+	return filterAudioTypes(streams, { removeCommentary: true });
 }
 
 export type SubtitleTrackType = "full" | "forced" | "sdh" | "commentary" | "honorifics" | "storyboard";
@@ -455,6 +499,39 @@ export function isUndefined(lang: string | undefined): boolean {
 	return !l || l === "und" || l === "undetermined";
 }
 
+function canonLang(x: string | undefined): string {
+	if (isUndefined(x)) return "und";
+	if (isEnglish(x)) return "en";
+	if (isJapanese(x)) return "ja";
+	return normalizeLanguageCode(x).toLowerCase();
+}
+
+/**
+ * Build a tier function from an ordered priority list.
+ *   - Listed tokens get tiers 0..n in order.
+ *   - "*" marks where unlisted languages sort (alphabetically among themselves).
+ *     If absent, unlisted languages sort after all listed ones.
+ *   - undefined/"und": when `undLast`, always last; otherwise treated as a normal
+ *     unlisted language.
+ */
+export function buildLangTier(order: string[], opts: { undLast?: boolean } = {}): (lang: string | undefined) => number {
+	const undLast = opts.undLast ?? false;
+	const tokens = (order && order.length ? order : ["*"]).map((t) => t.trim().toLowerCase());
+	const wildcardIndex = tokens.indexOf("*");
+	const restTier = wildcardIndex >= 0 ? wildcardIndex : tokens.length;
+	const listed = new Map<string, number>();
+	tokens.forEach((t, i) => {
+		if (t !== "*") listed.set(canonLang(t), i);
+	});
+
+	return (lang: string | undefined): number => {
+		const c = canonLang(lang);
+		if (c === "und" && undLast) return Number.MAX_SAFE_INTEGER;
+		const hit = listed.get(c);
+		return hit !== undefined ? hit : restTier;
+	};
+}
+
 const SOURCE_TAG_PATTERN =
 	/\b([A-Z]{2}(?:BD|UHD|DVD)|Netflix|Crunchyroll|Funimation|HiDive|HIDIVE|Amazon|Disney\+?|DSNP|AppleTV\+?|ATV|Hulu|VRV|ADN|Wakanim|B-Global|Bilibili|NF|CR|AMZN)\b/i;
 
@@ -489,6 +566,33 @@ export function extractSourceTag(title: string | undefined): string | null {
 		bilibili: "Bilibili",
 	};
 	return canonical[raw.toLowerCase()] ?? raw;
+}
+
+/**
+ * Build a clean track name for an audio stream.
+ * "main" returns "" (no meaningful canonical name); other types get a label,
+ * optionally suffixed with the detected source/group tag.
+ *
+ * `format` is reserved for a future user template and is currently ignored.
+ */
+export function buildAudioTrackName(trackType: AudioTrackType, sourceTitle?: string, format?: string): string {
+	// TODO(name-format): when `format` is non-empty, render via the user template.
+	void format;
+	if (trackType === "main") return "";
+
+	const title = sourceTitle || "";
+	const labels: Record<Exclude<AudioTrackType, "main">, string> = {
+		commentary: "Commentary",
+		descriptive: "Audio Description",
+		karaoke: "Karaoke",
+	};
+	const label = labels[trackType];
+
+	const source = extractSourceTag(title);
+	if (source) return `${label} [${source}]`;
+	const group = extractGroupFromTitle(title);
+	if (group) return `${label} [${group}]`;
+	return label;
 }
 
 /**
@@ -581,6 +685,7 @@ export interface SubtitleSortOptions {
 	sourcePriority?: SubtitleSourcePriority;
 	fansubTiebreak?: SubtitleFansubTiebreak;
 	formatPriority?: SubtitleFormatPriority;
+	languagePriority?: string[];
 }
 
 /**
@@ -599,12 +704,7 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[], options: Subt
 	const fansubTiebreak = options.fansubTiebreak ?? "alphabetical";
 	const formatPref = options.formatPriority ?? "text-first";
 
-	const langPriority = (lang: string | undefined): number => {
-		if (isEnglish(lang)) return 0;
-		if (isJapanese(lang)) return 1;
-		if (isUndefined(lang)) return 3;
-		return 2;
-	};
+	const langTier = buildLangTier(options.languagePriority ?? ["eng", "jpn", "*"], { undLast: true });
 
 	const typePriority = (stream: SubtitleStreamInfo): number => {
 		const type = detectSubtitleTrackType(stream);
@@ -649,11 +749,12 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[], options: Subt
 
 	return [...streams].sort((a, b) => {
 		// 1. Language
-		const langA = langPriority(a.language);
-		const langB = langPriority(b.language);
+		const langA = langTier(a.language);
+		const langB = langTier(b.language);
 		if (langA !== langB) return langA - langB;
 
-		if (langA === 2 && langB === 2) {
+		// Alphabetical tiebreak within the wildcard bucket (regional variants preserved).
+		if (langA === langB) {
 			const la = normalizeLanguageGroup(a.language);
 			const lb = normalizeLanguageGroup(b.language);
 			if (la !== lb) return la.localeCompare(lb);
@@ -1681,15 +1782,31 @@ export async function previewSubtitles(
 export function previewAudio(
 	sourceStreams: AudioStreamInfo[],
 	bitrates: AudioChannelBitrates,
-	options: { languages?: string[]; collapseChannels?: boolean; removeCommentary?: boolean } = {},
+	options: {
+		languages?: string[];
+		languagePriority?: string[];
+		collapseChannels?: boolean;
+		dedupe?: boolean;
+		removeCommentary?: boolean;
+		removeDescriptive?: boolean;
+		removeKaraoke?: boolean;
+		dropCompatibility?: boolean;
+		codecPriority?: AudioCodecPriority;
+		preferUncensored?: boolean;
+		renameTracks?: boolean;
+		trackNameFormat?: string;
+		detect?: AudioDetectOptions;
+	} = {},
 ): AudioPreviewResult {
+	const detect = options.detect;
+
 	const source: AudioPreviewTrack[] = sourceStreams.map((s) => ({
 		index: s.index,
 		codec: s.codec || "unknown",
 		language: s.language || "und",
 		flag: languageToFlag(s.language),
 		title: s.title || "",
-		trackType: detectAudioTrackType(s),
+		trackType: detectAudioTrackType(s, detect),
 		channels: s.channels,
 		channelLayout: normalizeLayout(s.channelLayout),
 		bitrate: s.bitrate,
@@ -1697,15 +1814,37 @@ export function previewAudio(
 		isOriginal: s.isOriginal || false,
 	}));
 
-	const compatFiltered = sourceStreams.filter((s) => !s.title || !/compatibility/i.test(s.title));
-	const langFiltered = filterStreamsByLanguage(compatFiltered, options.languages || [], "audio");
-	const commentaryFiltered = options.removeCommentary ? filterOutCommentaryAudio(langFiltered) : langFiltered;
-	const finalStreams = deduplicateAudioStreams(sortAudioStreams(commentaryFiltered), { collapseChannels: options.collapseChannels });
+	const langFiltered = filterStreamsByLanguage(sourceStreams, options.languages || [], "audio");
+	const typeFiltered = filterAudioTypes(
+		langFiltered,
+		{
+			removeCommentary: options.removeCommentary,
+			removeDescriptive: options.removeDescriptive,
+			removeKaraoke: options.removeKaraoke,
+			dropCompatibility: options.dropCompatibility ?? true,
+		},
+		detect,
+	);
+	const sorted = sortAudioStreams(typeFiltered, {
+		languagePriority: options.languagePriority,
+		preferUncensored: options.preferUncensored,
+		detect,
+	});
+	const finalStreams =
+		(options.dedupe ?? true)
+			? deduplicateAudioStreams(sorted, {
+					collapseChannels: options.collapseChannels,
+					codecPriority: options.codecPriority,
+					preferUncensored: options.preferUncensored,
+					detect,
+				})
+			: sorted;
 
+	const renameTracks = options.renameTracks ?? false;
 	const defaultAssigned = new Set<string>();
 
 	const output: AudioPreviewTrack[] = finalStreams.map((s) => {
-		const trackType = detectAudioTrackType(s);
+		const trackType = detectAudioTrackType(s, detect);
 		const lang = s.language || "und";
 		const langGroup = normalizeLanguageGroup(lang);
 		const layout = normalizeLayout(s.channelLayout);
@@ -1715,10 +1854,10 @@ export function previewAudio(
 
 		return {
 			index: s.index,
-			codec: "opus", // post-encode codec
+			codec: "opus",
 			language: lang,
 			flag: languageToFlag(lang),
-			title: "", // encoder clears the track name
+			title: renameTracks ? buildAudioTrackName(trackType, s.title, options.trackNameFormat) : "",
 			trackType,
 			channels: s.channels,
 			channelLayout: layout,

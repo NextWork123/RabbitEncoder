@@ -287,6 +287,30 @@ export function renderBitrateInputs(
 	});
 }
 
+export function renderLanguagePriorityInput(container: HTMLElement, value: string[], onChange: (value: string[]) => void, placeholder = "jpn, eng, *"): void {
+	container.innerHTML = "";
+	const input = document.createElement("input");
+	input.type = "text";
+	input.className = "lang-filter-input";
+	input.placeholder = placeholder;
+	input.value = (value || []).join(", ");
+
+	const hint = document.createElement("div");
+	hint.className = "lang-filter-hint";
+	hint.textContent = "Ordered priority. Use * for everything else (alphabetical).";
+
+	input.oninput = () =>
+		onChange(
+			input.value
+				.split(",")
+				.map((s) => s.trim())
+				.filter((s) => s.length > 0),
+		);
+
+	container.appendChild(input);
+	container.appendChild(hint);
+}
+
 export function renderDownscaleToggle(container: HTMLElement, checked: boolean, onChange: (value: boolean) => void): void {
 	container.innerHTML = "";
 	const label = document.createElement("label");

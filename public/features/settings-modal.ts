@@ -3,6 +3,7 @@ import type { AdvancedTarget, PipelinePreset, SettingsCodePanelElement } from ".
 import { decodeSettingsCodeRequest, fetchConfig, fetchOpenClDevices, fetchVulkanDevices, patchConfig, resetConfigRequest } from "../api/client";
 import { getCurrentSettings } from "../app/events";
 import {
+	AUDIO_CODEC_PRIORITY_OPTIONS,
 	AUDIO_ENCODE_OPTIONS,
 	DEBAND_LEVELS,
 	DEFAULT_AUTO_THRESHOLDS,
@@ -44,6 +45,7 @@ import {
 	renderDetectHonorificsToggle,
 	renderNumberControl,
 	renderLabeledToggle,
+	renderLanguagePriorityInput,
 } from "./settings-controls";
 import { renderVsChainEditor } from "./vapoursynth";
 import { byId } from "../shared/dom";
@@ -254,6 +256,79 @@ export async function openSettings() {
 		tempDefaults.removeCommentaryAudio || false,
 		(v) => (tempDefaults.removeCommentaryAudio = v),
 	);
+
+	// Audio manipulation
+	renderLabeledToggle(
+		byId("default-remove-descriptive-audio"),
+		tempDefaults.removeDescriptiveAudio ?? false,
+		"Remove audio description",
+		(v) => (tempDefaults.removeDescriptiveAudio = v),
+	);
+	renderLabeledToggle(
+		byId("default-remove-karaoke-audio"),
+		tempDefaults.removeKaraokeAudio ?? false,
+		"Remove karaoke / off-vocal",
+		(v) => (tempDefaults.removeKaraokeAudio = v),
+	);
+	renderLabeledToggle(
+		byId("default-drop-compatibility-audio"),
+		tempDefaults.dropCompatibilityAudio ?? true,
+		"Drop compatibility downmix tracks",
+		(v) => (tempDefaults.dropCompatibilityAudio = v),
+	);
+	renderLabeledToggle(
+		byId("default-prefer-uncensored-audio"),
+		tempDefaults.preferUncensoredAudio ?? true,
+		"Prefer uncensored tracks",
+		(v) => (tempDefaults.preferUncensoredAudio = v),
+	);
+	renderLabeledToggle(byId("default-dedupe-audio"), tempDefaults.dedupeAudio ?? true, "Deduplicate audio tracks", (v) => (tempDefaults.dedupeAudio = v));
+	renderRadioPills(
+		byId("default-audio-codec-priority"),
+		AUDIO_CODEC_PRIORITY_OPTIONS,
+		tempDefaults.audioCodecPriority ?? "lossless-first",
+		(v) => (tempDefaults.audioCodecPriority = v),
+	);
+	renderLabeledToggle(
+		byId("default-rename-audio-tracks"),
+		tempDefaults.renameAudioTracks ?? false,
+		"Rename tracks to clean format",
+		(v) => (tempDefaults.renameAudioTracks = v),
+	);
+	renderLanguagePriorityInput(
+		byId("default-audio-lang-priority"),
+		tempDefaults.audioLanguagePriority ?? ["jpn", "eng", "*"],
+		(v) => (tempDefaults.audioLanguagePriority = v),
+	);
+
+	// Audio type detection
+	renderLabeledToggle(
+		byId("default-detect-commentary-audio"),
+		tempDefaults.detectCommentaryAudio ?? true,
+		"Detect commentary",
+		(v) => (tempDefaults.detectCommentaryAudio = v),
+	);
+	renderLabeledToggle(
+		byId("default-detect-descriptive-audio"),
+		tempDefaults.detectDescriptiveAudio ?? true,
+		"Detect audio description",
+		(v) => (tempDefaults.detectDescriptiveAudio = v),
+	);
+	renderLabeledToggle(
+		byId("default-detect-karaoke-audio"),
+		tempDefaults.detectKaraokeAudio ?? true,
+		"Detect karaoke",
+		(v) => (tempDefaults.detectKaraokeAudio = v),
+	);
+
+	// Subtitle additions
+	renderLanguagePriorityInput(
+		byId("default-subtitle-lang-priority"),
+		tempDefaults.subtitleLanguagePriority ?? ["eng", "jpn", "*"],
+		(v) => (tempDefaults.subtitleLanguagePriority = v),
+		"eng, jpn, *",
+	);
+
 	renderAudioLanguagesInput(byId("default-audio-languages"), tempDefaults.audioLanguages || [], (v) => (tempDefaults.audioLanguages = v));
 	renderLanguageFilterInput(byId("default-subtitle-languages"), tempDefaults.subtitleLanguages || [], (v) => (tempDefaults.subtitleLanguages = v));
 	renderBitrateInputs(byId("default-bitrates"), tempDefaults.audioBitrates, (ch, val) => (tempDefaults.audioBitrates[ch] = val));

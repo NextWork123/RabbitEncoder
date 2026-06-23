@@ -207,8 +207,21 @@ app.get("/api/jobs/:id/audio-preview", async (c) => {
 	try {
 		const result = previewAudio(audioStreams, job.settings.audioBitrates, {
 			languages: job.settings.audioLanguages || [],
+			languagePriority: job.settings.audioLanguagePriority,
 			collapseChannels: job.settings.keepBestAudioChannelsOnly,
+			dedupe: job.settings.dedupeAudio,
 			removeCommentary: job.settings.removeCommentaryAudio,
+			removeDescriptive: job.settings.removeDescriptiveAudio,
+			removeKaraoke: job.settings.removeKaraokeAudio,
+			dropCompatibility: job.settings.dropCompatibilityAudio,
+			codecPriority: job.settings.audioCodecPriority,
+			preferUncensored: job.settings.preferUncensoredAudio,
+			renameTracks: job.settings.renameAudioTracks,
+			detect: {
+				commentary: job.settings.detectCommentaryAudio,
+				descriptive: job.settings.detectDescriptiveAudio,
+				karaoke: job.settings.detectKaraokeAudio,
+			},
 		});
 		return c.json(result);
 	} catch (err: any) {
