@@ -1,6 +1,17 @@
-import type { DenoiseLevel, DebandLevel, GpuBackend, DenoiseBackend, NlmeansParams, NlmeansLevelParams, GradfunParams, GradfunLevelParams } from "./types";
+import type {
+	DenoiseLevel,
+	DebandLevel,
+	GpuBackend,
+	DenoiseBackend,
+	NlmeansParams,
+	NlmeansLevelParams,
+	GradfunParams,
+	GradfunLevelParams,
+	CropMode,
+} from "./types";
 import { Logger } from "./logger";
 import { buildAutoDenoiseFilter, type DenoisePlan } from "./auto-denoise";
+import { run } from "./process";
 
 /** Default nlmeans parameters per level. Used when env vars / settings don't override. */
 export const DEFAULT_NLMEANS_PARAMS: NlmeansLevelParams = {
@@ -112,9 +123,16 @@ export interface DebandConfig {
 	filter: string;
 }
 
+interface CropRect {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+}
+
 export interface PrepareFilterStep {
 	/** Discrete kind — used for artifact filenames and frontend routing. */
-	kind: "downscale" | "deband" | "denoise";
+	kind: "crop" | "downscale" | "deband" | "denoise";
 	/** The -vf filter string for this step alone. */
 	filter: string;
 	/** Args to insert before -i (only the denoise step needs hw device init). */
@@ -304,6 +322,47 @@ export function buildDebandConfig(level: DebandLevel, params: GradfunLevelParams
 	};
 }
 
+interface CropRect {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+}
+
+/**
+ * Detect non‑black crop rectangle using ffmpeg's cropdetect filter.
+ * Returns null if no significant crop is found (or detection fails).
+ */
+export async function detectCrop(inputPath: string, limit: number, signal?: AbortSignal): Promise<CropRect | null> {
+	const args = ["ffmpeg", "-hide_banner", "-i", inputPath, "-vf", `cropdetect=round=2:skip=0:reset=0:limit=${limit}`, "-t", "30", "-f", "null", "-"];
+
+	const { code, stderr } = await run(args, { signal });
+	if (code !== 0) return null;
+
+	// Parse stderr for lines like: [Parsed_cropdetect_0 @ ...] crop=1920:1080:0:0
+	const cropRe = /crop=(\d+):(\d+):(\d+):(\d+)/;
+	let lastCrop: CropRect | null = null;
+	for (const line of stderr.split("\n")) {
+		const m = line.match(cropRe);
+		if (m) {
+			const w = parseInt(m[1]!, 10);
+			const h = parseInt(m[2]!, 10);
+			const x = parseInt(m[3]!, 10);
+			const y = parseInt(m[4]!, 10);
+			// Only accept if crop is not the whole frame
+			if (w > 0 && h > 0 && !(x === 0 && y === 0 && w === 1920 && h === 1080)) {
+				lastCrop = { x, y, w, h };
+			}
+		}
+	}
+
+	return lastCrop || null;
+}
+
+export function buildCropFilter(rect: CropRect): string {
+	return `crop=${rect.w}:${rect.h}:${rect.x}:${rect.y}`;
+}
+
 /**
  * Build a combined prepare filter config (downscale + deband + denoise).
  * Returns null if no filtering is needed.
@@ -324,7 +383,10 @@ export function buildDebandConfig(level: DebandLevel, params: GradfunLevelParams
  * encoder then runs runSegmentedAutoDenoiseGpu after the filter pass.
  */
 export interface PrepareFilterInput {
+	inputPath: string;
 	downscale: boolean;
+	crop: CropMode;
+	cropLimit: number;
 	sourceHeight: number;
 	denoise: DenoiseLevel;
 	denoiseBackend: DenoiseBackend;
@@ -337,12 +399,32 @@ export interface PrepareFilterInput {
 }
 
 export async function buildPrepareFilterConfig(input: PrepareFilterInput): Promise<PrepareFilterConfig | null> {
-	const { downscale, sourceHeight, denoise, denoiseBackend, deband, gpuDevice, nlmeansParams, gradfunParams, autoPlan = null, totalDuration } = input;
+	const {
+		downscale,
+		crop,
+		cropLimit,
+		sourceHeight,
+		denoise,
+		denoiseBackend,
+		deband,
+		gpuDevice,
+		nlmeansParams,
+		gradfunParams,
+		autoPlan = null,
+		totalDuration,
+	} = input;
 
-	const needsScale = downscale && sourceHeight > 1080;
-	const scaleFilter = "scale=-2:1080:flags=lanczos";
+	let cropFilter: string | null = null;
+	let cropLabel: string | null = null;
+	let cropRect: CropRect | null = null;
 
-	const debandConfig = buildDebandConfig(deband, gradfunParams);
+	if (crop === "auto") {
+		cropRect = await detectCrop(input.inputPath, cropLimit, undefined);
+		if (cropRect) {
+			cropFilter = buildCropFilter(cropRect);
+			cropLabel = `Cropping to ${cropRect.w}x${cropRect.h}`;
+		}
+	}
 
 	let denoiseFilter: string | null = null;
 	let denoisePreInputArgs: string[] = [];
@@ -380,29 +462,41 @@ export async function buildPrepareFilterConfig(input: PrepareFilterInput): Promi
 		}
 	}
 
-	if (!needsScale && !debandConfig && !denoiseFilter && !deferredAutoDenoise) return null;
-
 	const parts: string[] = [];
 	const preInputArgs: string[] = [];
 	const labelParts: string[] = [];
 	const steps: PrepareFilterStep[] = [];
 
+	if (cropFilter) {
+		parts.push(cropFilter);
+		labelParts.push(cropLabel!);
+		steps.push({ kind: "crop", filter: cropFilter, preInputArgs: [], label: cropLabel! });
+	}
+
+	const needsScale = downscale && sourceHeight > 1080;
 	if (needsScale) {
+		const scaleFilter = "scale=-2:1080:flags=lanczos";
 		parts.push(scaleFilter);
 		labelParts.push("Downscaling");
 		steps.push({ kind: "downscale", filter: scaleFilter, preInputArgs: [], label: "Downscaling" });
 	}
+
+	const debandConfig = buildDebandConfig(deband, gradfunParams);
 	if (debandConfig) {
 		parts.push(debandConfig.filter);
 		labelParts.push(`Debanding (${deband})`);
 		steps.push({ kind: "deband", filter: debandConfig.filter, preInputArgs: [], label: `Debanding (${deband})` });
 	}
+
 	if (denoiseFilter) {
 		parts.push(denoiseFilter);
 		preInputArgs.push(...denoisePreInputArgs);
 		labelParts.push(denoiseLabel!);
 		steps.push({ kind: "denoise", filter: denoiseFilter, preInputArgs: denoisePreInputArgs, label: denoiseLabel! });
 	}
+
+	// Return only if something changed
+	if (parts.length === 0 && !deferredAutoDenoise) return null;
 
 	return {
 		filter: parts.join(","),

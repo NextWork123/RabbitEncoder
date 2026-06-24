@@ -8,6 +8,8 @@ export type VideoEncodeMode = "av1" | "off";
 export type AudioEncodeMode = "opus" | "copy";
 export type SubtitleProcessingMode = "full" | "copy";
 
+export type CropMode = "off" | "auto";
+
 export type AudioTrackType = "main" | "commentary" | "descriptive" | "karaoke";
 export type AudioCodecPriority = "lossless-first" | "smallest-first";
 
@@ -95,6 +97,8 @@ export interface JobSettings {
 	quality: EncoderQuality;
 	finalSpeed: EncoderSpeed;
 	audioBitrates: AudioChannelBitrates;
+	crop: CropMode;
+	cropLimit: number;
 	denoise: DenoiseLevel;
 	autoDenoiseThresholds: AutoDenoiseThresholds;
 	/** Filter parameters used for nlmeans at each level. */
@@ -352,7 +356,7 @@ export interface PreviewSampleVsFrame {
 
 export interface PreviewSamplePrepareFrame {
 	/** Which prepare-filter step this snapshot came from. */
-	kind: "downscale" | "deband" | "denoise";
+	kind: "crop" | "downscale" | "deband" | "denoise";
 	/** Human-readable label like "Debanding (medium)" or "Auto denoise (GPU/Vulkan)". */
 	label: string;
 }

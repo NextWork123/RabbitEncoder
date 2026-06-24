@@ -18,6 +18,7 @@ import type {
 	SubtitleFansubTiebreak,
 	SubtitleFormatPriority,
 	AudioCodecPriority,
+	CropMode,
 } from "./types";
 import { vsRegistry } from "./vs-filters";
 
@@ -53,6 +54,8 @@ const BASELINE: JobSettings = {
 	},
 	denoiseBackend: "auto",
 	gpuDevice: "0.0",
+	crop: "off",
+	cropLimit: 0.1,
 	deband: "off",
 	downscale: false,
 	skipBoosting: false,
@@ -113,6 +116,7 @@ const QUALITY_TO_CODE: Record<EncoderQuality, string> = { low: "l", medium: "m",
 const SPEED_TO_CODE: Record<EncoderSpeed, string> = { slower: "sr", slow: "s", medium: "m", fast: "f", faster: "fr" };
 const DENOISE_TO_CODE: Record<DenoiseLevel, string> = { off: "o", light: "l", medium: "m", heavy: "h", auto: "a" };
 const DEBAND_TO_CODE: Record<DebandLevel, string> = { off: "o", light: "l", medium: "m", heavy: "h" };
+const CROP_TO_CODE: Record<CropMode, string> = { off: "o", auto: "a" };
 
 function reverse<T extends string>(map: Record<T, string>): Record<string, T> {
 	const out: Record<string, T> = {};
@@ -121,6 +125,7 @@ function reverse<T extends string>(map: Record<T, string>): Record<string, T> {
 }
 const CODE_TO_QUALITY = reverse(QUALITY_TO_CODE);
 const CODE_TO_SPEED = reverse(SPEED_TO_CODE);
+const CODE_TO_CROP = reverse(CROP_TO_CODE);
 const CODE_TO_DENOISE = reverse(DENOISE_TO_CODE);
 const CODE_TO_DEBAND = reverse(DEBAND_TO_CODE);
 
@@ -241,6 +246,8 @@ export function encodeSettingsCode(s: JobSettings): string {
 	if (s.videoEncode !== BASELINE.videoEncode) core.put("v", s.videoEncode);
 	if (s.audioEncode !== BASELINE.audioEncode) core.put("a", s.audioEncode);
 	if (s.subtitleProcessing !== BASELINE.subtitleProcessing) core.put("su", s.subtitleProcessing);
+	if (s.crop !== BASELINE.crop) core.put("crp", CROP_TO_CODE[s.crop] ?? CROP_TO_CODE.off);
+	if (s.cropLimit !== BASELINE.cropLimit) core.put("cl", s.cropLimit);
 	if (s.downscale !== BASELINE.downscale) core.put("ds", s.downscale);
 	if (s.skipBoosting !== BASELINE.skipBoosting) core.put("sb", s.skipBoosting);
 	if (s.noPhaseInv !== BASELINE.noPhaseInv) core.put("np", s.noPhaseInv);
@@ -512,6 +519,8 @@ function applyCore(out: JobSettings, kv: Record<string, string>): void {
 	if (kv.v && (VIDEO_VALUES as string[]).includes(kv.v)) out.videoEncode = kv.v as VideoEncodeMode;
 	if (kv.a && (AUDIO_VALUES as string[]).includes(kv.a)) out.audioEncode = kv.a as AudioEncodeMode;
 	if (kv.su && (SUB_VALUES as string[]).includes(kv.su)) out.subtitleProcessing = kv.su as SubtitleProcessingMode;
+	if (kv.crp && CODE_TO_CROP[kv.crp]) out.crop = CODE_TO_CROP[kv.crp]!;
+	if (kv.cl !== undefined) out.cropLimit = parseFloat(kv.cl) || out.cropLimit;
 	if (kv.ds !== undefined) out.downscale = kv.ds === "1";
 	if (kv.sb !== undefined) out.skipBoosting = kv.sb === "1";
 	if (kv.np !== undefined) out.noPhaseInv = kv.np === "1";

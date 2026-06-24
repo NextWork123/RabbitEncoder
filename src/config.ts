@@ -24,6 +24,8 @@ const DEFAULT_JOB_SETTINGS: JobSettings = {
 	subtitleProcessing: "full",
 	quality: "medium",
 	finalSpeed: "slow",
+	crop: "off",
+	cropLimit: 0.1,
 	denoise: "off",
 	autoDenoiseThresholds: DEFAULT_AUTO_THRESHOLDS,
 	nlmeansParams: DEFAULT_NLMEANS_PARAMS,

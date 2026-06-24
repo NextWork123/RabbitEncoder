@@ -281,6 +281,9 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 		}
 
 		const prepareFilter = await buildPrepareFilterConfig({
+			inputPath: job.inputPath,
+			crop: job.settings.crop,
+			cropLimit: job.settings.cropLimit,
 			downscale: job.settings.downscale,
 			sourceHeight: probe.height,
 			denoise: job.settings.denoise,

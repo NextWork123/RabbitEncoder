@@ -305,6 +305,9 @@ async function encodeSample(
 	onProgress(0.15, "Applying filters");
 
 	const prepareFilter = await buildPrepareFilterConfig({
+		inputPath: job.inputPath,
+		crop: job.settings.crop,
+		cropLimit: job.settings.cropLimit,
 		downscale: job.settings.downscale,
 		sourceHeight: probe.height,
 		denoise: job.settings.denoise,
@@ -818,8 +821,8 @@ export function resolvePreviewArtifact(config: AppConfig, jobId: string, sampleI
 		if (!Number.isFinite(idx) || idx < 0) return null;
 		file = join(dir, `vs_${idx}.png`);
 	} else if (kind.startsWith("pf:")) {
-		// Prepare-filter intermediate snapshot: pf:downscale | pf:deband | pf:denoise
-		const m = kind.match(/^pf:(downscale|deband|denoise)$/);
+		// Prepare-filter intermediate snapshot: pf:downscale | pf:deband | pf:denoise | pf:crop
+		const m = kind.match(/^pf:(downscale|deband|denoise|crop)$/);
 		if (!m) return null;
 		file = join(dir, `prepare_${m[1]}.png`);
 	} else {

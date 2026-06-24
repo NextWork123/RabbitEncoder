@@ -311,6 +311,55 @@ export function renderLanguagePriorityInput(container: HTMLElement, value: strin
 	container.appendChild(hint);
 }
 
+export function renderCropLimit(container: HTMLElement, cropMode: string, value: number, onChange: (v: number) => void): void {
+	container.innerHTML = "";
+	// Show only when crop === "auto"
+	if (cropMode !== "auto") {
+		container.style.display = "none";
+		return;
+	}
+	container.style.display = "";
+
+	const pct = Math.round(value * 100);
+
+	const row = document.createElement("div");
+	row.className = "slider-row";
+
+	const slider = document.createElement("input");
+	slider.type = "range";
+	slider.min = "0";
+	slider.max = "100";
+	slider.step = "1";
+	slider.value = String(pct);
+
+	const numberInput = document.createElement("input");
+	numberInput.type = "number";
+	numberInput.min = "0";
+	numberInput.max = "100";
+	numberInput.step = "1";
+	numberInput.className = "num-input";
+	numberInput.value = String(pct);
+
+	const update = (newPct: number) => {
+		newPct = Math.min(100, Math.max(0, Math.round(newPct)));
+		const newVal = newPct / 100;
+		onChange(newVal);
+		slider.value = String(newPct);
+		numberInput.value = String(newPct);
+	};
+
+	slider.oninput = () => update(parseInt(slider.value, 10));
+	numberInput.oninput = () => {
+		let v = parseInt(numberInput.value, 10);
+		if (isNaN(v)) v = 0;
+		update(v);
+	};
+
+	row.appendChild(slider);
+	row.appendChild(numberInput);
+	container.appendChild(row);
+}
+
 export function renderDownscaleToggle(container: HTMLElement, checked: boolean, onChange: (value: boolean) => void): void {
 	container.innerHTML = "";
 	const label = document.createElement("label");

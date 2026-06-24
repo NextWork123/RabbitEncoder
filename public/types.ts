@@ -8,6 +8,8 @@ export type VideoEncodeMode = "av1" | "off";
 export type AudioEncodeMode = "opus" | "copy";
 export type SubtitleProcessingMode = "full" | "copy";
 
+export type CropMode = "off" | "auto";
+
 export type AudioTrackType = "main" | "commentary" | "descriptive" | "karaoke";
 export type AudioCodecPriority = "lossless-first" | "smallest-first";
 
@@ -95,6 +97,8 @@ export interface JobSettings {
 	quality: EncoderQuality;
 	finalSpeed: EncoderSpeed;
 	audioBitrates: AudioChannelBitrates;
+	crop: CropMode;
+	cropLimit: number;
 	denoise: DenoiseLevel;
 	autoDenoiseThresholds: AutoDenoiseThresholds;
 	/** Filter parameters used for nlmeans at each level. */

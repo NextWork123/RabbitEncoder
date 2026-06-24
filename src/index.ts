@@ -322,7 +322,7 @@ app.get("/api/jobs/:id/preview/sample/:index/:kind", (c) => {
 
 	const isStandard = kind === "source" || kind === "encode" || kind === "clip" || kind === "source-clip";
 	const isVsStep = /^vs:\d+$/.test(kind);
-	const isPrepareStep = /^pf:(?:downscale|deband|denoise)$/.test(kind);
+	const isPrepareStep = /^pf:(?:downscale|deband|denoise|crop)$/.test(kind);
 	if (!isStandard && !isVsStep && !isPrepareStep) {
 		return c.json({ error: "Bad request" }, 400);
 	}

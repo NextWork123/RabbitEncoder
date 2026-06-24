@@ -190,6 +190,8 @@ const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	audioEncode: enumOf(["opus", "copy"]),
 	subtitleProcessing: enumOf(["full", "copy"]),
 
+	crop: enumOf(["off", "auto"]),
+	cropLimit: numIn(0, 1),
 	denoise: enumOf(["off", "auto", "light", "medium", "heavy"]),
 	deband: enumOf(["off", "light", "medium", "heavy"]),
 	denoiseBackend: enumOf(["cpu", "auto", "vulkan", "opencl"]),

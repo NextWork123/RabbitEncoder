@@ -2,6 +2,7 @@ import type {
 	AudioChannelBitrates,
 	AudioCodecPriority,
 	AudioEncodeMode,
+	CropMode,
 	DebandLevel,
 	DenoiseBackend,
 	DenoiseLevel,
@@ -42,6 +43,7 @@ export const SPEEDS: readonly EncoderSpeed[] = ["slower", "slow", "medium", "fas
 export const DENOISE_LEVELS: readonly DenoiseLevel[] = ["off", "auto", "light", "medium", "heavy"];
 export const DEBAND_LEVELS: readonly DebandLevel[] = ["off", "light", "medium", "heavy"];
 export const PARAM_LEVELS = ["light", "medium", "heavy"] as const;
+export const CROP_OPTIONS: readonly CropMode[] = ["off", "auto"];
 
 export const DENOISE_BACKENDS: readonly DenoiseBackend[] = ["cpu", "auto", "vulkan", "opencl"];
 
