@@ -339,6 +339,7 @@ const GROUP_BLOCKLIST = new Set([
 	"espana",
 	"iberian",
 	"french",
+	"france",
 	"german",
 	"italian",
 	"portugal",
