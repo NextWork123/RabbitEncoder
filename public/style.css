@@ -533,6 +533,10 @@ code {
 	width: min(620px, calc(100vw - 32px));
 }
 
+.modal.modal-sub-style {
+	width: min(960px, calc(100vw - 32px));
+}
+
 .modal-header {
 	display: flex;
 	align-items: center;

@@ -6,6 +6,8 @@ import { clampFloat, clampInt, forceOdd } from "./job-render";
 import { byId } from "../shared/dom";
 import { errorMessage } from "../shared/errors";
 
+const SUBTITLE_TARGET_TYPES = ["full", "honorifics", "forced", "sdh", "commentary"] as const;
+
 export function wireEncoderControls(prefix: "default" | "job", settings: JobSettings): void {
 	const id = (s: string) => byId(`${prefix}-${s}`) as HTMLElement;
 
@@ -14,7 +16,7 @@ export function wireEncoderControls(prefix: "default" | "job", settings: JobSett
 		const direct = !def.usesAutoBoost;
 		id("abe-controls").style.display = direct ? "none" : "";
 		id("manual-controls").style.display = direct ? "" : "none";
-		// skip-boosting is an ABE concept — hide it for direct encoders if present
+		// skip-boosting is an ABE concept - hide it for direct encoders if present
 		const sb = byId(`${prefix}-skip-boosting`);
 		const sbGroup = sb.closest<HTMLElement>(".setting-group");
 		if (sbGroup) sbGroup.style.display = direct ? "none" : "";
@@ -770,4 +772,88 @@ function renderSimpleToggle(container: HTMLElement, checked: boolean, labelText:
 	label.appendChild(input);
 	label.appendChild(span);
 	container.appendChild(label);
+}
+
+/** Multi-select checkboxes for the track types ASS font-restyle applies to. */
+export function renderSubtitleStyleTargets(container: HTMLElement, value: string[], onChange: (v: string[]) => void): void {
+	container.innerHTML = "";
+	const set = new Set(value);
+	SUBTITLE_TARGET_TYPES.forEach((t) => {
+		const label = document.createElement("label");
+		label.className = "toggle-label";
+		const input = document.createElement("input");
+		input.type = "checkbox";
+		input.checked = set.has(t);
+		input.onchange = () => {
+			if (input.checked) set.add(t);
+			else set.delete(t);
+			onChange([...set]);
+		};
+		const span = document.createElement("span");
+		span.textContent = `\u00A0${t}`;
+		label.appendChild(input);
+		label.appendChild(span);
+		container.appendChild(label);
+	});
+}
+
+/** <select> of fonts from /config/fonts. Always keeps `value` selectable so an imported name isn't lost. */
+export function renderFontDropdown(container: HTMLElement, value: string, fonts: { label: string }[], onChange: (v: string) => void): void {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+	const span = document.createElement("span");
+	span.textContent = "Subtitle font\u00A0";
+	const select = document.createElement("select");
+	select.className = "select-input";
+
+	const seen = new Set<string>();
+	const names: string[] = [];
+	if (value) {
+		names.push(value);
+		seen.add(value);
+	}
+	for (const f of fonts)
+		if (!seen.has(f.label)) {
+			names.push(f.label);
+			seen.add(f.label);
+		}
+
+	if (names.length === 0) {
+		const o = document.createElement("option");
+		o.value = "";
+		o.textContent = "No fonts found in /config/fonts";
+		select.appendChild(o);
+		select.disabled = true;
+	} else {
+		for (const name of names) {
+			const o = document.createElement("option");
+			o.value = name;
+			o.textContent = name;
+			if (name === value) o.selected = true;
+			select.appendChild(o);
+		}
+	}
+	select.onchange = () => onChange(select.value);
+	label.appendChild(span);
+	label.appendChild(select);
+	container.appendChild(label);
+}
+
+/** Free-text control (used for ASS &HAABBGGRR colours). */
+export function renderTextControl(container: HTMLElement, label: string, value: string, placeholder: string, onChange: (v: string) => void): void {
+	container.innerHTML = "";
+	const wrap = document.createElement("label");
+	wrap.className = "toggle-label";
+	const span = document.createElement("span");
+	span.textContent = `${label}\u00A0`;
+	const input = document.createElement("input");
+	input.type = "text";
+	input.className = "lang-filter-input";
+	input.placeholder = placeholder;
+	input.value = value;
+	input.oninput = () => onChange(input.value);
+	wrap.appendChild(span);
+	wrap.appendChild(input);
+	container.appendChild(wrap);
 }

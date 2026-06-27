@@ -1,5 +1,5 @@
 import Blake2b from "@rabbit-company/blake2b";
-import type { Job, JobSettings, PreviewState, VsFilterEntry, VsPresetManifest } from "../types";
+import type { FontAxis, Job, JobSettings, PreviewState, VsFilterEntry, VsPresetManifest } from "../types";
 import type { BenchmarkState, FetchOptions, GpuDevice, SystemStats } from "../ui/models";
 import { API } from "../config/api-base";
 import { startPolling, stopPolling } from "../features/polling";
@@ -125,6 +125,36 @@ export async function fetchJobs(): Promise<Job[]> {
 export async function fetchConfig(): Promise<JobSettings> {
 	const res = await authFetch(`${API}/api/config`);
 	return res.json();
+}
+
+export interface FontOption {
+	label: string;
+	faces?: { fileName: string; family: string; keys: string[]; axes: FontAxis[] }[];
+}
+
+export async function fetchFonts(): Promise<FontOption[]> {
+	try {
+		const res = await authFetch(`${API}/api/fonts`);
+		return (await res.json()).fonts || [];
+	} catch {
+		return [];
+	}
+}
+
+export async function resolveFontFace(family: string, text: string): Promise<{ fileName: string | null; family: string | null }> {
+	try {
+		const q = new URLSearchParams({ family, text: text.slice(0, 400) });
+		const res = await authFetch(`${API}/api/fonts/resolve?${q}`);
+		return await res.json();
+	} catch {
+		return { fileName: null, family: null };
+	}
+}
+
+export async function fetchFontFace(family: string, fileName: string): Promise<Blob> {
+	const res = await authFetch(`${API}/api/fonts/face/${encodeURIComponent(family)}/${encodeURIComponent(fileName)}`);
+	if (!res.ok) throw new Error("Font fetch failed");
+	return res.blob();
 }
 
 export async function fetchQueueState(): Promise<{ paused: boolean }> {

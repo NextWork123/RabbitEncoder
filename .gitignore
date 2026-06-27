@@ -3,6 +3,7 @@ dist/
 input/
 output/
 temp/
+fonts-user/
 vapoursynth-user/
 *.log
 bun.lock

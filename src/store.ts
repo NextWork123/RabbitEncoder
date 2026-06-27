@@ -11,6 +11,7 @@ import {
 	type AudioEncodeMode,
 	type SubtitleProcessingMode,
 	type EncoderId,
+	type SubtitleStyle,
 } from "./types";
 import { encodeJob, CancelledError } from "./encoder";
 import { isAlreadyEncoded } from "./library";
@@ -257,7 +258,44 @@ const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	honorificsMinCount: intIn(0, 10000),
 	honorificsRatio: numIn(1, 100),
 	assumeMislabeledTracks: bool,
+
+	convertSrtToAss: bool,
+	restyleAssFont: bool,
+	removeUnusedFonts: bool,
+	assRestyleTargets: strList,
+	subtitleStyle: (v, cur) => normalizeSubtitleStyle(v, cur),
 };
+
+const ASS_COLOUR_RE = /^&H[0-9A-Fa-f]{1,8}$/;
+
+function normalizeSubtitleStyle(v: unknown, cur: unknown): SubtitleStyle | undefined {
+	if (!v || typeof v !== "object") return undefined;
+	const base = cur && typeof cur === "object" ? (cur as SubtitleStyle) : getDefaultJobSettings().subtitleStyle;
+	const p = v as Partial<Record<keyof SubtitleStyle, unknown>>;
+	const out: SubtitleStyle = { ...base };
+
+	if (typeof p.fontName === "string" && p.fontName.trim()) out.fontName = p.fontName.trim().slice(0, 200);
+	if (typeof p.fontSize === "number" && Number.isFinite(p.fontSize)) out.fontSize = Math.min(400, Math.max(1, p.fontSize));
+	if (typeof p.outline === "number" && Number.isFinite(p.outline)) out.outline = Math.min(50, Math.max(0, p.outline));
+	if (typeof p.shadow === "number" && Number.isFinite(p.shadow)) out.shadow = Math.min(50, Math.max(0, p.shadow));
+	if (typeof p.alignment === "number" && Number.isFinite(p.alignment)) out.alignment = Math.min(9, Math.max(1, Math.round(p.alignment)));
+	if (typeof p.marginV === "number" && Number.isFinite(p.marginV)) out.marginV = Math.min(1000, Math.max(0, Math.round(p.marginV)));
+	if (typeof p.marginL === "number" && Number.isFinite(p.marginL)) out.marginL = Math.min(1000, Math.max(0, Math.round(p.marginL)));
+	if (typeof p.marginR === "number" && Number.isFinite(p.marginR)) out.marginR = Math.min(1000, Math.max(0, Math.round(p.marginR)));
+	if (typeof p.bold === "boolean") out.bold = p.bold;
+	if (typeof p.primaryColour === "string" && ASS_COLOUR_RE.test(p.primaryColour.trim())) out.primaryColour = p.primaryColour.trim();
+	if (typeof p.outlineColour === "string" && ASS_COLOUR_RE.test(p.outlineColour.trim())) out.outlineColour = p.outlineColour.trim();
+	if (typeof p.backColour === "string" && ASS_COLOUR_RE.test(p.backColour.trim())) out.backColour = p.backColour.trim();
+	if (p.fontAxes && typeof p.fontAxes === "object") {
+		const ax: Record<string, number> = {};
+		for (const [t, v] of Object.entries(p.fontAxes as Record<string, unknown>)) {
+			if (/^[a-zA-Z]{1,4}$/.test(t) && typeof v === "number" && Number.isFinite(v)) ax[t] = v;
+		}
+		out.fontAxes = ax;
+	}
+
+	return out;
+}
 
 function sanitizeSettingsInto(target: JobSettings, partial: Partial<JobSettings>): void {
 	for (const key of Object.keys(SETTINGS_SANITIZERS) as (keyof JobSettings)[]) {

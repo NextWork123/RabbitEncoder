@@ -179,6 +179,7 @@ RUN python3 -m venv /opt/vs-venv \
 		vapoursynth-deblock \
 		vapoursynth-hysteresis \
 		ffms2 \
+		fonttools \
 	&& /opt/vs-venv/bin/vapoursynth config \
 	&& ln -sf /opt/vs-venv/bin/python /usr/local/bin/python \
 	&& ln -sf /opt/vs-venv/bin/python3 /usr/local/bin/python3 \
@@ -194,6 +195,7 @@ RUN mkdir -p /root/.config/vsrepo \
 # Make the venv's Python the default for any 'python3' call
 ENV PATH="/opt/vs-venv/bin:${PATH}"
 
+COPY fonts/ /app/fonts/
 COPY vapoursynth/ /app/vapoursynth/
 
 # Download all binaries from CDN

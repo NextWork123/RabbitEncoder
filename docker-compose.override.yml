@@ -11,6 +11,7 @@ services:
       - ./input:/data/input
       - ./output:/data/output
       - ./temp:/data/temp
+      - ./fonts-user:/config/fonts
       - ./vapoursynth-user:/config/vapoursynth
       # Mount your media library folders for in-place encoding
       # - /mnt/HDD/media/Animes:/Animes

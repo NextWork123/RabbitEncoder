@@ -100,6 +100,27 @@ const BASELINE: JobSettings = {
 	honorificsMinCount: 5,
 	honorificsRatio: 3,
 	assumeMislabeledTracks: true,
+	convertSrtToAss: false,
+	restyleAssFont: false,
+	assRestyleTargets: ["full", "honorifics", "forced", "sdh", "commentary"],
+	removeUnusedFonts: false,
+	subtitleStyle: {
+		fontName: "Noto Sans",
+		fontSize: 74,
+		primaryColour: "&H00FFFFFF",
+		outlineColour: "&H00000000",
+		backColour: "&H80000000",
+		outline: 4,
+		shadow: 1.5,
+		alignment: 2,
+		marginV: 50,
+		marginL: 135,
+		marginR: 135,
+		bold: false,
+		fontAxes: {
+			wght: 700,
+		},
+	},
 	audioBitrates: {
 		mono: 64,
 		stereo: 128,
@@ -339,6 +360,35 @@ export function encodeSettingsCode(s: JobSettings): string {
 	}
 	if (!sm.empty) sections.push(sm.toString());
 
+	// subtitle styling / fonts
+	const st = new Section("st");
+	if (s.convertSrtToAss !== BASELINE.convertSrtToAss) st.put("cv", s.convertSrtToAss);
+	if (s.restyleAssFont !== BASELINE.restyleAssFont) st.put("ra", s.restyleAssFont);
+	if (s.removeUnusedFonts !== BASELINE.removeUnusedFonts) st.put("ru", s.removeUnusedFonts);
+	if (s.assRestyleTargets.join("+") !== BASELINE.assRestyleTargets.join("+")) {
+		st.putRaw("tg", s.assRestyleTargets.map(esc).join("+"));
+	}
+	{
+		const y = s.subtitleStyle;
+		const b = BASELINE.subtitleStyle;
+		if (y.fontName !== b.fontName) st.put("fn", y.fontName);
+		if (y.fontSize !== b.fontSize) st.put("fs", y.fontSize);
+		if (y.primaryColour !== b.primaryColour) st.put("pc", y.primaryColour);
+		if (y.outlineColour !== b.outlineColour) st.put("oc", y.outlineColour);
+		if (y.backColour !== b.backColour) st.put("bc", y.backColour);
+		const fxPairs = Object.entries(y.fontAxes ?? {}).map(([t, v]) => `${t}:${v}`);
+		const bFx = Object.entries(b.fontAxes ?? {}).map(([t, v]) => `${t}:${v}`);
+		if (fxPairs.join("+") !== bFx.join("+")) st.putRaw("fx", fxPairs.map(esc).join("+"));
+		if (y.outline !== b.outline) st.put("ol", y.outline);
+		if (y.shadow !== b.shadow) st.put("sh", y.shadow);
+		if (y.alignment !== b.alignment) st.put("aln", y.alignment);
+		if (y.marginV !== b.marginV) st.put("mv", y.marginV);
+		if (y.marginL !== b.marginL) st.put("ml", y.marginL);
+		if (y.marginR !== b.marginR) st.put("mr", y.marginR);
+		if (y.bold !== b.bold) st.put("bo", y.bold);
+	}
+	if (!st.empty) sections.push(st.toString());
+
 	// audio manipulation
 	const am = new Section("am");
 	if (s.removeDescriptiveAudio !== BASELINE.removeDescriptiveAudio) am.put("rd", s.removeDescriptiveAudio);
@@ -478,6 +528,9 @@ export function decodeSettingsCode(code: string): Partial<JobSettings> {
 			case "sm":
 				applySubtitleManip(out, kv);
 				break;
+			case "st":
+				applySubtitleStyle(out, kv);
+				break;
 			case "am":
 				applyAudioManip(out, kv);
 				break;
@@ -569,6 +622,35 @@ function applySubtitleManip(out: JobSettings, kv: Record<string, string>): void 
 	if (kv.rb !== undefined) out.removeStoryboardSubtitles = kv.rb === "1";
 	if (kv.rh !== undefined) out.removeHonorificsSubtitles = kv.rh === "1";
 	if (kv.lp !== undefined) out.subtitleLanguagePriority = splitList(kv.lp);
+}
+
+function applySubtitleStyle(out: JobSettings, kv: Record<string, string>): void {
+	if (kv.cv !== undefined) out.convertSrtToAss = kv.cv === "1";
+	if (kv.ra !== undefined) out.restyleAssFont = kv.ra === "1";
+	if (kv.ru !== undefined) out.removeUnusedFonts = kv.ru === "1";
+	if (kv.tg !== undefined) out.assRestyleTargets = splitList(kv.tg);
+	const y = out.subtitleStyle;
+	if (kv.fn !== undefined) y.fontName = unesc(kv.fn);
+	if (kv.fs !== undefined) y.fontSize = numOr(kv.fs, y.fontSize);
+	if (kv.pc !== undefined) y.primaryColour = unesc(kv.pc);
+	if (kv.oc !== undefined) y.outlineColour = unesc(kv.oc);
+	if (kv.bc !== undefined) y.backColour = unesc(kv.bc);
+	if (kv.fx !== undefined) {
+		const out2: Record<string, number> = {};
+		for (const pair of splitList(kv.fx)) {
+			const [t, v] = pair.split(":");
+			const n = Number(v);
+			if (t && Number.isFinite(n)) out2[t] = n;
+		}
+		y.fontAxes = out2;
+	}
+	if (kv.ol !== undefined) y.outline = numOr(kv.ol, y.outline);
+	if (kv.sh !== undefined) y.shadow = numOr(kv.sh, y.shadow);
+	if (kv.aln !== undefined) y.alignment = numOr(kv.aln, y.alignment);
+	if (kv.mv !== undefined) y.marginV = numOr(kv.mv, y.marginV);
+	if (kv.ml !== undefined) y.marginL = numOr(kv.ml, y.marginL);
+	if (kv.mr !== undefined) y.marginR = numOr(kv.mr, y.marginR);
+	if (kv.bo !== undefined) y.bold = kv.bo === "1";
 }
 
 function applyAudioManip(out: JobSettings, kv: Record<string, string>): void {

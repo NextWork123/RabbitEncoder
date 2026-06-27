@@ -291,6 +291,24 @@
 						</details>
 
 						<details class="settings-section">
+							<summary>Subtitle styling &amp; fonts</summary>
+							<div class="settings-section-body">
+								<div class="setting-group">
+									<div class="toggle-group" id="default-convert-srt-ass"></div>
+									<div class="toggle-group" id="default-restyle-ass-font"></div>
+									<div class="toggle-group" id="default-remove-unused-fonts"></div>
+								</div>
+								<div class="setting-group">
+									<label>Restyle applies to track types</label>
+									<div class="toggle-group" id="default-ass-restyle-targets"></div>
+								</div>
+								<div class="setting-group">
+									<button class="btn btn-ghost" type="button" id="default-open-sub-style-btn">Subtitle font &amp; style…</button>
+								</div>
+							</div>
+						</details>
+
+						<details class="settings-section">
 							<summary>Settings code</summary>
 							<div class="settings-section-body">
 								<div class="setting-group" id="settings-code-panel-default"></div>
@@ -500,6 +518,24 @@
 								<div class="setting-group">
 									<label>Subtitle Languages</label>
 									<div id="job-subtitle-languages"></div>
+								</div>
+							</div>
+						</details>
+
+						<details class="settings-section">
+							<summary>Subtitle styling &amp; fonts</summary>
+							<div class="settings-section-body">
+								<div class="setting-group">
+									<div class="toggle-group" id="job-convert-srt-ass"></div>
+									<div class="toggle-group" id="job-restyle-ass-font"></div>
+									<div class="toggle-group" id="job-remove-unused-fonts"></div>
+								</div>
+								<div class="setting-group">
+									<label>Restyle applies to track types</label>
+									<div class="toggle-group" id="job-ass-restyle-targets"></div>
+								</div>
+								<div class="setting-group">
+									<button class="btn btn-ghost" type="button" id="job-open-sub-style-btn">Subtitle font &amp; style…</button>
 								</div>
 							</div>
 						</details>
@@ -805,6 +841,42 @@
 						<img id="preview-fullscreen-img" alt="Fullscreen preview sample" style="display: none" />
 						<span id="preview-fullscreen-tag" class="preview-sample-tag is-source">Source</span>
 						<span class="preview-fullscreen-hint">Click to toggle</span>
+					</div>
+				</div>
+			</div>
+
+			<!-- Subtitle Style Modal -->
+			<div id="sub-style-modal" class="modal-overlay" style="display: none">
+				<div class="modal modal-sub-style">
+					<div class="modal-header">
+						<h2 id="sub-style-modal-title">Subtitle Style</h2>
+						<button class="btn-close" id="close-sub-style-modal-btn">&times;</button>
+					</div>
+					<div class="modal-body">
+						<div class="setting-group" id="sub-style-font"></div>
+						<div class="setting-group" id="sub-style-axes"></div>
+						<details class="settings-subsection" open>
+							<summary>Style defaults (at 1080p)</summary>
+							<div class="settings-subsection-body">
+								<div class="setting-group">
+									<div class="toggle-group" id="sub-style-font-size"></div>
+									<div class="toggle-group" id="sub-style-outline"></div>
+									<div class="toggle-group" id="sub-style-shadow"></div>
+									<div class="toggle-group" id="sub-style-margin-v"></div>
+									<div class="toggle-group" id="sub-style-margin-l"></div>
+									<div class="toggle-group" id="sub-style-margin-r"></div>
+									<div class="toggle-group" id="sub-style-alignment"></div>
+									<div class="toggle-group" id="sub-style-primary-colour"></div>
+									<div class="toggle-group" id="sub-style-outline-colour"></div>
+									<div class="toggle-group" id="sub-style-back-colour"></div>
+									<div class="toggle-group" id="sub-style-bold"></div>
+								</div>
+							</div>
+						</details>
+						<div class="setting-group" id="sub-style-preview"></div>
+					</div>
+					<div class="modal-footer">
+						<button class="btn btn-primary" id="close-sub-style-done-btn">Done</button>
 					</div>
 				</div>
 			</div>
