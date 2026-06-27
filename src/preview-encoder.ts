@@ -6,6 +6,7 @@ import { CancelledError, humanSize, run } from "./process";
 import { Logger } from "./logger";
 import { encodeJob } from "./encoder";
 import { analyzeSourceTracks } from "./source-analysis";
+import { FFV1_ENCODE_ARGS } from "./auto-denoise";
 import { vsRegistry } from "./vs-filters";
 
 export interface PreviewEncodeOptions {
@@ -82,7 +83,7 @@ function escapeSubtitlesFilterPath(p: string): string {
 async function captureFrame(
 	inputPath: string,
 	outPath: string,
-	off: string,
+	frameIndex: number,
 	burnSubs: SubtitleBurnMode,
 	color: PreviewColorInfo,
 	probe: ProbeResult,
@@ -90,7 +91,11 @@ async function captureFrame(
 ): Promise<void> {
 	const inRange = color.range === "pc" ? "pc" : "tv";
 	const matrix = previewMatrixFromColorSpace(color.space, probe.height);
-	const chain = `scale=in_range=${inRange}:out_range=pc:in_color_matrix=${matrix}:out_color_matrix=bt709,format=rgb24,setparams=range=pc:colorspace=gbr:color_primaries=bt709:color_trc=iec61966-2-1`;
+	const targetFrame = Math.max(0, Math.round(frameIndex));
+
+	const select = `select=eq(n\\,${targetFrame})`;
+	const resetVideoPts = "setpts=PTS-STARTPTS";
+	const colorChain = `scale=in_range=${inRange}:out_range=pc:in_color_matrix=${matrix}:out_color_matrix=bt709,format=rgb24,setparams=range=pc:colorspace=gbr:color_primaries=bt709:color_trc=iec61966-2-1`;
 
 	let args: string[];
 	if (burnSubs === "text") {
@@ -101,15 +106,12 @@ async function captureFrame(
 			"-loglevel",
 			"error",
 			"-y",
-			"-ss",
-			off,
-			"-copyts",
 			"-i",
 			inputPath,
 			"-map",
 			"0:v:0",
 			"-vf",
-			`${sub},${chain}`,
+			`${resetVideoPts},${sub},${select},${colorChain}`,
 			"-frames:v",
 			"1",
 			"-an",
@@ -127,13 +129,10 @@ async function captureFrame(
 			"-loglevel",
 			"error",
 			"-y",
-			"-ss",
-			off,
-			"-copyts",
 			"-i",
 			inputPath,
 			"-filter_complex",
-			`[0:v:0][0:s:0]overlay,${chain}[v]`,
+			`[0:v:0]${resetVideoPts}[base];[base][0:s:0]overlay,${select},${colorChain}[v]`,
 			"-map",
 			"[v]",
 			"-frames:v",
@@ -153,14 +152,12 @@ async function captureFrame(
 			"-loglevel",
 			"error",
 			"-y",
-			"-ss",
-			off,
 			"-i",
 			inputPath,
 			"-map",
 			"0:v:0",
 			"-vf",
-			chain,
+			`${resetVideoPts},${select},${colorChain}`,
 			"-frames:v",
 			"1",
 			"-an",
@@ -177,10 +174,17 @@ async function captureFrame(
 	if (res.code !== 0) Logger.warn(`[preview] Frame capture failed (${outPath}): ${res.stderr.slice(-300)}`);
 }
 
+/**
+ * Build the preview input window. The primary video is decoded and written as
+ * lossless FFV1 while audio, subtitles, and attachments are copied.
+ */
 async function cutSourceClip(inputPath: string, startSec: number, windowSec: number, outPath: string, signal: AbortSignal): Promise<void> {
 	const res = await run(
 		[
 			"ffmpeg",
+			"-hide_banner",
+			"-loglevel",
+			"error",
 			"-y",
 			"-ss",
 			startSec.toFixed(3),
@@ -194,13 +198,16 @@ async function cutSourceClip(inputPath: string, startSec: number, windowSec: num
 			"-1",
 			"-c",
 			"copy",
+			...FFV1_ENCODE_ARGS,
+			"-fps_mode:v:0",
+			"passthrough",
 			"-avoid_negative_ts",
 			"make_zero",
 			outPath,
 		],
 		{ signal },
 	);
-	if (res.code !== 0) throw new Error(`Clip cut at ${startSec.toFixed(1)}s failed: ${res.stderr.slice(-400)}`);
+	if (res.code !== 0) throw new Error(`Frame-accurate clip cut at ${startSec.toFixed(1)}s failed: ${res.stderr.slice(-500)}`);
 }
 
 function pickSampleTimestamps(duration: number, count: number, windowSeconds: number): number[] {
@@ -265,7 +272,7 @@ export async function runPreviewEncode(args: RunPreviewArgs): Promise<PreviewSam
 	Logger.info(`[preview] Plan: ${plan.subtitleStreams.length} subtitle, ${plan.audioStreams.length} audio track(s)`);
 
 	const stamps = pickSampleTimestamps(probe.duration, opts.sampleCount, opts.windowSeconds);
-	const off = (opts.windowSeconds / 2).toFixed(3);
+	const comparisonFrame = Math.max(0, Math.round((opts.windowSeconds / 2) * probe.videoStreamFps));
 	const completed: PreviewSample[] = [];
 
 	for (let i = 0; i < stamps.length; i++) {
@@ -283,7 +290,7 @@ export async function runPreviewEncode(args: RunPreviewArgs): Promise<PreviewSam
 			const sink: PreviewFrameSink = {
 				dir: sampleDir,
 				frameOffsetSec: opts.windowSeconds / 2,
-				capture: (input, name, burn) => captureFrame(input, join(sampleDir, name), off, burn, colorInfo, probe, signal),
+				capture: (input, name, burn) => captureFrame(input, join(sampleDir, name), comparisonFrame, burn, colorInfo, probe, signal),
 			};
 
 			const clipJob: Job = { ...job, id: `${job.id}__pv${i}`, inputPath: clipPath, probe: undefined, replaceSource: false };
