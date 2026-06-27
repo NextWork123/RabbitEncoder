@@ -32,6 +32,52 @@ const NUM = (v: string | undefined, d: number): number => {
 	return Number.isFinite(n) ? n : d;
 };
 
+/** Canonical font-name normaliser shared across the styling/font code. */
+export function normalizeFontName(name: string): string {
+	return name.trim().toLowerCase().replace(/^@/, "");
+}
+
+/** Style names the classifier considers dialogue (baseline + structurally similar). */
+export function dialogueStyleNames(assText: string): Set<string> {
+	const { styles, events } = parseAss(assText);
+	const usage = new Map<string, number>();
+	const profiles = new Map<string, StyleProfile>();
+	for (const ev of events) {
+		usage.set(ev.style, (usage.get(ev.style) ?? 0) + 1);
+		let p = profiles.get(ev.style);
+		if (!p) {
+			p = { total: 0, signTag: 0, karaokeTag: 0 };
+			profiles.set(ev.style, p);
+		}
+		p.total++;
+		if (lineHasSignTags(ev.text)) p.signTag++;
+		if (lineHasKaraoke(ev.text)) p.karaokeTag++;
+	}
+	const baseline = pickBaselineStyle(styles, usage);
+	const out = new Set<string>();
+	for (const s of styles) {
+		if (classifyStyle(s, baseline, profiles.get(s.name)) === "dialogue") out.add(s.name);
+	}
+	return out;
+}
+
+/** Fonts actually referenced by an ASS file: styles used by ≥1 event, plus inline \fn overrides. */
+export function extractUsedFonts(assText: string): Set<string> {
+	const { styles, events } = parseAss(assText);
+	const usedStyles = new Set(events.map((e) => e.style));
+	const fonts = new Set<string>();
+	for (const s of styles) {
+		if (usedStyles.has(s.name) && s.fontname) fonts.add(normalizeFontName(s.fontname));
+	}
+	for (const ev of events) {
+		for (const m of ev.text.matchAll(/\\fn([^\\}]+)/g)) {
+			const f = m[1]!.trim();
+			if (f) fonts.add(normalizeFontName(f));
+		}
+	}
+	return fonts;
+}
+
 function parseAss(assText: string): ParsedAss {
 	const styles: AssStyle[] = [];
 	const events: AssEvent[] = [];

@@ -39,6 +39,7 @@ import { resolvePreviewArtifact, type PreviewEncodeOptions } from "./preview-enc
 import { makeDefaultVsFilterEntry, vsRegistry } from "./vs-filters";
 import { decodeSettingsCode, encodeSettingsCode, SettingsCodeError } from "./settings-code";
 import { getSystemStats } from "./system";
+import { fontRegistry } from "./fonts";
 
 export const config = await loadConfig();
 
@@ -49,11 +50,15 @@ vsRegistry.configure(
 );
 vsRegistry.reload();
 
+fontRegistry.configure(process.env.FONTS_STOCK_DIR ?? "/app/fonts", process.env.FONTS_USER_DIR ?? "/config/fonts");
+await fontRegistry.reload();
+
 const hashedPassword = new Bun.CryptoHasher("blake2b512").update(`rabbitencoder-${process.env.PASSWORD || "rabbitencoder"}`).digest("hex");
 
 mkdirSync(config.inputDir, { recursive: true });
 mkdirSync(config.outputDir, { recursive: true });
 mkdirSync(config.tempDir, { recursive: true });
+mkdirSync(config.fontsUserDir, { recursive: true });
 
 initStore(config);
 
@@ -374,6 +379,34 @@ app.post("/api/config/import-code", async (c) => {
 		if (err instanceof SettingsCodeError) return c.json({ error: err.message }, 400);
 		throw err;
 	}
+});
+
+app.get("/api/fonts", (c) => {
+	return c.json({
+		fonts: fontRegistry.list().map((f) => ({
+			label: f.label,
+			faces: f.faces.map((x) => ({ fileName: x.fileName, family: x.family, keys: x.keys, axes: x.axes })),
+		})),
+	});
+});
+
+app.post("/api/fonts/reload", async (c) => {
+	await fontRegistry.reload();
+	return c.json({ fonts: fontRegistry.list().map((f) => ({ label: f.label })) });
+});
+
+app.get("/api/fonts/resolve", (c) => {
+	const label = c.query().get("family") || "";
+	const lang = c.query().get("lang") || undefined;
+	const text = c.query().get("text") || "";
+	const face = fontRegistry.resolve(label, lang, text);
+	return face ? c.json({ fileName: face.fileName, family: face.family }) : c.json({ fileName: null, family: null });
+});
+
+app.get("/api/fonts/face/:family/:name", (c) => {
+	const face = fontRegistry.findFaceFile(decodeURIComponent(c.params.family!), decodeURIComponent(c.params.name!));
+	if (!face) return c.json({ error: "Font not found" }, 404);
+	return new Response(Bun.file(face.path), { headers: { "Content-Type": face.mime, "Cache-Control": "private, max-age=300" } });
 });
 
 app.post("/api/jobs/:id/import-code", async (c) => {

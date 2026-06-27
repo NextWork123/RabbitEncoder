@@ -47,6 +47,7 @@ import { asElementTarget, byId, inputById } from "../shared/dom";
 import { appState } from "../state";
 import { delegateClick } from "../ui/delegate";
 import { dispatchJobAction } from "../ui/job-actions";
+import { closeSubStyleModal, closeSubStyleModalIfOutside, openSubStyleModal } from "../features/sub-style-modal";
 
 export function getCurrentSettings(): JobSettings | null {
 	if (appState.currentAdvancedTarget === "default") return window._tempDefaults ?? null;
@@ -71,6 +72,12 @@ export function initEventListeners() {
 	byId("close-advanced-modal-btn").addEventListener("click", closeAdvancedModal);
 	byId("close-advanced-done-btn").addEventListener("click", closeAdvancedModal);
 	byId("advanced-modal").addEventListener("click", closeAdvancedModalIfOutside);
+
+	byId("default-open-sub-style-btn").addEventListener("click", () => openSubStyleModal("default"));
+	byId("job-open-sub-style-btn").addEventListener("click", () => openSubStyleModal("job"));
+	byId("close-sub-style-modal-btn").addEventListener("click", closeSubStyleModal);
+	byId("close-sub-style-done-btn").addEventListener("click", closeSubStyleModal);
+	byId("sub-style-modal").addEventListener("click", closeSubStyleModalIfOutside);
 
 	byId("vs-reload-btn").onclick = async () => {
 		await reloadVsPresets();

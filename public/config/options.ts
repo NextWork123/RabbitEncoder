@@ -10,6 +10,7 @@ import type {
 	EncoderQuality,
 	EncoderSpeed,
 	SubtitleProcessingMode,
+	SubtitleStyle,
 	VideoEncodeMode,
 } from "../types";
 import type { PipelinePreset } from "../ui/models";
@@ -83,4 +84,22 @@ export const PIPELINE_PRESET_HELP: Record<PipelinePreset, string> = {
 	full: "Denoise, AV1, Opus, full subtitle pipeline.",
 	prepare: "Run denoise & VS only; pass audio/subs/video through (FFV1). For GPU-only servers.",
 	custom: "Configure each pipeline stage individually below.",
+};
+
+export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
+	fontName: "Noto Sans",
+	fontSize: 64,
+	primaryColour: "&H00FFFFFF",
+	outlineColour: "&H00000000",
+	backColour: "&H80000000",
+	outline: 3.5,
+	shadow: 1,
+	alignment: 2,
+	marginV: 60,
+	marginL: 80,
+	marginR: 80,
+	bold: false,
+	fontAxes: {
+		wght: 700,
+	},
 };

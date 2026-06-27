@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync, symlinkSync, renameSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync, symlinkSync, renameSync } from "fs";
 import { join, parse as parsePath, dirname, extname, basename, resolve } from "path";
 import type { Job, JobStep, AppConfig } from "./types";
 import { probeFile, getOpusBitrateForLayout, getAudioReplacementLabel, normalizeLayout } from "./probe";
@@ -16,11 +16,13 @@ import {
 	deduplicateSubtitleStreams,
 	filterStreamsByLanguage,
 	sanitizeLanguageTag,
-	filterOutCommentaryAudio,
 	filterSubtitleTypes,
 	filterAudioTypes,
 	buildAudioTrackName,
 } from "./tracks";
+import { styleSrtAss, restyleAssDialogueFont } from "./ass-style";
+import { extractUsedFonts } from "./ass-classifier";
+import { fontRegistry, buildKeptAttachmentArgs, type ResolvedFace } from "./fonts";
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
 import { buildPrepareFilterConfig } from "./filters";
@@ -31,6 +33,7 @@ import { combineCumulativeSettings, encodeSettingsCode } from "./settings-code";
 import { decodePriorSettings } from "./mkv-tags";
 import { cpus } from "os";
 import { getEncoder } from "./encoders";
+import { axisSuffix, instanceFont } from "./font-instance";
 
 export { CancelledError } from "./process";
 
@@ -1147,6 +1150,28 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			}
 		}
 
+		const usedFonts = new Set<string>();
+		const resolvedFaces = new Map<string, ResolvedFace>();
+		const instanceCache = new Map<string, ResolvedFace>();
+
+		async function applyAxes(face: ResolvedFace | null): Promise<ResolvedFace | null> {
+			if (!face) return null;
+			const axes = face.axes ?? [];
+			if (axes.length === 0 || !job.settings.subtitleStyle.fontAxes) return face;
+			const { suffix, coords } = axisSuffix(axes, job.settings.subtitleStyle.fontAxes);
+			if (!suffix) return face; // all axes at default -> use the font as-is
+			const key = `${face.path}|${suffix}`;
+			const cached = instanceCache.get(key);
+			if (cached) return cached;
+			const family = `${face.family} ${suffix}`;
+			const out = join(tempDir, `inst_${Buffer.from(key).toString("base64url").slice(0, 40)}.ttf`);
+			const inst = await instanceFont(face.path, coords, family, out, signal);
+			const resolved: ResolvedFace = inst ? { ...face, family: inst.family, path: inst.path, names: inst.names, fileName: `${family}.ttf` } : face;
+			instanceCache.set(key, resolved);
+			if (!inst) Logger.warn(`[fonts] Instancing failed for ${face.fileName}; using variable default`);
+			return resolved;
+		}
+
 		if (!skipSubtitleProcessing) {
 			// Subtitle tracks
 			const allSubtitleStreams = probe.subtitleStreams || [];
@@ -1219,6 +1244,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					subFile: string;
 					effectiveLang: string;
 					trackName: string;
+					trackType: string;
 					flagArgs: string[];
 				}
 
@@ -1294,6 +1320,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 						subFile: join(tempDir, `sub_${stream.index}.mkv`),
 						effectiveLang,
 						trackName,
+						trackType,
 						flagArgs,
 					});
 				}
@@ -1343,6 +1370,59 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					setStep(S_MUX, { progress: 45, detail: `Extracted ${plannedSubs.length} subtitle track(s)` });
 				}
 
+				// Subtitle styling - SRT->ASS conversion and/or ASS dialogue-font restyle.
+				if (job.settings.convertSrtToAss || job.settings.restyleAssFont || job.settings.removeUnusedFonts) {
+					const style = job.settings.subtitleStyle;
+					const targets = new Set(job.settings.assRestyleTargets);
+
+					for (const planned of plannedSubs) {
+						if (!existsSync(planned.subFile)) continue;
+						const codec = planned.stream.codec.toLowerCase();
+						const isSrt = codec === "subrip" || codec === "srt";
+						const isAss = codec === "ass" || codec === "ssa";
+						let assForFontScan: string | null = null;
+
+						if (job.settings.convertSrtToAss && isSrt) {
+							const raw = join(tempDir, `sub_${planned.stream.index}.conv.ass`);
+							const r = await run(["ffmpeg", "-y", "-i", planned.subFile, "-map", "0:s:0", "-c:s", "ass", raw], { signal });
+							if (r.code === 0 && existsSync(raw)) {
+								const rawText = readFileSync(raw, "utf-8");
+								const face = await applyAxes(fontRegistry.resolve(style.fontName, planned.effectiveLang, rawText));
+								const family = face?.family ?? style.fontName;
+								const outAss = join(tempDir, `sub_${planned.stream.index}.styled.ass`);
+								writeFileSync(outAss, styleSrtAss(rawText, { ...style, fontName: family }), "utf-8");
+								planned.subFile = outAss;
+								assForFontScan = outAss;
+								if (face) resolvedFaces.set(face.path, face);
+								if (!face) Logger.warn(`[fonts] No face for family "${style.fontName}" (track ${planned.stream.index}); wrote name without injecting`);
+							} else {
+								Logger.warn(`[subtitle] SRT→ASS conversion failed for track ${planned.stream.index}; keeping original`);
+							}
+						} else if (isAss) {
+							const raw = join(tempDir, `sub_${planned.stream.index}.raw.ass`);
+							const r = await run(["ffmpeg", "-y", "-i", planned.subFile, "-map", "0:s:0", "-c:s", "copy", raw], { signal });
+							if (r.code === 0 && existsSync(raw)) {
+								const rawText = readFileSync(raw, "utf-8");
+								if (job.settings.restyleAssFont && targets.has(planned.trackType)) {
+									const face = await applyAxes(fontRegistry.resolve(style.fontName, planned.effectiveLang, rawText));
+									const family = face?.family ?? style.fontName;
+									const outAss = join(tempDir, `sub_${planned.stream.index}.styled.ass`);
+									writeFileSync(outAss, restyleAssDialogueFont(rawText, { ...style, fontName: family }, true), "utf-8");
+									planned.subFile = outAss;
+									assForFontScan = outAss;
+									if (face) resolvedFaces.set(face.path, face);
+								} else {
+									assForFontScan = raw;
+								}
+							}
+						}
+
+						if (assForFontScan && existsSync(assForFontScan)) {
+							for (const f of extractUsedFonts(readFileSync(assForFontScan, "utf-8"))) usedFonts.add(f);
+						}
+					}
+				}
+
 				for (const planned of plannedSubs) {
 					checkCancelled();
 					if (!existsSync(planned.subFile)) {
@@ -1361,6 +1441,13 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			Logger.info("[subtitle] subtitleProcessing=copy — including source subs verbatim via mkvmerge passthrough");
 		}
 
+		const injectedNames = new Set<string>();
+		for (const face of resolvedFaces.values()) {
+			mkvArgs.push("--attachment-mime-type", face.mime, "--attachment-name", face.fileName, "--attach-file", face.path);
+			for (const n of face.names) injectedNames.add(n);
+			Logger.info(`[fonts] Injecting ${face.fileName} (${face.family})`);
+		}
+
 		const sourceExt = extname(job.inputPath).toLowerCase();
 		if (sourceExt === ".mkv" || sourceExt === ".mks") {
 			const safeSourceLink = join(tempDir, `source_ref${sourceExt}`);
@@ -1372,15 +1459,30 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			const refFlags = ["--no-video", "--no-global-tags", "--no-track-tags"];
 			if (!skipAudioEncode) refFlags.push("--no-audio");
 			if (!skipSubtitleProcessing) refFlags.push("--no-subtitles");
+
+			let attachmentsHandled = false;
+			if (job.settings.removeUnusedFonts && !skipSubtitleProcessing) {
+				const keptArgs = await buildKeptAttachmentArgs(safeSourceLink, usedFonts, tempDir, injectedNames, signal);
+				if (keptArgs !== null) {
+					mkvArgs.push(...keptArgs);
+					refFlags.push("--no-attachments");
+					attachmentsHandled = true;
+					const kept = keptArgs.filter((a) => a === "--attach-file").length;
+					Logger.info(`[fonts] Re-attached ${kept} used attachment(s) from source; dropped the rest`);
+				}
+			}
+
 			mkvArgs.push(...refFlags, safeSourceLink);
 
-			const passes: string[] = ["chapters", "fonts"];
+			const passes: string[] = ["chapters"];
+			if (!attachmentsHandled) passes.push("fonts");
 			if (skipAudioEncode) passes.push("audio");
 			if (skipSubtitleProcessing) passes.push("subtitles");
 			Logger.info(`[mux] Passthrough from source: ${passes.join(", ")}`);
 		} else if (skipAudioEncode || skipSubtitleProcessing) {
 			Logger.warn(
-				`[mux] Source is ${sourceExt} (not MKV), but a copy-through stage is enabled. Audio/subtitle passthrough may not work; consider remuxing the source to MKV first.`,
+				`[mux] Source is ${sourceExt} (not MKV), but a copy-through stage is enabled. ` +
+					`Audio/subtitle passthrough may not work; consider remuxing the source to MKV first.`,
 			);
 		}
 

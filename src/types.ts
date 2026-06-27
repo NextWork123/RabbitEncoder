@@ -186,6 +186,16 @@ export interface JobSettings {
 	honorificsRatio: number;
 	/** Relabel JP→EN / bitmap fallback when no English full track is found. */
 	assumeMislabeledTracks: boolean;
+	/** Convert every SRT subtitle track to ASS styled per `subtitleStyle`. Default off. */
+	convertSrtToAss: boolean;
+	/** Replace the dialogue-style font of existing ASS tracks with `subtitleStyle.fontName`. Default off. */
+	restyleAssFont: boolean;
+	/** Detected track types `restyleAssFont` applies to. */
+	assRestyleTargets: string[];
+	/** Drop attachment fonts not referenced by any surviving ASS subtitle. Default off. */
+	removeUnusedFonts: boolean;
+	/** Style/font used by convertSrtToAss and restyleAssFont. */
+	subtitleStyle: SubtitleStyle;
 	/**
 	 * Ordered list of VapourSynth filter passes to apply during the prepare
 	 * stage, before the FFmpeg -vf chain. Each entry references a preset by
@@ -294,6 +304,8 @@ export interface AppConfig {
 	inputDir: string;
 	outputDir: string;
 	tempDir: string;
+	fontsStockDir: string;
+	fontsUserDir: string;
 	port: number;
 	defaults: JobSettings;
 	organization: string;
@@ -321,6 +333,40 @@ export interface SubtitlePreviewTrack {
 export interface SubtitlePreviewResult {
 	source: SubtitlePreviewTrack[];
 	output: SubtitlePreviewTrack[];
+}
+
+/**
+ * ASS V4+ "Default" style written when converting SRT->ASS, and the font used
+ * when restyling existing ASS dialogue. Pixel values are in PlayResY=1080
+ * space; libass rescales them to the real frame, so they hold "at 1080p"
+ * regardless of the encoded resolution.
+ */
+export interface SubtitleStyle {
+	/** Font family / face name (also the attachment injected into the MKV). */
+	fontName: string;
+	/** Font size in 1080p px. */
+	fontSize: number;
+	/** Primary fill colour, ASS &HAABBGGRR (AA: 00=opaque, FF=transparent). */
+	primaryColour: string;
+	/** Outline / border colour. */
+	outlineColour: string;
+	/** Shadow (back) colour - alpha controls how light the shadow reads. */
+	backColour: string;
+	/** Outline thickness in 1080p px. */
+	outline: number;
+	/** Shadow depth in 1080p px. */
+	shadow: number;
+	/** ASS numpad alignment (2 = bottom-centre). */
+	alignment: number;
+	/** Vertical (bottom) margin in 1080p px. */
+	marginV: number;
+	/** Left margin in 1080p px. */
+	marginL: number;
+	/** Right margin in 1080p px. */
+	marginR: number;
+	/** Bold flag. Off by default - weight comes from the face name (e.g. SemiBold). */
+	bold: boolean;
+	fontAxes: Record<string, number>;
 }
 
 export interface AudioPreviewTrack {

@@ -8,6 +8,7 @@ import {
 	DEFAULT_AUTO_THRESHOLDS,
 	DEFAULT_GRADFUN_PARAMS,
 	DEFAULT_NLMEANS_PARAMS,
+	DEFAULT_SUBTITLE_STYLE,
 	DENOISE_LEVELS,
 	PIPELINE_PRESETS,
 	PIPELINE_PRESET_HELP,
@@ -39,6 +40,7 @@ import {
 	renderSkipBoostingToggle,
 	renderSubtitleConfidenceControl,
 	renderSubtitleLangDetectControl,
+	renderSubtitleStyleTargets,
 	wireEncoderControls,
 } from "./settings-controls";
 import { byId } from "../shared/dom";
@@ -82,6 +84,10 @@ export function cloneSettingsForEditing(base: JobSettings, audioBitratesFallback
 		autoDenoiseThresholds: { ...(base.autoDenoiseThresholds || DEFAULT_AUTO_THRESHOLDS) },
 		nlmeansParams: base.nlmeansParams ? JSON.parse(JSON.stringify(base.nlmeansParams)) : JSON.parse(JSON.stringify(DEFAULT_NLMEANS_PARAMS)),
 		gradfunParams: base.gradfunParams ? JSON.parse(JSON.stringify(base.gradfunParams)) : JSON.parse(JSON.stringify(DEFAULT_GRADFUN_PARAMS)),
+		subtitleStyle: base.subtitleStyle
+			? { ...base.subtitleStyle, fontAxes: { ...(base.subtitleStyle.fontAxes ?? {}) } }
+			: { ...DEFAULT_SUBTITLE_STYLE, fontAxes: {} },
+		assRestyleTargets: Array.isArray(base.assRestyleTargets) ? [...base.assRestyleTargets] : ["full", "honorifics", "forced", "sdh", "commentary"],
 		vsFilters: Array.isArray(base.vsFilters) ? JSON.parse(JSON.stringify(base.vsFilters)) : [],
 	};
 }
@@ -295,6 +301,16 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 		(v) => (settings.subtitleLanguagePriority = v),
 		"eng, jpn, *",
 	);
+
+	// Subtitle styling & fonts
+	renderLabeledToggle(el("convert-srt-ass"), settings.convertSrtToAss ?? false, "Convert SRT subtitles to styled ASS", (v) => (settings.convertSrtToAss = v));
+	renderLabeledToggle(el("restyle-ass-font"), settings.restyleAssFont ?? false, "Replace dialogue font in existing ASS", (v) => (settings.restyleAssFont = v));
+	renderSubtitleStyleTargets(
+		el("ass-restyle-targets"),
+		settings.assRestyleTargets ?? ["full", "honorifics", "forced", "sdh", "commentary"],
+		(v) => (settings.assRestyleTargets = v),
+	);
+	renderLabeledToggle(el("remove-unused-fonts"), settings.removeUnusedFonts ?? false, "Remove unused fonts from MKV", (v) => (settings.removeUnusedFonts = v));
 
 	renderAudioLanguagesInput(el("audio-languages"), settings.audioLanguages || [], (v) => (settings.audioLanguages = v));
 	renderLanguageFilterInput(el("subtitle-languages"), settings.subtitleLanguages || [], (v) => (settings.subtitleLanguages = v));
