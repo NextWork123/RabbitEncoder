@@ -1,21 +1,112 @@
+import pkg from "../package.json";
 import { dialogueStyleNames } from "./ass-classifier";
 import type { SubtitleStyle } from "./types";
 
-/** Column indices we overwrite, resolved from the Format line (names are case-insensitive). */
-const RESTYLE_COLUMNS: Record<string, (s: SubtitleStyle) => string> = {
+export const ASS_SIGNATURE_KEY = "RabbitEncoder";
+const TOOL_VERSION: string = pkg.version;
+
+/**
+ * Format a scaled number for an ASS field: round to at most 3 decimals and drop
+ * trailing zeros so we emit "108" / "2.5" rather than "108.000" / "2.50".
+ */
+const tidy = (n: number): string => String(parseFloat(n.toFixed(3)));
+
+/**
+ * Column overwriters, resolved from the Format line (names are case-insensitive).
+ * `sx` / `sy` are the PlayResX/1920 and PlayResY/1080 scale factors: the style
+ * values live in 1080p space, so pixel-bearing fields are rescaled to the file's
+ * own PlayRes. Width-axis fields use `sx`, height-axis fields use `sy`, and
+ * unitless fields (colours, alignment, bold, font name) ignore both.
+ */
+const RESTYLE_COLUMNS: Record<string, (s: SubtitleStyle, sx: number, sy: number) => string> = {
 	fontname: (s) => s.fontName,
-	fontsize: (s) => String(s.fontSize),
+	fontsize: (s, _sx, sy) => tidy(s.fontSize * sy),
 	primarycolour: (s) => s.primaryColour,
 	outlinecolour: (s) => s.outlineColour,
 	backcolour: (s) => s.backColour,
 	bold: (s) => (s.bold ? "-1" : "0"),
-	outline: (s) => String(s.outline),
-	shadow: (s) => String(s.shadow),
+	outline: (s, _sx, sy) => tidy(s.outline * sy),
+	shadow: (s, _sx, sy) => tidy(s.shadow * sy),
 	alignment: (s) => String(s.alignment),
-	marginl: (s) => String(s.marginL),
-	marginr: (s) => String(s.marginR),
-	marginv: (s) => String(s.marginV),
+	marginl: (s, sx) => tidy(s.marginL * sx),
+	marginr: (s, sx) => tidy(s.marginR * sx),
+	marginv: (s, _sx, sy) => tidy(s.marginV * sy),
 };
+
+/**
+ * Insert or update the RabbitEncoder provenance line in [Script Info]. Stamped
+ * into every ASS we write so downstream tooling (and re-runs) can tell a track
+ * was built/restyled by RabbitEncoder and with which version.
+ *
+ * Idempotent: an existing line is replaced in place, so re-processing updates
+ * the version instead of stacking duplicates. If the document has no Script
+ * Info section, a minimal one is created at the top.
+ */
+export function stampSignature(assText: string, version: string = TOOL_VERSION): string {
+	const sigLine = `${ASS_SIGNATURE_KEY}: ${version}`;
+	const sigRe = new RegExp(`^${ASS_SIGNATURE_KEY}\\s*:`, "i");
+	const out: string[] = [];
+	let section = "";
+	let scriptInfoIdx = -1;
+	let replaced = false;
+	for (const line of assText.split(/\r?\n/)) {
+		const t = line.trim();
+		if (/^\[.*\]$/.test(t)) {
+			section = t.slice(1, -1).toLowerCase();
+			out.push(line);
+			if (section === "script info") scriptInfoIdx = out.length - 1;
+			continue;
+		}
+		if (section === "script info" && sigRe.test(t)) {
+			out.push(sigLine);
+			replaced = true;
+			continue;
+		}
+		out.push(line);
+	}
+	if (!replaced) {
+		if (scriptInfoIdx >= 0) out.splice(scriptInfoIdx + 1, 0, sigLine);
+		else out.unshift("[Script Info]", sigLine, "");
+	}
+	return out.join("\n");
+}
+
+/**
+ * Derive px scale factors for an existing ASS file from its Script Info PlayRes,
+ * relative to the 1080p space the configured style values are authored in
+ * (scaleX = PlayResX/1920, scaleY = PlayResY/1080).
+ *
+ * - Both present  -> use each axis independently.
+ * - One present   -> mirror the missing axis from the present one (assumes the
+ *                    common 16:9-ish case; better than dropping a scale to 1).
+ * - Neither       -> (1, 1): leave values untouched so behaviour matches the
+ *                    pre-scaling code rather than guessing a PlayRes (and we must
+ *                    NOT inject a PlayRes here, as that would move every existing
+ *                    sign/song positioned in the file's original coordinate space).
+ */
+function playResScale(assText: string): { scaleX: number; scaleY: number } {
+	let section = "";
+	let x = 0;
+	let y = 0;
+	for (const raw of assText.split(/\r?\n/)) {
+		const t = raw.trim();
+		if (/^\[.*\]$/.test(t)) {
+			section = t.slice(1, -1).toLowerCase();
+			continue;
+		}
+		if (section !== "script info") continue;
+		const mx = t.match(/^PlayResX\s*:\s*([0-9]+(?:\.[0-9]+)?)/i);
+		if (mx) x = parseFloat(mx[1]!);
+		const my = t.match(/^PlayResY\s*:\s*([0-9]+(?:\.[0-9]+)?)/i);
+		if (my) y = parseFloat(my[1]!);
+	}
+	let scaleX = x > 0 ? x / 1920 : 0;
+	let scaleY = y > 0 ? y / 1080 : 0;
+	if (scaleX === 0 && scaleY === 0) return { scaleX: 1, scaleY: 1 };
+	if (scaleX === 0) scaleX = scaleY;
+	if (scaleY === 0) scaleY = scaleX;
+	return { scaleX, scaleY };
+}
 
 /**
  * V4+ Style line for a given style name. Field order is the ASS standard:
@@ -48,6 +139,7 @@ export function styleSrtAss(assText: string, style: SubtitleStyle): string {
 	let hasScaled = false;
 	let replacedDefault = false;
 	let stylesHeaderIdx = -1;
+	let stylesFormatIdx = -1;
 
 	for (const line of lines) {
 		const t = line.trim();
@@ -75,18 +167,31 @@ export function styleSrtAss(assText: string, style: SubtitleStyle): string {
 				continue;
 			}
 		}
-		if ((section === "v4+ styles" || section === "v4 styles") && /^Style\s*:/i.test(t)) {
-			const name = t
-				.slice(t.indexOf(":") + 1)
-				.split(",")[0]
-				?.trim();
-			if (name && name.toLowerCase() === "default") {
-				out.push(buildStyleLine("Default", style));
-				replacedDefault = true;
+		if (section === "v4+ styles" || section === "v4 styles") {
+			if (/^Format\s*:/i.test(t)) {
+				out.push(line);
+				stylesFormatIdx = out.length - 1;
 				continue;
+			}
+			if (/^Style\s*:/i.test(t)) {
+				const name = t
+					.slice(t.indexOf(":") + 1)
+					.split(",")[0]
+					?.trim();
+				if (name && name.toLowerCase() === "default") {
+					out.push(buildStyleLine("Default", style));
+					replacedDefault = true;
+					continue;
+				}
 			}
 		}
 		out.push(line);
+	}
+
+	// If ffmpeg named the style something other than Default, add a Default style.
+	if (!replacedDefault) {
+		const insertAt = stylesFormatIdx >= 0 ? stylesFormatIdx + 1 : stylesHeaderIdx >= 0 ? stylesHeaderIdx + 1 : -1;
+		if (insertAt >= 0) out.splice(insertAt, 0, buildStyleLine("Default", style));
 	}
 
 	// Backfill missing Script Info keys.
@@ -96,23 +201,28 @@ export function styleSrtAss(assText: string, style: SubtitleStyle): string {
 	if (!hasScaled) inject.push("ScaledBorderAndShadow: yes");
 	if (inject.length && scriptInfoIdx >= 0) out.splice(scriptInfoIdx + 1, 0, ...inject);
 
-	// If ffmpeg named the style something else, add a Default and a styles section if needed.
-	if (!replacedDefault) {
-		if (stylesHeaderIdx >= 0) {
-			out.splice(stylesHeaderIdx + 1, 0, buildStyleLine("Default", style));
-		}
-	}
-	return out.join("\n");
+	return stampSignature(out.join("\n"));
 }
 
 /**
  * Restyle dialogue-classified styles in an existing ASS file. The font is always
  * replaced; appearance columns (colours, border, shadow, alignment, margins) are
  * replaced too when `restyleAppearance` is true. Sign/song styles are left alone.
+ *
+ * The configured style values are authored in 1080p px. Existing ASS files keep
+ * their own PlayRes (often 4K), so the pixel-bearing fields are scaled to that
+ * PlayRes before injection — otherwise a 1080p fontSize/outline/margin would
+ * render at half size on a 2160p script. We rescale our injected values to the
+ * file rather than rewriting PlayRes, which would displace existing signs/songs.
+ *
+ * Files with no dialogue style are returned untouched (and left unstamped, since
+ * nothing was modified).
  */
 export function restyleAssDialogueFont(assText: string, style: SubtitleStyle, restyleAppearance: boolean): string {
 	const dialogue = dialogueStyleNames(assText);
 	if (dialogue.size === 0) return assText;
+
+	const { scaleX, scaleY } = playResScale(assText);
 
 	const lines = assText.split(/\r?\n/);
 	let section = "";
@@ -143,12 +253,12 @@ export function restyleAssDialogueFont(assText: string, style: SubtitleStyle, re
 				const idx = cols.indexOf(colName);
 				if (idx >= 0 && idx < values.length) {
 					const lead = values[idx]!.match(/^\s*/)?.[0] ?? "";
-					values[idx] = lead + getter(style);
+					values[idx] = lead + getter(style, scaleX, scaleY);
 				}
 			}
 			return line.slice(0, cut) + values.join(",");
 		}
 		return line;
 	});
-	return out.join("\n");
+	return stampSignature(out.join("\n"));
 }
