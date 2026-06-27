@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, unlinkSync, rmSync, readdirSync, symlinkSync, renameSync } from "fs";
 import { join, parse as parsePath, dirname, extname, basename, resolve } from "path";
-import type { Job, JobStep, AppConfig } from "./types";
+import type { Job, JobStep, AppConfig, EncodeJobOptions, SubtitleBurnMode, AudioStreamInfo, SubtitleStreamInfo } from "./types";
 import { probeFile, getOpusBitrateForLayout, getAudioReplacementLabel, normalizeLayout } from "./probe";
 import { Logger } from "./logger";
 import { CancelledError, run, humanSize, fmtFrames, pct2, escapeXml, describeExitCode, isTimecodesVFR, computeFps } from "./process";
@@ -19,6 +19,7 @@ import {
 	filterSubtitleTypes,
 	filterAudioTypes,
 	buildAudioTrackName,
+	isTextSubtitleCodec,
 } from "./tracks";
 import { styleSrtAss, restyleAssDialogueFont } from "./ass-style";
 import { extractUsedFonts } from "./ass-classifier";
@@ -132,7 +133,22 @@ function resolveUniqueOutputPath(dir: string, filename: string, ignorePath?: str
 	return candidate;
 }
 
-export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial: Partial<Job>) => void, signal?: AbortSignal): Promise<void> {
+/** Burn mode for the first subtitle of a file: libass for text, overlay for bitmap. */
+function burnModeForFirstSub(streams: { codec: string }[] | undefined): SubtitleBurnMode {
+	const first = streams?.[0];
+	if (!first) return "none";
+	return isTextSubtitleCodec(first.codec) ? "text" : "bitmap";
+}
+
+export async function encodeJob(
+	job: Job,
+	config: AppConfig,
+	updateJob: (partial: Partial<Job>) => void,
+	signal?: AbortSignal,
+	opts: EncodeJobOptions = {},
+): Promise<void> {
+	const previewMode = opts.mode === "preview" || !!opts.preview;
+	const sink = opts.preview ?? null;
 	const tempDir = join(config.tempDir, job.id);
 	mkdirSync(tempDir, { recursive: true });
 
@@ -211,6 +227,11 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			throw new Error(`Failed to extract video stream: ${extractRes.stderr || extractRes.stdout}`);
 		}
 
+		if (sink) {
+			// Preview: source comparison still (raw clip, first subtitle burned in).
+			await sink.capture(job.inputPath, "source.png", burnModeForFirstSub(probe.subtitleStreams));
+		}
+
 		// VapourSynth filter chain
 		const activeVsEntries = (job.settings.vsFilters ?? []).filter((e) => e.level !== "off");
 
@@ -257,6 +278,7 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 					} catch {}
 				}
 				currentInput = outPath;
+				if (sink) await sink.capture(outPath, `vs_${i}.png`, "none");
 			}
 
 			if (currentInput !== preparedVideo) {
@@ -426,6 +448,8 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 			Logger.info(`[prepare] Segmented GPU auto-denoise complete`);
 		}
+
+		if (sink) await sink.capture(preparedVideo, "prepare.png", "none");
 
 		setStep(S_PREPARE, { status: "done", progress: 100 });
 
@@ -861,41 +885,47 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 			karaoke: job.settings.detectKaraokeAudio,
 		};
 
-		const allowedAudioLangs = job.settings.audioLanguages || [];
-		const langFiltered = filterStreamsByLanguage(allAudioStreams, allowedAudioLangs, "audio");
-		const skippedLang = allAudioStreams.length - langFiltered.length;
-		if (skippedLang > 0) Logger.info(`[audio] Filtered ${skippedLang} track(s) not in [${allowedAudioLangs.join(", ")}]`);
+		let audioStreams: AudioStreamInfo[];
+		if (opts.precomputed) {
+			// Preview: reuse the whole-source audio selection so every clip keeps identical ordering/naming.
+			audioStreams = opts.precomputed.audioStreams;
+		} else {
+			const allowedAudioLangs = job.settings.audioLanguages || [];
+			const langFiltered = filterStreamsByLanguage(allAudioStreams, allowedAudioLangs, "audio");
+			const skippedLang = allAudioStreams.length - langFiltered.length;
+			if (skippedLang > 0) Logger.info(`[audio] Filtered ${skippedLang} track(s) not in [${allowedAudioLangs.join(", ")}]`);
 
-		const typeFiltered = filterAudioTypes(
-			langFiltered,
-			{
-				removeCommentary: job.settings.removeCommentaryAudio,
-				removeDescriptive: job.settings.removeDescriptiveAudio,
-				removeKaraoke: job.settings.removeKaraokeAudio,
-				dropCompatibility: job.settings.dropCompatibilityAudio,
-			},
-			audioDetect,
-		);
-		const droppedByType = langFiltered.length - typeFiltered.length;
-		if (droppedByType > 0) Logger.info(`[audio] Dropped ${droppedByType} track(s) by type/compatibility filters`);
+			const typeFiltered = filterAudioTypes(
+				langFiltered,
+				{
+					removeCommentary: job.settings.removeCommentaryAudio,
+					removeDescriptive: job.settings.removeDescriptiveAudio,
+					removeKaraoke: job.settings.removeKaraokeAudio,
+					dropCompatibility: job.settings.dropCompatibilityAudio,
+				},
+				audioDetect,
+			);
+			const droppedByType = langFiltered.length - typeFiltered.length;
+			if (droppedByType > 0) Logger.info(`[audio] Dropped ${droppedByType} track(s) by type/compatibility filters`);
 
-		const sorted = sortAudioStreams(typeFiltered, {
-			languagePriority: job.settings.audioLanguagePriority,
-			preferUncensored: job.settings.preferUncensoredAudio,
-			detect: audioDetect,
-		});
+			const sorted = sortAudioStreams(typeFiltered, {
+				languagePriority: job.settings.audioLanguagePriority,
+				preferUncensored: job.settings.preferUncensoredAudio,
+				detect: audioDetect,
+			});
 
-		const audioStreams = job.settings.dedupeAudio
-			? deduplicateAudioStreams(sorted, {
-					collapseChannels: job.settings.keepBestAudioChannelsOnly,
-					codecPriority: job.settings.audioCodecPriority,
-					preferUncensored: job.settings.preferUncensoredAudio,
-					detect: audioDetect,
-				})
-			: sorted;
+			audioStreams = job.settings.dedupeAudio
+				? deduplicateAudioStreams(sorted, {
+						collapseChannels: job.settings.keepBestAudioChannelsOnly,
+						codecPriority: job.settings.audioCodecPriority,
+						preferUncensored: job.settings.preferUncensoredAudio,
+						detect: audioDetect,
+					})
+				: sorted;
 
-		if (job.settings.dedupeAudio && sorted.length !== audioStreams.length) {
-			Logger.info(`[audio] Deduplicated ${sorted.length - audioStreams.length} redundant track(s)`);
+			if (job.settings.dedupeAudio && sorted.length !== audioStreams.length) {
+				Logger.info(`[audio] Deduplicated ${sorted.length - audioStreams.length} redundant track(s)`);
+			}
 		}
 
 		const sortedTypes = audioStreams.map((s) => `${s.language || "und"}:${detectAudioTrackType(s, audioDetect)}:${s.channels || "?"}ch`);
@@ -1174,62 +1204,68 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		if (!skipSubtitleProcessing) {
 			// Subtitle tracks
-			const allSubtitleStreams = probe.subtitleStreams || [];
+			let subtitleStreams: SubtitleStreamInfo[];
+			if (opts.precomputed) {
+				// Preview: reuse the whole-source subtitle selection
+				subtitleStreams = opts.precomputed.subtitleStreams;
+			} else {
+				const allSubtitleStreams = probe.subtitleStreams || [];
 
-			await analyzeSubtitleStreams(
-				allSubtitleStreams,
-				job.inputPath,
-				tempDir,
-				{
-					langDetect: job.settings.subtitleLangDetect,
-					langDetectConfidence: job.settings.subtitleLangDetectConfidence,
-					detectSignsSongs: job.settings.detectSignsSongs,
-					detectSDH: job.settings.detectSDH,
-					detectHonorifics: job.settings.detectHonorifics,
-					signsSongsStyleRatio: job.settings.signsSongsStyleRatio,
-					signsSongsLineRatio: job.settings.signsSongsLineRatio,
-					sdhRatioThreshold: job.settings.sdhRatioThreshold,
-					sdhMinLines: job.settings.sdhMinLines,
-					honorificsMinCount: job.settings.honorificsMinCount,
-					honorificsRatio: job.settings.honorificsRatio,
-					assumeMislabeled: job.settings.assumeMislabeledTracks,
-				},
-				signal,
-			);
+				await analyzeSubtitleStreams(
+					allSubtitleStreams,
+					job.inputPath,
+					tempDir,
+					{
+						langDetect: job.settings.subtitleLangDetect,
+						langDetectConfidence: job.settings.subtitleLangDetectConfidence,
+						detectSignsSongs: job.settings.detectSignsSongs,
+						detectSDH: job.settings.detectSDH,
+						detectHonorifics: job.settings.detectHonorifics,
+						signsSongsStyleRatio: job.settings.signsSongsStyleRatio,
+						signsSongsLineRatio: job.settings.signsSongsLineRatio,
+						sdhRatioThreshold: job.settings.sdhRatioThreshold,
+						sdhMinLines: job.settings.sdhMinLines,
+						honorificsMinCount: job.settings.honorificsMinCount,
+						honorificsRatio: job.settings.honorificsRatio,
+						assumeMislabeled: job.settings.assumeMislabeledTracks,
+					},
+					signal,
+				);
 
-			const sortedSubtitleStreams = sortSubtitleStreams(allSubtitleStreams, {
-				sourcePriority: job.settings.subtitleSourcePriority,
-				fansubTiebreak: job.settings.subtitleFansubTiebreak,
-				formatPriority: job.settings.subtitleFormatPriority,
-				languagePriority: job.settings.subtitleLanguagePriority,
-			});
+				const sortedSubtitleStreams = sortSubtitleStreams(allSubtitleStreams, {
+					sourcePriority: job.settings.subtitleSourcePriority,
+					fansubTiebreak: job.settings.subtitleFansubTiebreak,
+					formatPriority: job.settings.subtitleFormatPriority,
+					languagePriority: job.settings.subtitleLanguagePriority,
+				});
 
-			const allowedSubLangs = job.settings.subtitleLanguages || [];
-			const langFilteredSubs = filterStreamsByLanguage(sortedSubtitleStreams, allowedSubLangs, "subtitle");
-			const skippedSubLang = sortedSubtitleStreams.length - langFilteredSubs.length;
-			if (skippedSubLang > 0) {
-				Logger.info(`[subtitle] Filtered ${skippedSubLang} track(s) not in [${allowedSubLangs.join(", ")}]`);
-			}
+				const allowedSubLangs = job.settings.subtitleLanguages || [];
+				const langFilteredSubs = filterStreamsByLanguage(sortedSubtitleStreams, allowedSubLangs, "subtitle");
+				const skippedSubLang = sortedSubtitleStreams.length - langFilteredSubs.length;
+				if (skippedSubLang > 0) {
+					Logger.info(`[subtitle] Filtered ${skippedSubLang} track(s) not in [${allowedSubLangs.join(", ")}]`);
+				}
 
-			const typeFilteredSubs = filterSubtitleTypes(langFilteredSubs, {
-				removeSDH: job.settings.removeSDHSubtitles,
-				removeCommentary: job.settings.removeCommentarySubtitles,
-				removeForcedSignsSongs: job.settings.removeForcedSignsSongs,
-				removeStoryboard: job.settings.removeStoryboardSubtitles,
-				removeHonorifics: job.settings.removeHonorificsSubtitles,
-				dropPicture: job.settings.dropPictureSubtitles,
-			});
-			const droppedByType = langFilteredSubs.length - typeFilteredSubs.length;
-			if (droppedByType > 0) {
-				Logger.info(`[subtitle] Dropped ${droppedByType} track(s) by type/format filters`);
-			}
+				const typeFilteredSubs = filterSubtitleTypes(langFilteredSubs, {
+					removeSDH: job.settings.removeSDHSubtitles,
+					removeCommentary: job.settings.removeCommentarySubtitles,
+					removeForcedSignsSongs: job.settings.removeForcedSignsSongs,
+					removeStoryboard: job.settings.removeStoryboardSubtitles,
+					removeHonorifics: job.settings.removeHonorificsSubtitles,
+					dropPicture: job.settings.dropPictureSubtitles,
+				});
+				const droppedByTypeSubs = langFilteredSubs.length - typeFilteredSubs.length;
+				if (droppedByTypeSubs > 0) {
+					Logger.info(`[subtitle] Dropped ${droppedByTypeSubs} track(s) by type/format filters`);
+				}
 
-			const subtitleStreams = job.settings.dedupeSubtitles
-				? deduplicateSubtitleStreams(typeFilteredSubs, { acrossFormat: job.settings.dedupeAcrossFormat })
-				: typeFilteredSubs;
+				subtitleStreams = job.settings.dedupeSubtitles
+					? deduplicateSubtitleStreams(typeFilteredSubs, { acrossFormat: job.settings.dedupeAcrossFormat })
+					: typeFilteredSubs;
 
-			if (job.settings.dedupeSubtitles && typeFilteredSubs.length !== subtitleStreams.length) {
-				Logger.info(`[subtitle] Deduplicated ${typeFilteredSubs.length - subtitleStreams.length} redundant track(s)`);
+				if (job.settings.dedupeSubtitles && typeFilteredSubs.length !== subtitleStreams.length) {
+					Logger.info(`[subtitle] Deduplicated ${typeFilteredSubs.length - subtitleStreams.length} redundant track(s)`);
+				}
 			}
 
 			if (subtitleStreams.length > 0) {
@@ -1495,6 +1531,18 @@ export async function encodeJob(job: Job, config: AppConfig, updateJob: (partial
 
 		setStep(S_MUX, { progress: 75, detail: "Applying color metadata" });
 		await applyColorMetadata(finalOutput, probe, signal);
+
+		if (previewMode && sink) {
+			const encodedClip = join(sink.dir, "encoded.mkv");
+			const cp = await run(["cp", finalOutput, encodedClip], { signal });
+			if (cp.code !== 0) throw new Error(`Preview clip copy failed: ${cp.stderr || cp.stdout}`);
+			await sink.capture(encodedClip, "encode.png", burnModeForFirstSub(opts.precomputed?.subtitleStreams ?? probe.subtitleStreams));
+			setStep(S_MUX, { status: "done", progress: 100 });
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {}
+			return;
+		}
 
 		setStep(S_MUX, { progress: 85, detail: "Moving to output" });
 

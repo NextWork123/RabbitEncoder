@@ -4,6 +4,7 @@ export type EncoderSpeed = "slower" | "slow" | "medium" | "fast" | "faster";
 export type DenoiseLevel = "off" | "light" | "medium" | "heavy" | "auto";
 export type DebandLevel = "off" | "light" | "medium" | "heavy";
 
+export type EncodeMode = "full" | "preview";
 export type VideoEncodeMode = "av1" | "off";
 export type AudioEncodeMode = "opus" | "copy";
 export type SubtitleProcessingMode = "full" | "copy";
@@ -13,10 +14,34 @@ export type CropMode = "off" | "auto";
 export type AudioTrackType = "main" | "commentary" | "descriptive" | "karaoke";
 export type AudioCodecPriority = "lossless-first" | "smallest-first";
 
+export type SubtitleBurnMode = "text" | "bitmap" | "none";
+
 export type SubtitleLangDetectMode = "enabled" | "und-only" | "disabled";
 export type SubtitleSourcePriority = "official-first" | "fansub-first";
 export type SubtitleFansubTiebreak = "alphabetical" | "source-order";
 export type SubtitleFormatPriority = "text-first" | "picture-first";
+
+export interface SourceTrackPlan {
+	subtitleStreams: SubtitleStreamInfo[];
+	audioStreams: AudioStreamInfo[];
+}
+
+export interface PreviewFrameSink {
+	/** Absolute dir for this sample's artifacts (source.png, encode.png, vs_*.png, prepare.png, encoded.mkv, source_clip.mkv). */
+	dir: string;
+	/** Seconds into the clip to grab stills (usually window/2). */
+	frameOffsetSec: number;
+	/** Color-aware still extractor (closure supplied by the preview driver). Non-fatal on failure. */
+	capture(inputPath: string, outName: string, burnSubs: SubtitleBurnMode): Promise<void>;
+}
+
+export interface EncodeJobOptions {
+	mode?: EncodeMode;
+	/** Skip whole-source detection; use these decisions instead. */
+	precomputed?: SourceTrackPlan;
+	/** Preview-only artifact sink. Presence implies preview mode. */
+	preview?: PreviewFrameSink;
+}
 
 /**
  * Backend used for the nlmeans denoise filter.
