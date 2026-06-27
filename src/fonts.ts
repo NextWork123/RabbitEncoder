@@ -187,18 +187,80 @@ export async function listMkvAttachments(mkvPath: string, signal?: AbortSignal):
 }
 
 /**
+ * Read the internal family/full/PostScript names of source font attachments
+ * which will actually survive the mux.
+ *
+ * When `dropUnusedFonts` is enabled, only attachments whose names intersect
+ * `usedFonts` reserve their identities. This prevents an unused source font
+ * from unnecessarily forcing `Family 2` before that source font is dropped.
+ * When unused-font removal is disabled, every source font reserves its names.
+ *
+ * Returns null when attachment extraction fails. The caller may continue, but
+ * should preserve all source attachments and treat numbering as best-effort.
+ */
+export async function scanMkvAttachmentFontNames(
+	mkvPath: string,
+	tempDir: string,
+	usedFonts: ReadonlySet<string>,
+	dropUnusedFonts: boolean,
+	signal?: AbortSignal,
+): Promise<Set<string> | null> {
+	const attachments = (await listMkvAttachments(mkvPath, signal)).filter((a) => FONT_EXTS.has(extname(a.fileName).toLowerCase()));
+	if (attachments.length === 0) return new Set();
+
+	const specs: string[] = [];
+	const outById = new Map<number, string>();
+	for (const a of attachments) {
+		const sourceExt = extname(a.fileName).toLowerCase();
+		const safeExt = FONT_EXTS.has(sourceExt) ? sourceExt : ".font";
+		const out = join(tempDir, `fontscan_att_${a.id}${safeExt}`);
+		specs.push(`${a.id}:${out}`);
+		outById.set(a.id, out);
+	}
+
+	const ext = await run(["mkvextract", mkvPath, "attachments", ...specs], { signal });
+	if (ext.code !== 0) {
+		Logger.warn(`[fonts] Could not scan source font attachments (${ext.stderr || ext.stdout})`);
+		return null;
+	}
+
+	const occupied = new Set<string>();
+	for (const a of attachments) {
+		const out = outById.get(a.id)!;
+		if (!existsSync(out)) continue;
+
+		const { names } = await scanFontNames(out, signal);
+		const retained = !dropUnusedFonts || names.some((name) => usedFonts.has(name));
+		if (!retained) continue;
+
+		for (const name of names) occupied.add(name);
+
+		// If scanning failed and the attachment is being preserved, reserve its
+		// visible stem as a conservative fallback.
+		if (names.length === 0) {
+			const stem = basename(a.fileName, extname(a.fileName));
+			if (stem) occupied.add(normalizeFontName(stem));
+		}
+	}
+	return occupied;
+}
+
+/**
  * Extract every attachment from `mkvPath`, then return mkvmerge --attach-file
- * args for: all non-font attachments, plus fonts whose names intersect
- * `usedFonts` and are NOT already covered by `alreadyAttached` (e.g. a font we
- * injected from /config/fonts). Returns null on extraction failure - the caller
- * should then fall back to passing source attachments through untouched rather
- * than dropping them.
+ * args for all non-font attachments plus source fonts referenced by surviving
+ * ASS tracks. When `dropUnusedFonts` is false, every source font is preserved.
+ *
+ * Injected fonts already use collision-free numbered internal families, so this
+ * function must not replace a source font merely because names overlap.
+ *
+ * Returns null on extraction failure - the caller should then fall back to
+ * passing source attachments through untouched rather than dropping them.
  */
 export async function buildKeptAttachmentArgs(
 	mkvPath: string,
 	usedFonts: Set<string>,
 	tempDir: string,
-	alreadyAttached: Set<string>,
+	dropUnusedFonts: boolean,
 	signal?: AbortSignal,
 ): Promise<string[] | null> {
 	const attachments = await listMkvAttachments(mkvPath, signal);
@@ -228,11 +290,7 @@ export async function buildKeptAttachmentArgs(
 			continue;
 		}
 		const { names } = await scanFontNames(out, signal);
-		if (names.some((n) => alreadyAttached.has(n))) {
-			Logger.info(`[fonts] Skipping ${a.fileName} (already injected from /config/fonts)`);
-			continue;
-		}
-		if (names.some((n) => usedFonts.has(n))) {
+		if (!dropUnusedFonts || names.some((n) => usedFonts.has(n))) {
 			args.push("--attachment-mime-type", mimeForFont(out), "--attachment-name", a.fileName, "--attach-file", out);
 		} else {
 			Logger.info(`[fonts] Dropping unused font: ${a.fileName}`);

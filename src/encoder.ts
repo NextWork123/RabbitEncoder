@@ -22,8 +22,8 @@ import {
 	isTextSubtitleCodec,
 } from "./tracks";
 import { styleSrtAss, restyleAssDialogueFont } from "./ass-style";
-import { extractUsedFonts } from "./ass-classifier";
-import { fontRegistry, buildKeptAttachmentArgs, type ResolvedFace } from "./fonts";
+import { extractUsedFonts, normalizeFontName } from "./ass-classifier";
+import { fontRegistry, buildKeptAttachmentArgs, scanMkvAttachmentFontNames, type ResolvedFace } from "./fonts";
 import { detectSourceTag, detectReleaseGroup, getResolutionTag, extractBaseTitle, inferSourceFromStream } from "./naming";
 import pkg from "../package.json";
 import { buildPrepareFilterConfig } from "./filters";
@@ -34,7 +34,7 @@ import { combineCumulativeSettings, encodeSettingsCode } from "./settings-code";
 import { decodePriorSettings } from "./mkv-tags";
 import { cpus } from "os";
 import { getEncoder } from "./encoders";
-import { axisSuffix, instanceFont } from "./font-instance";
+import { axisSuffix, chooseAvailableFontFamily, instancedFontNames, instanceFont } from "./font-instance";
 
 export { CancelledError } from "./process";
 
@@ -138,6 +138,158 @@ function burnModeForFirstSub(streams: { codec: string }[] | undefined): Subtitle
 	const first = streams?.[0];
 	if (!first) return "none";
 	return isTextSubtitleCodec(first.codec) ? "text" : "bitmap";
+}
+
+interface AssMaterializeResult {
+	ok: boolean;
+	empty: boolean;
+	detail: string;
+}
+
+/**
+ * Materialize one ASS/SSA subtitle as a plain .ass file for style/font
+ * inspection. The normal FFmpeg demux path is fast, but some Matroska ASS
+ * tracks fail that second remux even though the track itself is valid. Fall
+ * back to mkvextract against the already-isolated one-track MKV before giving
+ * up and disabling unused-font cleanup for safety.
+ */
+async function materializeAssForInspection(
+	sourcePath: string,
+	sourceStreamIndex: number,
+	isolatedTrackPath: string,
+	outPath: string,
+	signal?: AbortSignal,
+): Promise<AssMaterializeResult> {
+	const usable = (): boolean => {
+		try {
+			return existsSync(outPath) && statSync(outPath).size > 0;
+		} catch {
+			return false;
+		}
+	};
+
+	const resetOutput = () => {
+		try {
+			unlinkSync(outPath);
+		} catch {}
+	};
+
+	const errors: string[] = [];
+
+	// First try the original source directly. This avoids depending on the
+	// intermediate one-track MKV when its subtitle metadata is unusual.
+	resetOutput();
+	const direct = await run(
+		[
+			"ffmpeg",
+			"-hide_banner",
+			"-loglevel",
+			"error",
+			"-y",
+			"-i",
+			sourcePath,
+			"-map",
+			`0:${sourceStreamIndex}`,
+			"-c:s",
+			"copy",
+			"-vn",
+			"-an",
+			"-map_chapters",
+			"-1",
+			"-map_metadata",
+			"-1",
+			outPath,
+		],
+		{ signal },
+	);
+	if ((direct.code === 0 || direct.code === 1) && usable()) {
+		return { ok: true, empty: false, detail: "" };
+	}
+	errors.push(`direct ffmpeg: ${direct.stderr || direct.stdout || `exit ${direct.code}`}`);
+
+	// Then try FFmpeg against the isolated subtitle MKV.
+	resetOutput();
+	const isolated = await run(
+		[
+			"ffmpeg",
+			"-hide_banner",
+			"-loglevel",
+			"error",
+			"-y",
+			"-i",
+			isolatedTrackPath,
+			"-map",
+			"0:s:0",
+			"-c:s",
+			"copy",
+			"-vn",
+			"-an",
+			"-map_chapters",
+			"-1",
+			"-map_metadata",
+			"-1",
+			outPath,
+		],
+		{ signal },
+	);
+	if ((isolated.code === 0 || isolated.code === 1) && usable()) {
+		return { ok: true, empty: false, detail: "" };
+	}
+	errors.push(`isolated ffmpeg: ${isolated.stderr || isolated.stdout || `exit ${isolated.code}`}`);
+
+	// mkvextract preserves the ASS codec-private header and packets verbatim.
+	// Query the isolated file instead of assuming its Matroska track id is 0.
+	resetOutput();
+	const identify = await run(["mkvmerge", "-J", isolatedTrackPath], { signal });
+	if (identify.code === 0) {
+		try {
+			const json = JSON.parse(identify.stdout) as { tracks?: Array<{ id?: number; type?: string }> };
+			const subtitleTrack = json.tracks?.find((track) => track.type === "subtitles" && Number.isInteger(track.id));
+			if (subtitleTrack?.id !== undefined) {
+				const extracted = await run(["mkvextract", isolatedTrackPath, "tracks", `${subtitleTrack.id}:${outPath}`], { signal });
+				if ((extracted.code === 0 || extracted.code === 1) && usable()) {
+					return { ok: true, empty: false, detail: "" };
+				}
+				errors.push(`mkvextract: ${extracted.stderr || extracted.stdout || `exit ${extracted.code}`}`);
+			} else {
+				errors.push("mkvextract: isolated file contains no identifiable subtitle track");
+			}
+		} catch (err) {
+			errors.push(`mkvmerge JSON: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	} else {
+		errors.push(`mkvmerge identify: ${identify.stderr || identify.stdout || `exit ${identify.code}`}`);
+	}
+
+	// A short preview clip can legitimately contain an ASS stream with zero
+	// packets. Such a track cannot render anything in this output and therefore
+	// contributes no used fonts. Do not disable cleanup for the whole mux.
+	const packetProbe = await run(
+		[
+			"ffprobe",
+			"-v",
+			"error",
+			"-select_streams",
+			"s:0",
+			"-count_packets",
+			"-show_entries",
+			"stream=nb_read_packets",
+			"-of",
+			"default=noprint_wrappers=1:nokey=1",
+			isolatedTrackPath,
+		],
+		{ signal },
+	);
+	if (packetProbe.code === 0) {
+		const count = Number(packetProbe.stdout.trim());
+		if (Number.isFinite(count) && count === 0) {
+			resetOutput();
+			return { ok: false, empty: true, detail: "track contains no subtitle packets" };
+		}
+	}
+
+	resetOutput();
+	return { ok: false, empty: false, detail: errors.map((e) => e.slice(-300)).join(" | ") };
 }
 
 export async function encodeJob(
@@ -1180,25 +1332,66 @@ export async function encodeJob(
 			}
 		}
 
-		const usedFonts = new Set<string>();
+		const sourceExt = extname(job.inputPath).toLowerCase();
+		const occupiedFontNames = new Set<string>();
+		// Fonts still referenced by untouched source subtitle content after the
+		// provisional restyle. Only this set may keep source font attachments.
+		const sourceAttachmentUsedFonts = new Set<string>();
+		let effectiveRemoveUnusedFonts = job.settings.removeUnusedFonts;
 		const resolvedFaces = new Map<string, ResolvedFace>();
 		const instanceCache = new Map<string, ResolvedFace>();
 
+		function cleanAttachmentExtension(fileName: string): string {
+			const extension = extname(fileName).toLowerCase();
+			if (extension === ".otf") return ".otf";
+			if (extension === ".ttc" || extension === ".otc") return extension;
+			return ".ttf";
+		}
+
 		async function applyAxes(face: ResolvedFace | null): Promise<ResolvedFace | null> {
 			if (!face) return null;
+
 			const axes = face.axes ?? [];
-			if (axes.length === 0 || !job.settings.subtitleStyle.fontAxes) return face;
-			const { suffix, coords } = axisSuffix(axes, job.settings.subtitleStyle.fontAxes);
-			if (!suffix) return face; // all axes at default -> use the font as-is
-			const key = `${face.path}|${suffix}`;
-			const cached = instanceCache.get(key);
+			const { suffix: axisKey, coords } = axisSuffix(axes, job.settings.subtitleStyle.fontAxes ?? {});
+			const cacheKey = `${face.path}|${axisKey || "default"}|${job.settings.subtitleStyle.bold ? "bold" : "regular"}`;
+			const cached = instanceCache.get(cacheKey);
 			if (cached) return cached;
-			const family = `${face.family} ${suffix}`;
-			const out = join(tempDir, `inst_${Buffer.from(key).toString("base64url").slice(0, 40)}.ttf`);
-			const inst = await instanceFont(face.path, coords, family, out, signal);
-			const resolved: ResolvedFace = inst ? { ...face, family: inst.family, path: inst.path, names: inst.names, fileName: `${family}.ttf` } : face;
-			instanceCache.set(key, resolved);
-			if (!inst) Logger.warn(`[fonts] Instancing failed for ${face.fileName}; using variable default`);
+
+			// Preserve source fonts used by untouched signs/styles. Start with the
+			// clean base family, then increment until every generated family/full/PS
+			// identity is free: Family, Family 2, Family 3, ...
+			const family = chooseAvailableFontFamily(face.family, occupiedFontNames, job.settings.subtitleStyle.bold);
+			const familyChanged = family !== face.family;
+			const needsMaterializedCopy = axisKey.length > 0 || familyChanged;
+			const sourceFontExt = cleanAttachmentExtension(face.fileName);
+			const materializedExt = sourceFontExt === ".otf" ? ".otf" : ".ttf";
+
+			let resolved: ResolvedFace;
+			if (needsMaterializedCopy) {
+				const materializeKey = `${cacheKey}|${family}`;
+				const out = join(tempDir, `inst_${Buffer.from(materializeKey).toString("base64url").slice(0, 40)}${materializedExt}`);
+				const inst = await instanceFont(face.path, coords, family, job.settings.subtitleStyle.bold, out, signal);
+				if (inst) {
+					resolved = {
+						...face,
+						family: inst.family,
+						path: inst.path,
+						names: inst.names,
+						fileName: `${family}${materializedExt}`,
+						mime: fontRegistry.mime(inst.path),
+					};
+				} else {
+					Logger.warn(`[fonts] Could not materialize ${face.fileName} as "${family}"; ` + "using the original face, so a source-family collision may remain");
+					resolved = { ...face, fileName: `${face.family}${sourceFontExt}` };
+				}
+			} else {
+				resolved = { ...face, fileName: `${family}${sourceFontExt}` };
+			}
+
+			for (const name of resolved.names.length > 0 ? resolved.names : instancedFontNames(resolved.family, job.settings.subtitleStyle.bold)) {
+				occupiedFontNames.add(name);
+			}
+			instanceCache.set(cacheKey, resolved);
 			return resolved;
 		}
 
@@ -1410,51 +1603,113 @@ export async function encodeJob(
 				if (job.settings.convertSrtToAss || job.settings.restyleAssFont || job.settings.removeUnusedFonts) {
 					const style = job.settings.subtitleStyle;
 					const targets = new Set(job.settings.assRestyleTargets);
+					const probeFamily = "__RabbitEncoderInjectedFontProbe_4F3A8B__";
+					const probeFamilyNormalized = normalizeFontName(probeFamily);
 
+					interface PreparedAss {
+						rawPath: string;
+						rawText: string;
+						kind: "converted-srt" | "ass";
+						restyle: boolean;
+					}
+
+					const preparedAss = new Map<number, PreparedAss>();
+
+					// Pass 1: materialize every subtitle we may need to inspect as ASS.
+					// No injected family is chosen yet.
 					for (const planned of plannedSubs) {
 						if (!existsSync(planned.subFile)) continue;
 						const codec = planned.stream.codec.toLowerCase();
 						const isSrt = codec === "subrip" || codec === "srt";
 						const isAss = codec === "ass" || codec === "ssa";
-						let assForFontScan: string | null = null;
 
 						if (job.settings.convertSrtToAss && isSrt) {
-							const raw = join(tempDir, `sub_${planned.stream.index}.conv.ass`);
-							const r = await run(["ffmpeg", "-y", "-i", planned.subFile, "-map", "0:s:0", "-c:s", "ass", raw], { signal });
-							if (r.code === 0 && existsSync(raw)) {
-								const rawText = readFileSync(raw, "utf-8");
-								const face = await applyAxes(fontRegistry.resolve(style.fontName, planned.effectiveLang, rawText));
-								const family = face?.family ?? style.fontName;
-								const outAss = join(tempDir, `sub_${planned.stream.index}.styled.ass`);
-								writeFileSync(outAss, styleSrtAss(rawText, { ...style, fontName: family }), "utf-8");
-								planned.subFile = outAss;
-								assForFontScan = outAss;
-								if (face) resolvedFaces.set(face.path, face);
-								if (!face) Logger.warn(`[fonts] No face for family "${style.fontName}" (track ${planned.stream.index}); wrote name without injecting`);
+							const rawPath = join(tempDir, `sub_${planned.stream.index}.conv.ass`);
+							const r = await run(["ffmpeg", "-y", "-i", planned.subFile, "-map", "0:s:0", "-c:s", "ass", rawPath], { signal });
+							if (r.code === 0 && existsSync(rawPath)) {
+								preparedAss.set(planned.stream.index, {
+									rawPath,
+									rawText: readFileSync(rawPath, "utf-8"),
+									kind: "converted-srt",
+									restyle: true,
+								});
 							} else {
 								Logger.warn(`[subtitle] SRT→ASS conversion failed for track ${planned.stream.index}; keeping original`);
 							}
 						} else if (isAss) {
-							const raw = join(tempDir, `sub_${planned.stream.index}.raw.ass`);
-							const r = await run(["ffmpeg", "-y", "-i", planned.subFile, "-map", "0:s:0", "-c:s", "copy", raw], { signal });
-							if (r.code === 0 && existsSync(raw)) {
-								const rawText = readFileSync(raw, "utf-8");
-								if (job.settings.restyleAssFont && targets.has(planned.trackType)) {
-									const face = await applyAxes(fontRegistry.resolve(style.fontName, planned.effectiveLang, rawText));
-									const family = face?.family ?? style.fontName;
-									const outAss = join(tempDir, `sub_${planned.stream.index}.styled.ass`);
-									writeFileSync(outAss, restyleAssDialogueFont(rawText, { ...style, fontName: family }, true), "utf-8");
-									planned.subFile = outAss;
-									assForFontScan = outAss;
-									if (face) resolvedFaces.set(face.path, face);
-								} else {
-									assForFontScan = raw;
-								}
+							const rawPath = join(tempDir, `sub_${planned.stream.index}.raw.ass`);
+							const materialized = await materializeAssForInspection(job.inputPath, planned.stream.index, planned.subFile, rawPath, signal);
+							if (materialized.ok) {
+								preparedAss.set(planned.stream.index, {
+									rawPath,
+									rawText: readFileSync(rawPath, "utf-8"),
+									kind: "ass",
+									restyle: job.settings.restyleAssFont && targets.has(planned.trackType),
+								});
+							} else if (materialized.empty) {
+								Logger.debug(`[fonts] ASS track ${planned.stream.index} has no subtitle packets; ` + "it contributes no used fonts");
+							} else {
+								effectiveRemoveUnusedFonts = false;
+								Logger.warn(
+									`[fonts] Could not inspect ASS track ${planned.stream.index}; ` +
+										`preserving all source font attachments for safety (${materialized.detail})`,
+								);
 							}
 						}
+					}
 
-						if (assForFontScan && existsSync(assForFontScan)) {
-							for (const f of extractUsedFonts(readFileSync(assForFontScan, "utf-8"))) usedFonts.add(f);
+					// Pass 2: determine which *source* font families remain referenced after
+					// the intended restyle. A private placeholder stands in for Rabbit's
+					// injected face, so a restyled dialogue reference is not mistaken for a
+					// reason to retain a same-named source attachment. Untouched signs,
+					// songs, inline \fn overrides, and non-targeted styles remain visible.
+					sourceAttachmentUsedFonts.clear();
+					for (const prepared of preparedAss.values()) {
+						let probeText = prepared.rawText;
+						if (prepared.kind === "converted-srt") {
+							probeText = styleSrtAss(prepared.rawText, { ...style, fontName: probeFamily });
+						} else if (prepared.restyle) {
+							probeText = restyleAssDialogueFont(prepared.rawText, { ...style, fontName: probeFamily }, true);
+						}
+						for (const font of extractUsedFonts(probeText)) {
+							if (font !== probeFamilyNormalized) sourceAttachmentUsedFonts.add(font);
+						}
+					}
+
+					// Only source fonts which will survive the unused-font pass reserve a
+					// family identity. Therefore an unused Noto Sans does not force
+					// "Noto Sans 2", while a Noto Sans still used by signs does.
+					if (sourceExt === ".mkv" || sourceExt === ".mks") {
+						const sourceNames = await scanMkvAttachmentFontNames(job.inputPath, tempDir, sourceAttachmentUsedFonts, effectiveRemoveUnusedFonts, signal);
+						if (sourceNames) {
+							for (const name of sourceNames) occupiedFontNames.add(name);
+						} else {
+							effectiveRemoveUnusedFonts = false;
+							Logger.warn("[fonts] Source font collision scan failed; preserving source attachments and using best-effort numbering");
+						}
+					}
+
+					// Pass 3: perform the real transform using the final collision-free
+					// family selected from the retained source-font inventory.
+					for (const planned of plannedSubs) {
+						const prepared = preparedAss.get(planned.stream.index);
+						if (!prepared) continue;
+
+						if (prepared.kind === "converted-srt") {
+							const face = await applyAxes(fontRegistry.resolve(style.fontName, planned.effectiveLang, prepared.rawText));
+							const family = face?.family ?? style.fontName;
+							const outAss = join(tempDir, `sub_${planned.stream.index}.styled.ass`);
+							writeFileSync(outAss, styleSrtAss(prepared.rawText, { ...style, fontName: family }), "utf-8");
+							planned.subFile = outAss;
+							if (face) resolvedFaces.set(face.path, face);
+							if (!face) Logger.warn(`[fonts] No face for family "${style.fontName}" (track ${planned.stream.index}); wrote name without injecting`);
+						} else if (prepared.restyle) {
+							const face = await applyAxes(fontRegistry.resolve(style.fontName, planned.effectiveLang, prepared.rawText));
+							const family = face?.family ?? style.fontName;
+							const outAss = join(tempDir, `sub_${planned.stream.index}.styled.ass`);
+							writeFileSync(outAss, restyleAssDialogueFont(prepared.rawText, { ...style, fontName: family }, true), "utf-8");
+							planned.subFile = outAss;
+							if (face) resolvedFaces.set(face.path, face);
 						}
 					}
 				}
@@ -1477,14 +1732,11 @@ export async function encodeJob(
 			Logger.info("[subtitle] subtitleProcessing=copy — including source subs verbatim via mkvmerge passthrough");
 		}
 
-		const injectedNames = new Set<string>();
 		for (const face of resolvedFaces.values()) {
 			mkvArgs.push("--attachment-mime-type", face.mime, "--attachment-name", face.fileName, "--attach-file", face.path);
-			for (const n of face.names) injectedNames.add(n);
 			Logger.info(`[fonts] Injecting ${face.fileName} (${face.family})`);
 		}
 
-		const sourceExt = extname(job.inputPath).toLowerCase();
 		if (sourceExt === ".mkv" || sourceExt === ".mks") {
 			const safeSourceLink = join(tempDir, `source_ref${sourceExt}`);
 			try {
@@ -1497,8 +1749,9 @@ export async function encodeJob(
 			if (!skipSubtitleProcessing) refFlags.push("--no-subtitles");
 
 			let attachmentsHandled = false;
-			if (job.settings.removeUnusedFonts && !skipSubtitleProcessing) {
-				const keptArgs = await buildKeptAttachmentArgs(safeSourceLink, usedFonts, tempDir, injectedNames, signal);
+			const shouldRewriteAttachments = !skipSubtitleProcessing && effectiveRemoveUnusedFonts;
+			if (shouldRewriteAttachments) {
+				const keptArgs = await buildKeptAttachmentArgs(safeSourceLink, sourceAttachmentUsedFonts, tempDir, effectiveRemoveUnusedFonts, signal);
 				if (keptArgs !== null) {
 					mkvArgs.push(...keptArgs);
 					refFlags.push("--no-attachments");
