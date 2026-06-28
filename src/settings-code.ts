@@ -106,7 +106,7 @@ const BASELINE: JobSettings = {
 	removeUnusedFonts: false,
 	subtitleStyle: {
 		fontName: "Noto Sans",
-		fontSize: 74,
+		fontSize: 80,
 		primaryColour: "&H00FFFFFF",
 		outlineColour: "&H00000000",
 		backColour: "&H80000000",

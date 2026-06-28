@@ -88,7 +88,7 @@ export const PIPELINE_PRESET_HELP: Record<PipelinePreset, string> = {
 
 export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
 	fontName: "Noto Sans",
-	fontSize: 74,
+	fontSize: 80,
 	primaryColour: "&H00FFFFFF",
 	outlineColour: "&H00000000",
 	backColour: "&H80000000",
