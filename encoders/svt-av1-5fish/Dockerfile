@@ -3,7 +3,8 @@ FROM debian:testing
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
-ARG SVTAV1PSY_REPO=https://github.com/5fish/svt-av1-psy.git
+ARG SVTAV15FISH_REPO=https://github.com/5fish/SVT-AV1.git
+ARG SVTAV15FISH_REF=v2.3.260627
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
 	ca-certificates \
@@ -32,11 +33,12 @@ RUN apt-get update \
 
 WORKDIR /src
 
-RUN git clone "${SVTAV1PSY_REPO}" svt-av1-psy \
- && cd svt-av1-psy
+RUN git clone "${SVTAV15FISH_REPO}" svt-av1-5fish \
+ && cd svt-av1-5fish \
+ && git checkout "${SVTAV15FISH_REF}"
 
-COPY build-svt-av1-psy.sh /usr/local/bin/build-svt-av1-psy.sh
-RUN chmod +x /usr/local/bin/build-svt-av1-psy.sh
+COPY build-svt-av1-5fish.sh /usr/local/bin/build-svt-av1-5fish.sh
+RUN chmod +x /usr/local/bin/build-svt-av1-5fish.sh
 
 VOLUME ["/out"]
-CMD ["/usr/local/bin/build-svt-av1-psy.sh"]
+CMD ["/usr/local/bin/build-svt-av1-5fish.sh"]

@@ -30,13 +30,13 @@ export const ENCODERS: Record<
 		defaultPreset: 4,
 	},
 	"svt-av1-hdr": { label: "SVT-AV1-HDR", usesAutoBoost: false, crfMin: 1, crfMax: 70, presetMin: -1, presetMax: 13, defaultCrf: 24, defaultPreset: 4 },
-	"svt-av1-psy": { label: "SVT-AV1-PSY", usesAutoBoost: false, crfMin: 1, crfMax: 70, presetMin: -1, presetMax: 13, defaultCrf: 24, defaultPreset: 4 },
+	"svt-av1-5fish": { label: "SVT-AV1-5FISH", usesAutoBoost: false, crfMin: 1, crfMax: 70, presetMin: -1, presetMax: 13, defaultCrf: 24, defaultPreset: 4 },
 };
 export const ENCODER_IDS = Object.keys(ENCODERS) as EncoderId[];
 export const ENCODER_HELP: Record<EncoderId, string> = {
 	"svt-av1-essential": "Easiest to use (automatic per-scene CRF optimization)",
 	"svt-av1-hdr": "Recommended for live-action content.",
-	"svt-av1-psy": "Recommended for anime and animation.",
+	"svt-av1-5fish": "Recommended for anime and animation.",
 };
 
 export const QUALITIES: readonly EncoderQuality[] = ["low", "medium", "high"];

@@ -38,10 +38,10 @@ export const ENCODERS: Record<EncoderId, EncoderDef> = {
 		presetMin: -1,
 		presetMax: 13,
 	},
-	"svt-av1-psy": {
-		id: "svt-av1-psy",
-		label: "SVT-AV1-PSY",
-		binary: "SVT-AV1-PSY",
+	"svt-av1-5fish": {
+		id: "svt-av1-5fish",
+		label: "SVT-AV1-5FISH",
+		binary: "SVT-AV1-5FISH",
 		usesAutoBoost: false,
 		defaultCrf: 24,
 		defaultPreset: 4,
