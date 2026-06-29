@@ -194,8 +194,8 @@ export interface JobSettings {
 	assRestyleTargets: string[];
 	/** Drop attachment fonts not referenced by any surviving ASS subtitle. Default off. */
 	removeUnusedFonts: boolean;
-	/** Style/font used by convertSrtToAss and restyleAssFont. */
-	subtitleStyle: SubtitleStyle;
+	/** Selected font group (folder label under the user fonts dir). */
+	fontGroup: string;
 	/**
 	 * Ordered list of VapourSynth filter passes to apply during the prepare
 	 * stage, before the FFmpeg -vf chain. Each entry references a preset by
@@ -440,6 +440,12 @@ export interface PreviewState {
 	settingsFingerprint: string;
 	sampleCount: number;
 	windowSeconds: number;
+}
+
+export type StyleAppearance = Omit<SubtitleStyle, "fontName">;
+export interface GroupStyleConfig {
+	style?: Partial<StyleAppearance>;
+	overrides?: Record<string, Partial<StyleAppearance>>;
 }
 
 export type VsParamType = "float" | "int" | "bool" | "enum";

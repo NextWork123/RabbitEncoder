@@ -40,6 +40,7 @@ import { makeDefaultVsFilterEntry, vsRegistry } from "./vs-filters";
 import { decodeSettingsCode, encodeSettingsCode, SettingsCodeError } from "./settings-code";
 import { getSystemStats } from "./system";
 import { fontRegistry } from "./fonts";
+import type { GroupStyleConfig } from "./subtitle-style";
 
 export const config = await loadConfig();
 
@@ -51,6 +52,7 @@ vsRegistry.configure(
 vsRegistry.reload();
 
 fontRegistry.configure(process.env.FONTS_STOCK_DIR ?? "/app/fonts", process.env.FONTS_USER_DIR ?? "/config/fonts");
+fontRegistry.seed(["Noto Sans", "Noto Serif"]);
 await fontRegistry.reload();
 
 const hashedPassword = new Bun.CryptoHasher("blake2b512").update(`rabbitencoder-${process.env.PASSWORD || "rabbitencoder"}`).digest("hex");
@@ -407,6 +409,28 @@ app.get("/api/fonts/face/:family/:name", (c) => {
 	const face = fontRegistry.findFaceFile(decodeURIComponent(c.params.family!), decodeURIComponent(c.params.name!));
 	if (!face) return c.json({ error: "Font not found" }, 404);
 	return new Response(Bun.file(face.path), { headers: { "Content-Type": face.mime, "Cache-Control": "private, max-age=300" } });
+});
+
+app.get("/api/fonts/:label/style", (c) => {
+	const label = decodeURIComponent(c.params.label!);
+	const fam = fontRegistry.findFamily(label);
+	if (!fam) return c.json({ error: "Font group not found" }, 404);
+	const keys = [...new Set(fam.faces.flatMap((f) => f.keys))].sort();
+	const cfg = fontRegistry.getGroupStyle(label);
+	return c.json({ style: cfg.style ?? {}, overrides: cfg.overrides ?? {}, keys });
+});
+
+app.put("/api/fonts/:label/style", async (c) => {
+	const label = decodeURIComponent(c.params.label!);
+	if (!fontRegistry.findFamily(label)) return c.json({ error: "Font group not found" }, 404);
+	const body = (await c.req.json()) as { style?: unknown; overrides?: unknown };
+	const ok = fontRegistry.saveGroupStyle(label, {
+		style: (body.style as GroupStyleConfig["style"]) ?? {},
+		overrides: (body.overrides as GroupStyleConfig["overrides"]) ?? {},
+	});
+	if (!ok) return c.json({ error: "Failed to save group style" }, 500);
+	await fontRegistry.reload();
+	return c.json({ ok: true });
 });
 
 app.post("/api/jobs/:id/import-code", async (c) => {

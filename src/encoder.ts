@@ -34,7 +34,8 @@ import { combineCumulativeSettings, encodeSettingsCode } from "./settings-code";
 import { decodePriorSettings } from "./mkv-tags";
 import { cpus } from "os";
 import { getEncoder } from "./encoders";
-import { axisSuffix, chooseAvailableFontFamily, instancedFontNames, instanceFont } from "./font-instance";
+import { axisSuffix, chooseAvailableFontFamily, fontAttachmentFileName, instancedFontNames, instanceFont } from "./font-instance";
+import { DEFAULT_STYLE_APPEARANCE, type StyleAppearance } from "./subtitle-style";
 
 export { CancelledError } from "./process";
 
@@ -1348,19 +1349,15 @@ export async function encodeJob(
 			return ".ttf";
 		}
 
-		async function applyAxes(face: ResolvedFace | null): Promise<ResolvedFace | null> {
+		const applyAxes = async (face: ResolvedFace | null, appearance: StyleAppearance): Promise<ResolvedFace | null> => {
 			if (!face) return null;
-
 			const axes = face.axes ?? [];
-			const { suffix: axisKey, coords } = axisSuffix(axes, job.settings.subtitleStyle.fontAxes ?? {});
-			const cacheKey = `${face.path}|${axisKey || "default"}|${job.settings.subtitleStyle.bold ? "bold" : "regular"}`;
+			const { suffix: axisKey, coords } = axisSuffix(axes, appearance.fontAxes ?? {});
+			const cacheKey = `${face.path}|${axisKey || "default"}|${appearance.bold ? "bold" : "regular"}`;
 			const cached = instanceCache.get(cacheKey);
 			if (cached) return cached;
 
-			// Preserve source fonts used by untouched signs/styles. Start with the
-			// clean base family, then increment until every generated family/full/PS
-			// identity is free: Family, Family 2, Family 3, ...
-			const family = chooseAvailableFontFamily(face.family, occupiedFontNames, job.settings.subtitleStyle.bold);
+			const family = chooseAvailableFontFamily(face.family, occupiedFontNames, appearance.bold);
 			const familyChanged = family !== face.family;
 			const needsMaterializedCopy = axisKey.length > 0 || familyChanged;
 			const sourceFontExt = cleanAttachmentExtension(face.fileName);
@@ -1370,30 +1367,30 @@ export async function encodeJob(
 			if (needsMaterializedCopy) {
 				const materializeKey = `${cacheKey}|${family}`;
 				const out = join(tempDir, `inst_${Buffer.from(materializeKey).toString("base64url").slice(0, 40)}${materializedExt}`);
-				const inst = await instanceFont(face.path, coords, family, job.settings.subtitleStyle.bold, out, signal);
+				const inst = await instanceFont(face.path, coords, family, appearance.bold, out, signal);
 				if (inst) {
 					resolved = {
 						...face,
 						family: inst.family,
 						path: inst.path,
 						names: inst.names,
-						fileName: `${family}${materializedExt}`,
+						fileName: fontAttachmentFileName(family, materializedExt),
 						mime: fontRegistry.mime(inst.path),
 					};
 				} else {
-					Logger.warn(`[fonts] Could not materialize ${face.fileName} as "${family}"; ` + "using the original face, so a source-family collision may remain");
-					resolved = { ...face, fileName: `${face.family}${sourceFontExt}` };
+					Logger.warn(`[fonts] Could not materialize ${face.fileName} as "${family}"; using the original face`);
+					resolved = { ...face, fileName: fontAttachmentFileName(face.family, sourceFontExt) };
 				}
 			} else {
-				resolved = { ...face, fileName: `${family}${sourceFontExt}` };
+				resolved = { ...face, fileName: fontAttachmentFileName(family, sourceFontExt) };
 			}
 
-			for (const name of resolved.names.length > 0 ? resolved.names : instancedFontNames(resolved.family, job.settings.subtitleStyle.bold)) {
+			for (const name of resolved.names.length > 0 ? resolved.names : instancedFontNames(resolved.family, false)) {
 				occupiedFontNames.add(name);
 			}
 			instanceCache.set(cacheKey, resolved);
 			return resolved;
-		}
+		};
 
 		if (!skipSubtitleProcessing) {
 			// Subtitle tracks
@@ -1601,7 +1598,6 @@ export async function encodeJob(
 
 				// Subtitle styling - SRT->ASS conversion and/or ASS dialogue-font restyle.
 				if (job.settings.convertSrtToAss || job.settings.restyleAssFont || job.settings.removeUnusedFonts) {
-					const style = job.settings.subtitleStyle;
 					const targets = new Set(job.settings.assRestyleTargets);
 					const probeFamily = "__RabbitEncoderInjectedFontProbe_4F3A8B__";
 					const probeFamilyNormalized = normalizeFontName(probeFamily);
@@ -1667,9 +1663,9 @@ export async function encodeJob(
 					for (const prepared of preparedAss.values()) {
 						let probeText = prepared.rawText;
 						if (prepared.kind === "converted-srt") {
-							probeText = styleSrtAss(prepared.rawText, { ...style, fontName: probeFamily });
+							probeText = styleSrtAss(prepared.rawText, { ...DEFAULT_STYLE_APPEARANCE, fontName: probeFamily });
 						} else if (prepared.restyle) {
-							probeText = restyleAssDialogueFont(prepared.rawText, { ...style, fontName: probeFamily }, true);
+							probeText = restyleAssDialogueFont(prepared.rawText, { ...DEFAULT_STYLE_APPEARANCE, fontName: probeFamily }, true);
 						}
 						for (const font of extractUsedFonts(probeText)) {
 							if (font !== probeFamilyNormalized) sourceAttachmentUsedFonts.add(font);
@@ -1696,18 +1692,20 @@ export async function encodeJob(
 						if (!prepared) continue;
 
 						if (prepared.kind === "converted-srt") {
-							const face = await applyAxes(fontRegistry.resolve(style.fontName, planned.effectiveLang, prepared.rawText));
-							const family = face?.family ?? style.fontName;
+							const { face: baseFace, appearance } = fontRegistry.resolveFaceAndStyle(job.settings.fontGroup, planned.effectiveLang, prepared.rawText);
+							const face = await applyAxes(baseFace, appearance);
+							const family = face?.family ?? job.settings.fontGroup;
 							const outAss = join(tempDir, `sub_${planned.stream.index}.styled.ass`);
-							writeFileSync(outAss, styleSrtAss(prepared.rawText, { ...style, fontName: family }), "utf-8");
+							writeFileSync(outAss, styleSrtAss(prepared.rawText, { ...appearance, fontName: family }), "utf-8");
 							planned.subFile = outAss;
 							if (face) resolvedFaces.set(face.path, face);
-							if (!face) Logger.warn(`[fonts] No face for family "${style.fontName}" (track ${planned.stream.index}); wrote name without injecting`);
+							if (!face) Logger.warn(`[fonts] No face for group "${job.settings.fontGroup}" (track ${planned.stream.index})`);
 						} else if (prepared.restyle) {
-							const face = await applyAxes(fontRegistry.resolve(style.fontName, planned.effectiveLang, prepared.rawText));
-							const family = face?.family ?? style.fontName;
+							const { face: baseFace, appearance } = fontRegistry.resolveFaceAndStyle(job.settings.fontGroup, planned.effectiveLang, prepared.rawText);
+							const face = await applyAxes(baseFace, appearance);
+							const family = face?.family ?? job.settings.fontGroup;
 							const outAss = join(tempDir, `sub_${planned.stream.index}.styled.ass`);
-							writeFileSync(outAss, restyleAssDialogueFont(prepared.rawText, { ...style, fontName: family }, true), "utf-8");
+							writeFileSync(outAss, restyleAssDialogueFont(prepared.rawText, { ...appearance, fontName: family }, true), "utf-8");
 							planned.subFile = outAss;
 							if (face) resolvedFaces.set(face.path, face);
 						}

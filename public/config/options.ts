@@ -9,6 +9,7 @@ import type {
 	EncoderId,
 	EncoderQuality,
 	EncoderSpeed,
+	StyleAppearance,
 	SubtitleProcessingMode,
 	SubtitleStyle,
 	VideoEncodeMode,
@@ -86,8 +87,7 @@ export const PIPELINE_PRESET_HELP: Record<PipelinePreset, string> = {
 	custom: "Configure each pipeline stage individually below.",
 };
 
-export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
-	fontName: "Noto Sans",
+export const DEFAULT_STYLE_APPEARANCE: StyleAppearance = {
 	fontSize: 80,
 	primaryColour: "&H00FFFFFF",
 	outlineColour: "&H00000000",
@@ -99,7 +99,5 @@ export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
 	marginL: 135,
 	marginR: 135,
 	bold: false,
-	fontAxes: {
-		wght: 700,
-	},
+	fontAxes: { wght: 700 },
 };

@@ -803,7 +803,7 @@ export function renderFontDropdown(container: HTMLElement, value: string, fonts:
 	const label = document.createElement("label");
 	label.className = "toggle-label";
 	const span = document.createElement("span");
-	span.textContent = "Subtitle font\u00A0";
+	span.textContent = "Font group\u00A0";
 	const select = document.createElement("select");
 	select.className = "select-input";
 
@@ -822,7 +822,7 @@ export function renderFontDropdown(container: HTMLElement, value: string, fonts:
 	if (names.length === 0) {
 		const o = document.createElement("option");
 		o.value = "";
-		o.textContent = "No fonts found in /config/fonts";
+		o.textContent = "No font groups found in /config/fonts";
 		select.appendChild(o);
 		select.disabled = true;
 	} else {

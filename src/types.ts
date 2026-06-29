@@ -219,8 +219,8 @@ export interface JobSettings {
 	assRestyleTargets: string[];
 	/** Drop attachment fonts not referenced by any surviving ASS subtitle. Default off. */
 	removeUnusedFonts: boolean;
-	/** Style/font used by convertSrtToAss and restyleAssFont. */
-	subtitleStyle: SubtitleStyle;
+	/** Selected font group (folder label under the user fonts dir). */
+	fontGroup: string;
 	/**
 	 * Ordered list of VapourSynth filter passes to apply during the prepare
 	 * stage, before the FFmpeg -vf chain. Each entry references a preset by

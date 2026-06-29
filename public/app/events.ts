@@ -47,7 +47,7 @@ import { asElementTarget, byId, inputById } from "../shared/dom";
 import { appState } from "../state";
 import { delegateClick } from "../ui/delegate";
 import { dispatchJobAction } from "../ui/job-actions";
-import { closeSubStyleModal, closeSubStyleModalIfOutside, openSubStyleModal } from "../features/sub-style-modal";
+import { closeSubStyleModal, closeSubStyleModalIfOutside, openSubStyleModal, saveCurrentGroupStyle } from "../features/sub-style-modal";
 
 export function getCurrentSettings(): JobSettings | null {
 	if (appState.currentAdvancedTarget === "default") return window._tempDefaults ?? null;
@@ -73,6 +73,7 @@ export function initEventListeners() {
 	byId("close-advanced-done-btn").addEventListener("click", closeAdvancedModal);
 	byId("advanced-modal").addEventListener("click", closeAdvancedModalIfOutside);
 
+	byId("save-sub-style-btn").addEventListener("click", saveCurrentGroupStyle);
 	byId("default-open-sub-style-btn").addEventListener("click", () => openSubStyleModal("default"));
 	byId("job-open-sub-style-btn").addEventListener("click", () => openSubStyleModal("job"));
 	byId("close-sub-style-modal-btn").addEventListener("click", closeSubStyleModal);

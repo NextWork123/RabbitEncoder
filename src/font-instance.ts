@@ -138,6 +138,21 @@ export function instancedFontNames(family: string, styleBold: boolean, postScrip
 }
 
 /**
+ * Build the on-disk / MKV attachment filename for an injected face. libass
+ * matches embedded fonts by their internal name table, not the filename, so the
+ * family ("Noto Sans 2") keeps spaces while the file becomes "noto_sans_2.ttf".
+ * `ext` includes the leading dot.
+ */
+export function fontAttachmentFileName(family: string, ext: string): string {
+	const slug = family
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "");
+	return `${slug || "font"}${ext}`;
+}
+
+/**
  * Pick the first family identity not already present in source attachments or
  * reserved by another injected face:
  *

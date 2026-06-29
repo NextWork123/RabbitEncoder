@@ -8,7 +8,6 @@ import {
 	DEFAULT_AUTO_THRESHOLDS,
 	DEFAULT_GRADFUN_PARAMS,
 	DEFAULT_NLMEANS_PARAMS,
-	DEFAULT_SUBTITLE_STYLE,
 	DENOISE_LEVELS,
 	PIPELINE_PRESETS,
 	PIPELINE_PRESET_HELP,
@@ -84,9 +83,6 @@ export function cloneSettingsForEditing(base: JobSettings, audioBitratesFallback
 		autoDenoiseThresholds: { ...(base.autoDenoiseThresholds || DEFAULT_AUTO_THRESHOLDS) },
 		nlmeansParams: base.nlmeansParams ? JSON.parse(JSON.stringify(base.nlmeansParams)) : JSON.parse(JSON.stringify(DEFAULT_NLMEANS_PARAMS)),
 		gradfunParams: base.gradfunParams ? JSON.parse(JSON.stringify(base.gradfunParams)) : JSON.parse(JSON.stringify(DEFAULT_GRADFUN_PARAMS)),
-		subtitleStyle: base.subtitleStyle
-			? { ...base.subtitleStyle, fontAxes: { ...(base.subtitleStyle.fontAxes ?? {}) } }
-			: { ...DEFAULT_SUBTITLE_STYLE, fontAxes: {} },
 		assRestyleTargets: Array.isArray(base.assRestyleTargets) ? [...base.assRestyleTargets] : ["full", "honorifics", "forced", "sdh", "commentary"],
 		vsFilters: Array.isArray(base.vsFilters) ? JSON.parse(JSON.stringify(base.vsFilters)) : [],
 	};

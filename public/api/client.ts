@@ -1,5 +1,5 @@
 import Blake2b from "@rabbit-company/blake2b";
-import type { FontAxis, Job, JobSettings, PreviewState, VsFilterEntry, VsPresetManifest } from "../types";
+import type { FontAxis, GroupStyleConfig, Job, JobSettings, PreviewState, StyleAppearance, VsFilterEntry, VsPresetManifest } from "../types";
 import type { BenchmarkState, FetchOptions, GpuDevice, SystemStats } from "../ui/models";
 import { API } from "../config/api-base";
 import { startPolling, stopPolling } from "../features/polling";
@@ -155,6 +155,31 @@ export async function fetchFontFace(family: string, fileName: string): Promise<B
 	const res = await authFetch(`${API}/api/fonts/face/${encodeURIComponent(family)}/${encodeURIComponent(fileName)}`);
 	if (!res.ok) throw new Error("Font fetch failed");
 	return res.blob();
+}
+
+export interface GroupStyleResponse {
+	style: Partial<StyleAppearance>;
+	overrides: Record<string, Partial<StyleAppearance>>;
+	keys: string[];
+}
+
+export async function fetchGroupStyle(label: string): Promise<GroupStyleResponse> {
+	const res = await authFetch(`${API}/api/fonts/${encodeURIComponent(label)}/style`);
+	if (!res.ok) return { style: {}, overrides: {}, keys: [] };
+	return res.json();
+}
+
+export async function saveGroupStyle(label: string, cfg: GroupStyleConfig): Promise<boolean> {
+	try {
+		const res = await authFetch(`${API}/api/fonts/${encodeURIComponent(label)}/style`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(cfg),
+		});
+		return res.ok;
+	} catch {
+		return false;
+	}
 }
 
 export async function fetchQueueState(): Promise<{ paused: boolean }> {

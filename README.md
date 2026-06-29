@@ -46,8 +46,8 @@ Settings are configurable via environment variables in `docker-compose.yml`:
 | `OUTPUT_DIR`           | `/data/output`                | Encoded output directory                                         |
 | `TEMP_DIR`             | `/data/temp`                  | Temporary encode and preview files                               |
 | `LIBRARY_DIRS`         | empty                         | Comma-separated mounted library roots                            |
-| `FONTS_STOCK_DIR`      | `/app/fonts`                  | Built-in font directory                                          |
-| `FONTS_USER_DIR`       | `/config/fonts`               | User font directory                                              |
+| `FONTS_STOCK_DIR`      | `/app/fonts`                  | Seed font groups copied into the user dir on first start         |
+| `FONTS_USER_DIR`       | `/config/fonts`               | User font groups (read/write; the only directory scanned)        |
 | `VS_PRESETS_STOCK_DIR` | `/app/vapoursynth/presets`    | Built-in VapourSynth preset directory                            |
 | `VS_PRESETS_USER_DIR`  | `/config/vapoursynth/presets` | User VapourSynth preset directory                                |
 | `VS_RABBIT_MODULE_DIR` | `/app/vapoursynth`            | Rabbit Encoder VapourSynth helper-module directory               |
@@ -122,31 +122,76 @@ The VapourSynth chain is stored per job, so different files in the same queue ca
 
 ## Subtitle Fonts
 
-Rabbit Encoder can choose different files from one configured font family according to subtitle language and detected script. This allows a family to provide separate Latin, Arabic, Thai, Simplified Chinese, Traditional Chinese, and other script-specific faces.
+Subtitles are styled per **font group**. A group is a folder under the user fonts
+directory (`/config/fonts`) containing one or more font files plus an optional
+`metadata.json`. A single group can supply different faces for different writing
+systems. For example a Latin-only face like Trebuchet MS together with a CJK
+face like Noto Sans JP - so one group can cover scripts no single font does.
 
-Variable-font axes such as `wght` are converted into static font instances before attachment. Axis values are not included in visible attachment names or ASS family names.
+`Noto Sans` and `Noto Serif` ship with Rabbit Encoder and are seeded into
+`/config/fonts` on first start if they are not already present, so they are
+editable in place.
 
-When a retained source font already uses the selected internal family name, Rabbit Encoder chooses the first available numbered alias:
+### metadata.json
 
-- `Noto Sans`
-- `Noto Sans 2`
-- `Noto Sans 3`
-
-The selected alias is written consistently to the static font's internal metadata, the MKV attachment filename, and the ASS styles Rabbit Encoder rewrites.
-
-With **Remove unused fonts** enabled, source attachments are retained only when surviving untouched ASS styles or inline `\fn` overrides still reference them. A source font used only by dialogue that Rabbit Encoder restyles does not cause the original attachment to be kept.
-
-### ASS PlayRes scaling
-
-Configured subtitle dimensions are authored in 1920×1080 space. When Rabbit Encoder restyles an existing ASS file, it preserves that file's original `PlayResX` and `PlayResY` and scales pixel-based values into the script's coordinate system.
-
-For example, a configured 64 px font becomes 21.333 in a script using `PlayResY: 360`:
-
-```text
-64 × 360 / 1080 = 21.333
+```jsonc
+{
+	"label": "Anime old",
+	"faces": {
+		"trebuchet.ttf": { "keys": ["latin"] },
+		"noto_jp.ttf": { "keys": ["japanese", "jpn"] },
+	},
+	"style": {
+		// group-global appearance (1080p px)
+		"fontSize": 80,
+		"outline": 4,
+		"shadow": 1.5,
+		"marginV": 50,
+		"marginL": 135,
+		"marginR": 135,
+		"alignment": 2,
+		"bold": false,
+		"primaryColour": "&H00FFFFFF",
+		"outlineColour": "&H00000000",
+		"backColour": "&H80000000",
+	},
+	"overrides": {
+		"jpn": { "fontSize": 72, "marginV": 60, "fontAxes": { "wght": 600 } },
+		"japanese": { "fontSize": 74 },
+		"latin": { "fontAxes": {} },
+	},
+}
 ```
 
-When rendered over a 1080p video, libass scales it back to approximately the configured 64 px size. Font size, outline, shadow, and margins use the same PlayRes-aware scaling.
+For each subtitle track, the face and the appearance are both resolved by the
+track's language tag and the detected writing system, in this order:
+
+1. a `keys`/`overrides` entry matching the **language code** (e.g. `jpn`, `de`),
+2. then the **writing system** (e.g. `latin`, `japanese`, `cjk`),
+3. then the group-global `style`,
+4. then the built-in defaults.
+
+The family name written into the ASS is taken from the resolved face, so
+`style`/`overrides` only carry appearance (size, outline, shadow, margins,
+colours, alignment, bold, and variable-font axes). Because axes are face-specific,
+they belong in the per-key override for that face (a static Latin face has none;
+a variable CJK face can pin `wght`).
+
+You can edit a group's style from the dashboard ("Font group & style…"), choosing
+a scope of "Group global" or a specific script/language; saving writes back to the
+group's `metadata.json`. Click **Reload fonts** (or `POST /api/fonts/reload`) after
+hand-editing files on disk.
+
+Variable-font axes are instanced into static fonts before attachment. When a
+retained source font already uses the selected internal family name, Rabbit
+Encoder picks the first free numbered alias (`Noto Sans` → `Noto Sans 2` →
+`Noto Sans 3`), written consistently into the static font's internal metadata and
+the ASS styles it rewrites. The attachment **filename** is slugified
+(`Noto Sans 2` -> `noto_sans_2.ttf`); the internal family name keeps its spaces,
+so rendering is unaffected.
+
+With **Remove unused fonts** enabled, source attachments are kept only when
+surviving untouched ASS styles or inline `\fn` overrides still reference them.
 
 ## Output Naming
 
@@ -210,6 +255,10 @@ The format is versioned with an `RE<n>` prefix, so older codes continue to work 
 | `GET`    | `/api/queue`                                | Get queue state (paused or running)                                            |
 | `POST`   | `/api/queue/pause`                          | Pause encoding - stops current encode, preserves queue                         |
 | `POST`   | `/api/queue/resume`                         | Resume encoding from where it was paused                                       |
+| `GET`    | `/api/fonts`                                | List font groups and their faces                                               |
+| `POST`   | `/api/fonts/reload`                         | Rescan the user fonts directory and reload the registry                        |
+| `GET`    | `/api/fonts/:label/style`                   | Get a group's style (group-global + per-language/script overrides)             |
+| `PUT`    | `/api/fonts/:label/style`                   | Save a group's style into its `metadata.json` (user fonts dir)                 |
 | `GET`    | `/api/system`                               | Current system resource usage (CPU, RAM, temp-partition disk, network, GPU)    |
 | `GET`    | `/api/opencl-devices`                       | List available OpenCL devices                                                  |
 | `GET`    | `/api/vulkan-devices`                       | List available Vulkan devices                                                  |

@@ -1,10 +1,11 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { join, extname, basename } from "path";
 import { run } from "./process";
 import { Logger } from "./logger";
 import { normalizeFontName } from "./ass-classifier";
 import { detectScript, extractDialogueText, faceCandidateKeys } from "./script-detect";
 import { readFontAxes, type FontAxis } from "./font-instance";
+import { resolveStyleAppearance, type GroupStyleConfig, type StyleAppearance } from "./subtitle-style";
 
 const FONT_EXTS = new Set([".ttf", ".otf", ".ttc", ".otc"]);
 
@@ -25,6 +26,7 @@ export interface FontFamily {
 	label: string; // dropdown label = folder name (or internal family for a loose file)
 	dir: string | null;
 	faces: FontFace[];
+	style?: GroupStyleConfig;
 }
 export interface ResolvedFace {
 	family: string;
@@ -61,6 +63,8 @@ async function scanFontNames(p: string, signal?: AbortSignal): Promise<{ family:
 interface Metadata {
 	label?: string;
 	faces?: Record<string, { family?: string; keys?: string[] }>;
+	style?: GroupStyleConfig["style"];
+	overrides?: GroupStyleConfig["overrides"];
 }
 
 async function buildFace(path: string, stemKey: string, meta: Metadata | null, signal?: AbortSignal): Promise<FontFace> {
@@ -80,19 +84,37 @@ class FontRegistry {
 	private userDir = "/config/fonts";
 	private families: FontFamily[] = [];
 
-	configure(stockDir: string, userDir: string): void {
-		this.stockDir = stockDir;
+	configure(seedDir: string, userDir: string): void {
+		this.stockDir = seedDir;
 		this.userDir = userDir;
+	}
+
+	/** Copy shipped groups into the user dir if missing. First-run only. */
+	seed(names: string[]): void {
+		if (!existsSync(this.userDir)) {
+			try {
+				mkdirSync(this.userDir, { recursive: true });
+			} catch {}
+		}
+		for (const name of names) {
+			const dst = join(this.userDir, name);
+			const src = join(this.stockDir, name);
+			if (existsSync(dst) || !existsSync(src)) continue;
+			try {
+				cpSync(src, dst, { recursive: true });
+				Logger.info(`[fonts] Seeded "${name}" into ${this.userDir}`);
+			} catch (err: any) {
+				Logger.warn(`[fonts] Failed to seed "${name}": ${err?.message || err}`);
+			}
+		}
 	}
 
 	async reload(signal?: AbortSignal): Promise<void> {
 		const byLabel = new Map<string, FontFamily>();
-		for (const fam of await this.scanDir(this.stockDir, "stock", signal)) byLabel.set(fam.label, fam);
 		for (const fam of await this.scanDir(this.userDir, "user", signal)) byLabel.set(fam.label, fam);
 		this.families = [...byLabel.values()];
-
 		const faceCount = this.families.reduce((n, f) => n + f.faces.length, 0);
-		Logger.info(`[fonts] Loaded ${this.families.length} font famil(ies), ${faceCount} face(s) (stock: ${this.stockDir}, user: ${this.userDir})`);
+		Logger.info(`[fonts] Loaded ${this.families.length} font group(s), ${faceCount} face(s) from ${this.userDir}`);
 	}
 
 	private async scanDir(dir: string, origin: "stock" | "user", signal?: AbortSignal): Promise<FontFamily[]> {
@@ -131,7 +153,14 @@ class FontRegistry {
 					if (!FONT_EXTS.has(extname(f).toLowerCase())) continue;
 					faces.push(await buildFace(join(full, f), basename(f, extname(f)), meta, signal));
 				}
-				if (faces.length) families.push({ label: meta?.label || entry, dir: full, faces });
+				if (faces.length) {
+					families.push({
+						label: meta?.label || entry,
+						dir: full,
+						faces,
+						style: meta ? { style: meta.style, overrides: meta.overrides } : undefined,
+					});
+				}
 			} else if (FONT_EXTS.has(extname(entry).toLowerCase())) {
 				const face = await buildFace(full, "default", null, signal);
 				families.push({ label: face.family, dir: null, faces: [face] });
@@ -168,6 +197,61 @@ class FontRegistry {
 		}
 		const f = fam.faces[0]!;
 		return { family: f.family, names: f.names, path: f.path, fileName: f.fileName, mime: f.mime, axes: f.axes };
+	}
+
+	private toResolved(f: FontFace): ResolvedFace {
+		return { family: f.family, names: f.names, path: f.path, fileName: f.fileName, mime: f.mime, axes: f.axes };
+	}
+
+	/** Resolve face + appearance together (one script detection). */
+	resolveFaceAndStyle(label: string, langCode: string | undefined, text: string): { face: ResolvedFace | null; appearance: StyleAppearance } {
+		const fam = this.findFamily(label);
+		const script = detectScript(extractDialogueText(text));
+		const appearance = resolveStyleAppearance(fam?.style ?? null, langCode, script);
+		let face: ResolvedFace | null = null;
+		if (fam && fam.faces.length > 0) {
+			for (const cand of faceCandidateKeys(langCode, script)) {
+				const hit = fam.faces.find((f) => f.keys.includes(cand));
+				if (hit) {
+					face = this.toResolved(hit);
+					break;
+				}
+			}
+			if (!face) face = this.toResolved(fam.faces[0]!);
+		}
+		return { face, appearance };
+	}
+
+	/** Stored appearance config for a group (for the style editor API). */
+	getGroupStyle(label: string): GroupStyleConfig {
+		return this.findFamily(label)?.style ?? {};
+	}
+
+	/** Persist appearance into <userDir>/<label>/metadata.json, preserving faces/label. */
+	saveGroupStyle(label: string, cfg: GroupStyleConfig): boolean {
+		const fam = this.findFamily(label);
+		const dir = join(this.userDir, label);
+		let meta: Metadata = {};
+		const userMeta = join(dir, "metadata.json");
+		const stockMeta = fam?.dir ? join(fam.dir, "metadata.json") : "";
+		for (const p of [userMeta, stockMeta]) {
+			if (p && existsSync(p)) {
+				try {
+					meta = JSON.parse(readFileSync(p, "utf-8"));
+					break;
+				} catch {}
+			}
+		}
+		meta.style = cfg.style;
+		meta.overrides = cfg.overrides;
+		try {
+			if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+			writeFileSync(userMeta, JSON.stringify(meta, null, "\t"), "utf-8");
+			return true;
+		} catch (err: any) {
+			Logger.warn(`[fonts] Failed to save style for "${label}": ${err?.message || err}`);
+			return false;
+		}
 	}
 
 	mime = mimeForFont;
