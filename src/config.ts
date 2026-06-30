@@ -104,6 +104,11 @@ export async function loadConfig(): Promise<AppConfig> {
 		.map((d) => d.trim())
 		.filter((d) => d.length > 0);
 
+	const systemFontDirs = (process.env.SYSTEM_FONTS_DIRS || "/system-fonts")
+		.split(",")
+		.map((d) => d.trim())
+		.filter((d) => d.length > 0);
+
 	return {
 		inputDir: process.env.INPUT_DIR || "/data/input",
 		outputDir: process.env.OUTPUT_DIR || "/data/output",
@@ -113,6 +118,7 @@ export async function loadConfig(): Promise<AppConfig> {
 		port: parseInt(process.env.PORT || "3000"),
 		organization: process.env.ORGANIZATION || "RabbitCompany",
 		libraryDirs,
+		systemFontDirs,
 		languageDetector: { version: await getLanguageDetectorVersion() },
 		defaults: getDefaultJobSettings(),
 	};

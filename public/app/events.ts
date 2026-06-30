@@ -47,6 +47,7 @@ import { asElementTarget, byId, inputById } from "../shared/dom";
 import { appState } from "../state";
 import { delegateClick } from "../ui/delegate";
 import { dispatchJobAction } from "../ui/job-actions";
+import { openFontGroupsModal, closeFontGroupsModal, closeFontGroupsModalIfOutside } from "../features/font-groups-modal";
 import { closeSubStyleModal, closeSubStyleModalIfOutside, openSubStyleModal, saveCurrentGroupStyle } from "../features/sub-style-modal";
 
 export function getCurrentSettings(): JobSettings | null {
@@ -79,6 +80,12 @@ export function initEventListeners() {
 	byId("close-sub-style-modal-btn").addEventListener("click", closeSubStyleModal);
 	byId("close-sub-style-done-btn").addEventListener("click", closeSubStyleModal);
 	byId("sub-style-modal").addEventListener("click", closeSubStyleModalIfOutside);
+
+	byId("default-open-font-groups-btn").addEventListener("click", openFontGroupsModal);
+	byId("job-open-font-groups-btn").addEventListener("click", openFontGroupsModal);
+	byId("close-font-groups-modal-btn").addEventListener("click", closeFontGroupsModal);
+	byId("close-font-groups-done-btn").addEventListener("click", closeFontGroupsModal);
+	byId("font-groups-modal").addEventListener("click", closeFontGroupsModalIfOutside);
 
 	byId("vs-reload-btn").onclick = async () => {
 		await reloadVsPresets();

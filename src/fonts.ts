@@ -1,5 +1,5 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
-import { join, extname, basename } from "path";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "fs";
+import { join, extname, basename, relative, resolve } from "path";
 import { run } from "./process";
 import { Logger } from "./logger";
 import { normalizeFontName } from "./ass-classifier";
@@ -153,7 +153,7 @@ class FontRegistry {
 					if (!FONT_EXTS.has(extname(f).toLowerCase())) continue;
 					faces.push(await buildFace(join(full, f), basename(f, extname(f)), meta, signal));
 				}
-				if (faces.length) {
+				if (faces.length || meta) {
 					families.push({
 						label: meta?.label || entry,
 						dir: full,
@@ -252,6 +252,161 @@ class FontRegistry {
 			Logger.warn(`[fonts] Failed to save style for "${label}": ${err?.message || err}`);
 			return false;
 		}
+	}
+
+	// group management
+
+	getUserDir(): string {
+		return this.userDir;
+	}
+
+	/** Resolve <userDir>/<label>, rejecting traversal / nested paths. */
+	private safeGroupDir(label: string): string | null {
+		const name = label.trim();
+		if (!name || name.startsWith(".") || name.includes("/") || name.includes("\\")) return null;
+		const dir = join(this.userDir, name);
+		const rel = relative(this.userDir, dir);
+		if (!rel || rel.startsWith("..") || rel.includes("/") || rel.includes("\\")) return null;
+		return dir;
+	}
+
+	private readMeta(dir: string): Metadata {
+		const p = join(dir, "metadata.json");
+		if (existsSync(p)) {
+			try {
+				return JSON.parse(readFileSync(p, "utf-8"));
+			} catch {}
+		}
+		return {};
+	}
+
+	private writeMeta(dir: string, meta: Metadata): boolean {
+		try {
+			if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+			writeFileSync(join(dir, "metadata.json"), JSON.stringify(meta, null, "\t"), "utf-8");
+			return true;
+		} catch (err: any) {
+			Logger.warn(`[fonts] Failed to write metadata in ${dir}: ${err?.message || err}`);
+			return false;
+		}
+	}
+
+	createGroup(label: string): { ok: boolean; error?: string } {
+		const name = label.trim();
+		const dir = this.safeGroupDir(name);
+		if (!dir) return { ok: false, error: "Invalid group name" };
+		if (existsSync(dir)) return { ok: false, error: "A group with that name already exists" };
+		try {
+			mkdirSync(dir, { recursive: true });
+		} catch (err: any) {
+			return { ok: false, error: err?.message || "mkdir failed" };
+		}
+		this.writeMeta(dir, { label: name });
+		return { ok: true };
+	}
+
+	renameGroup(oldLabel: string, newLabel: string): { ok: boolean; error?: string } {
+		const fam = this.findFamily(oldLabel);
+		if (!fam || !fam.dir) return { ok: false, error: "Group not found or not editable" };
+		const name = newLabel.trim();
+		if (name === oldLabel) return { ok: true };
+		const newDir = this.safeGroupDir(name);
+		if (!newDir) return { ok: false, error: "Invalid group name" };
+		if (existsSync(newDir)) return { ok: false, error: "A group with that name already exists" };
+		try {
+			renameSync(fam.dir, newDir);
+		} catch (err: any) {
+			return { ok: false, error: err?.message || "rename failed" };
+		}
+		const meta = this.readMeta(newDir);
+		meta.label = name;
+		this.writeMeta(newDir, meta);
+		return { ok: true };
+	}
+
+	deleteGroup(label: string): { ok: boolean; error?: string } {
+		const fam = this.findFamily(label);
+		if (!fam || !fam.dir) return { ok: false, error: "Group not found or not editable" };
+		// Guard: only delete inside userDir.
+		const guard = this.safeGroupDir(basename(fam.dir));
+		if (!guard || resolve(guard) !== resolve(fam.dir)) return { ok: false, error: "Refusing to delete outside the user fonts dir" };
+		try {
+			rmSync(fam.dir, { recursive: true, force: true });
+		} catch (err: any) {
+			return { ok: false, error: err?.message || "delete failed" };
+		}
+		return { ok: true };
+	}
+
+	/** Copy a host font file into the group and record its keys. Never writes to the source. */
+	async importFace(label: string, sourcePath: string, keys: string[]): Promise<{ ok: boolean; fileName?: string; error?: string }> {
+		const fam = this.findFamily(label);
+		const dir = fam?.dir ?? this.safeGroupDir(label);
+		if (!dir) return { ok: false, error: "Group not found or not editable" };
+		const ext = extname(sourcePath).toLowerCase();
+		if (!FONT_EXTS.has(ext)) return { ok: false, error: "Not a font file" };
+		if (!existsSync(sourcePath)) return { ok: false, error: "Source font no longer exists" };
+		if (!existsSync(dir)) {
+			try {
+				mkdirSync(dir, { recursive: true });
+			} catch {}
+		}
+		let fileName = basename(sourcePath);
+		if (existsSync(join(dir, fileName))) {
+			const stem = basename(fileName, ext);
+			let n = 2;
+			while (existsSync(join(dir, `${stem}_${n}${ext}`))) n++;
+			fileName = `${stem}_${n}${ext}`;
+		}
+		try {
+			copyFileSync(sourcePath, join(dir, fileName));
+		} catch (err: any) {
+			return { ok: false, error: err?.message || "copy failed" };
+		}
+		const meta = this.readMeta(dir);
+		meta.faces ??= {};
+		meta.faces[fileName] = { ...(meta.faces[fileName] ?? {}), keys: this.cleanKeys(keys) };
+		this.writeMeta(dir, meta);
+		return { ok: true, fileName };
+	}
+
+	deleteFace(label: string, fileName: string): { ok: boolean; error?: string } {
+		const fam = this.findFamily(label);
+		if (!fam || !fam.dir) return { ok: false, error: "Group not found or not editable" };
+		const safeName = basename(fileName);
+		if (safeName !== fileName) return { ok: false, error: "Invalid file name" };
+		const target = join(fam.dir, safeName);
+		if (!existsSync(target)) return { ok: false, error: "Font not found in group" };
+		try {
+			rmSync(target, { force: true });
+		} catch (err: any) {
+			return { ok: false, error: err?.message || "delete failed" };
+		}
+		const meta = this.readMeta(fam.dir);
+		if (meta.faces?.[safeName]) {
+			delete meta.faces[safeName];
+			this.writeMeta(fam.dir, meta);
+		}
+		return { ok: true };
+	}
+
+	setFaceKeys(label: string, fileName: string, keys: string[], family?: string): { ok: boolean; error?: string } {
+		const fam = this.findFamily(label);
+		if (!fam || !fam.dir) return { ok: false, error: "Group not found or not editable" };
+		const safeName = basename(fileName);
+		if (!fam.faces.some((f) => f.fileName === safeName)) return { ok: false, error: "Font not found in group" };
+		const meta = this.readMeta(fam.dir);
+		meta.faces ??= {};
+		const entry: { family?: string; keys?: string[] } = { ...(meta.faces[safeName] ?? {}), keys: this.cleanKeys(keys) };
+		if (family && family.trim()) entry.family = family.trim();
+		else delete entry.family;
+		meta.faces[safeName] = entry;
+		this.writeMeta(fam.dir, meta);
+		return { ok: true };
+	}
+
+	private cleanKeys(keys: string[]): string[] {
+		return [...new Set(keys.map((k) => k.trim().toLowerCase()).filter(Boolean))];
 	}
 
 	mime = mimeForFont;

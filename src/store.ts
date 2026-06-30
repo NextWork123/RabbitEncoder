@@ -688,3 +688,23 @@ export function clearPreviewFor(jobId: string): void {
 	previews.delete(jobId);
 	deletePreviewDir(appConfig, jobId);
 }
+
+/** Repoint any saved `fontGroup` reference (defaults + every job) after a group rename. */
+export function renameFontGroupReferences(oldLabel: string, newLabel: string): number {
+	let count = 0;
+	if (appConfig.defaults.fontGroup === oldLabel) {
+		appConfig.defaults.fontGroup = newLabel;
+		count++;
+	}
+	for (const job of jobs.values()) {
+		if (job.settings.fontGroup === oldLabel) {
+			job.settings.fontGroup = newLabel;
+			count++;
+		}
+	}
+	if (count > 0) {
+		saveSettings();
+		saveQueue();
+	}
+	return count;
+}

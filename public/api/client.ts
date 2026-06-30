@@ -182,6 +182,78 @@ export async function saveGroupStyle(label: string, cfg: GroupStyleConfig): Prom
 	}
 }
 
+export interface SystemFont {
+	path: string;
+	fileName: string;
+	family: string;
+}
+export interface SystemFontsResponse {
+	roots: string[];
+	fonts: SystemFont[];
+	enabled: boolean;
+}
+
+export async function fetchSystemFonts(): Promise<SystemFontsResponse> {
+	try {
+		const res = await authFetch(`${API}/api/system-fonts`);
+		return await res.json();
+	} catch {
+		return { roots: [], fonts: [], enabled: false };
+	}
+}
+
+export async function createFontGroup(label: string): Promise<{ ok: boolean; error?: string }> {
+	const res = await authFetch(`${API}/api/fonts/groups`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ label }),
+	});
+	const data = await res.json().catch(() => ({}));
+	return res.ok ? { ok: true } : { ok: false, error: data?.error };
+}
+
+export async function renameFontGroup(oldLabel: string, label: string): Promise<{ ok: boolean; error?: string; updatedReferences?: number }> {
+	const res = await authFetch(`${API}/api/fonts/groups/${encodeURIComponent(oldLabel)}`, {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ label }),
+	});
+	const data = await res.json().catch(() => ({}));
+	return res.ok ? { ok: true, updatedReferences: data?.updatedReferences } : { ok: false, error: data?.error };
+}
+
+export async function deleteFontGroup(label: string): Promise<{ ok: boolean; error?: string }> {
+	const res = await authFetch(`${API}/api/fonts/groups/${encodeURIComponent(label)}`, { method: "DELETE" });
+	const data = await res.json().catch(() => ({}));
+	return res.ok ? { ok: true } : { ok: false, error: data?.error };
+}
+
+export async function importFontFace(label: string, source: string, keys: string[]): Promise<{ ok: boolean; error?: string; fileName?: string }> {
+	const res = await authFetch(`${API}/api/fonts/groups/${encodeURIComponent(label)}/faces`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ source, keys }),
+	});
+	const data = await res.json().catch(() => ({}));
+	return res.ok ? { ok: true, fileName: data?.fileName } : { ok: false, error: data?.error };
+}
+
+export async function updateFontFace(label: string, file: string, keys: string[], family?: string): Promise<{ ok: boolean; error?: string }> {
+	const res = await authFetch(`${API}/api/fonts/groups/${encodeURIComponent(label)}/faces/${encodeURIComponent(file)}`, {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ keys, family }),
+	});
+	const data = await res.json().catch(() => ({}));
+	return res.ok ? { ok: true } : { ok: false, error: data?.error };
+}
+
+export async function deleteFontFace(label: string, file: string): Promise<{ ok: boolean; error?: string }> {
+	const res = await authFetch(`${API}/api/fonts/groups/${encodeURIComponent(label)}/faces/${encodeURIComponent(file)}`, { method: "DELETE" });
+	const data = await res.json().catch(() => ({}));
+	return res.ok ? { ok: true } : { ok: false, error: data?.error };
+}
+
 export async function fetchQueueState(): Promise<{ paused: boolean }> {
 	const res = await authFetch(`${API}/api/queue`);
 	return res.json();

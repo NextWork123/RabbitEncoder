@@ -304,6 +304,7 @@
 								</div>
 								<div class="setting-group">
 									<button class="btn btn-ghost" type="button" id="default-open-sub-style-btn">Subtitle font &amp; style…</button>
+									<button class="btn btn-ghost" type="button" id="default-open-font-groups-btn">Manage font groups…</button>
 								</div>
 							</div>
 						</details>
@@ -536,6 +537,7 @@
 								</div>
 								<div class="setting-group">
 									<button class="btn btn-ghost" type="button" id="job-open-sub-style-btn">Subtitle font &amp; style…</button>
+									<button class="btn btn-ghost" type="button" id="job-open-font-groups-btn">Manage font groups…</button>
 								</div>
 							</div>
 						</details>
@@ -880,6 +882,25 @@
 						<span class="modal-note" id="sub-style-status"></span>
 						<button class="btn btn-ghost" id="close-sub-style-done-btn">Done</button>
 						<button class="btn btn-primary" id="save-sub-style-btn">Save group style</button>
+					</div>
+				</div>
+			</div>
+
+			<!-- Font Groups Modal -->
+			<div id="font-groups-modal" class="modal-overlay" style="display: none">
+				<div class="modal modal-wide">
+					<div class="modal-header">
+						<h2 id="font-groups-modal-title">Manage font groups</h2>
+						<button class="btn-close" id="close-font-groups-modal-btn">&times;</button>
+					</div>
+					<div class="modal-body">
+						<div class="setting-group" id="fg-group-bar"></div>
+						<div class="setting-group" id="fg-faces"></div>
+						<div class="setting-group" id="fg-import"></div>
+					</div>
+					<div class="modal-footer">
+						<span class="modal-note" id="fg-status"></span>
+						<button class="btn btn-primary" id="close-font-groups-done-btn">Done</button>
 					</div>
 				</div>
 			</div>

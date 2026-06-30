@@ -335,6 +335,7 @@ export interface AppConfig {
 	defaults: JobSettings;
 	organization: string;
 	libraryDirs: string[];
+	systemFontDirs: string[];
 	languageDetector: LanguageDetector;
 }
 

@@ -2891,3 +2891,53 @@ code {
 		padding: 8px 16px;
 	}
 }
+
+.fg-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-bottom: 8px;
+}
+.fg-section-title {
+	font-size: 0.8rem;
+	font-weight: 600;
+	color: var(--text-1);
+	margin: 14px 0 6px;
+}
+.fg-face-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px;
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-sm);
+	margin-bottom: 6px;
+	flex-wrap: wrap;
+}
+.fg-face-info {
+	display: flex;
+	flex-direction: column;
+	min-width: 160px;
+	flex: 1;
+}
+.fg-face-family {
+	font-size: 0.85rem;
+	font-weight: 600;
+	color: var(--text-0);
+}
+.fg-face-file {
+	font-family: var(--font-mono);
+	font-size: 0.7rem;
+	color: var(--text-2);
+}
+.fg-keys-input {
+	min-width: 140px;
+}
+.fg-import-row .fg-import-font {
+	min-width: 220px;
+	flex: 1;
+}
+.fg-danger {
+	color: var(--red);
+}

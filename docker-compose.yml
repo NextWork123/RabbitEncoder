@@ -13,6 +13,8 @@ services:
       - ./temp:/data/temp
       - ./fonts-user:/config/fonts
       - ./vapoursynth-user:/config/vapoursynth
+      # Mount a host font directory read-only to import fonts into groups
+      # - /usr/share/fonts:/system-fonts:ro
       # Mount your media library folders for in-place encoding
       # - /mnt/HDD/media/Animes:/Animes
       # - /mnt/HDD/media/Shows:/Shows

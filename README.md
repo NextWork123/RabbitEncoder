@@ -48,6 +48,7 @@ Settings are configurable via environment variables in `docker-compose.yml`:
 | `LIBRARY_DIRS`         | empty                         | Comma-separated mounted library roots                            |
 | `FONTS_STOCK_DIR`      | `/app/fonts`                  | Seed font groups copied into the user dir on first start         |
 | `FONTS_USER_DIR`       | `/config/fonts`               | User font groups (read/write; the only directory scanned)        |
+| `SYSTEM_FONTS_DIRS`    | `/system-fonts`               | Read-only host font dirs, browsable to import fonts into groups  |
 | `VS_PRESETS_STOCK_DIR` | `/app/vapoursynth/presets`    | Built-in VapourSynth preset directory                            |
 | `VS_PRESETS_USER_DIR`  | `/config/vapoursynth/presets` | User VapourSynth preset directory                                |
 | `VS_RABBIT_MODULE_DIR` | `/app/vapoursynth`            | Rabbit Encoder VapourSynth helper-module directory               |
@@ -177,10 +178,22 @@ colours, alignment, bold, and variable-font axes). Because axes are face-specifi
 they belong in the per-key override for that face (a static Latin face has none;
 a variable CJK face can pin `wght`).
 
-You can edit a group's style from the dashboard ("Font group & style…"), choosing
-a scope of "Group global" or a specific script/language; saving writes back to the
-group's `metadata.json`. Click **Reload fonts** (or `POST /api/fonts/reload`) after
-hand-editing files on disk.
+You can manage font groups entirely from the dashboard ("Manage font groups..."):
+create, rename, and delete groups, edit each face's `keys`, and remove faces. All
+changes are written to `/config/fonts` and the registry is reloaded automatically.
+Renaming a group also repoints the `fontGroup` reference in your default settings
+and in every queued job, so existing selections aren't orphaned.
+
+If you mount a host font directory read-only, those
+fonts become selectable in the import dropdown: pick a font, choose a writing
+system (Latin, Japanese, Cyrillic, ...) or type extra language keys, and click
+**Import** to copy it into the selected group with those `keys`. The host mount is
+never written to - import always copies into `/config/fonts`.
+
+You can still edit a group's style from the dashboard ("Subtitle font & style..."),
+choosing a scope of "Group global" or a specific script/language; saving writes
+back to the group's `metadata.json`. Click **Reload fonts** (or
+`POST /api/fonts/reload`) after hand-editing files on disk.
 
 Variable-font axes are instanced into static fonts before attachment. When a
 retained source font already uses the selected internal family name, Rabbit
@@ -259,6 +272,14 @@ The format is versioned with an `RE<n>` prefix, so older codes continue to work 
 | `POST`   | `/api/fonts/reload`                         | Rescan the user fonts directory and reload the registry                        |
 | `GET`    | `/api/fonts/:label/style`                   | Get a group's style (group-global + per-language/script overrides)             |
 | `PUT`    | `/api/fonts/:label/style`                   | Save a group's style into its `metadata.json` (user fonts dir)                 |
+| `PUT`    | `/api/fonts/:label/style`                   | Save a group's style into its `metadata.json` (user fonts dir)                 |
+| `GET`    | `/api/system-fonts`                         | List importable fonts under the read-only host font directories                |
+| `POST`   | `/api/fonts/groups`                         | Create a new font group folder under the user fonts dir (`{ label }`)          |
+| `PATCH`  | `/api/fonts/groups/:label`                  | Rename a group (folder + label) and repoint defaults and all jobs              |
+| `DELETE` | `/api/fonts/groups/:label`                  | Delete a font group folder and its contents                                    |
+| `POST`   | `/api/fonts/groups/:label/faces`            | Import a host font into the group with writing-system / language keys          |
+| `PATCH`  | `/api/fonts/groups/:label/faces/:file`      | Update a face's keys / family override in the group's `metadata.json`          |
+| `DELETE` | `/api/fonts/groups/:label/faces/:file`      | Remove a font file from the group and its metadata entry                       |
 | `GET`    | `/api/system`                               | Current system resource usage (CPU, RAM, temp-partition disk, network, GPU)    |
 | `GET`    | `/api/opencl-devices`                       | List available OpenCL devices                                                  |
 | `GET`    | `/api/vulkan-devices`                       | List available Vulkan devices                                                  |
