@@ -1,0 +1,78 @@
+import { describe, expect, it } from "bun:test";
+import { buildSubtitleTrackName, extractGroupFromTitle } from "../src/tracks";
+
+describe("extractGroupFromTitle — pipe-separated", () => {
+	it("takes the group after the pipe, before credits", () => {
+		expect(extractGroupFromTitle("Full Subtitles | Static-Subs (Doki/deanzel edit)")).toBe("Static-Subs");
+		expect(extractGroupFromTitle("Signs/Songs | Sentai Filmworks")).toBe("Sentai Filmworks");
+		expect(extractGroupFromTitle("Subtitles | BlubberSubs (???/Mysteria edit)")).toBe("BlubberSubs");
+	});
+});
+
+describe("extractGroupFromTitle — @-separated", () => {
+	it("takes the group after the last @", () => {
+		expect(extractGroupFromTitle("Full Sub@Kaleido-subs")).toBe("Kaleido-subs");
+		expect(extractGroupFromTitle("Dialogue@GJM")).toBe("GJM");
+	});
+
+	it("strips a trailing bracket/credit block after the @ group", () => {
+		expect(extractGroupFromTitle("Full Sub@Kaleido-subs [Styled]")).toBe("Kaleido-subs");
+		expect(extractGroupFromTitle("Full Sub@Static-Subs (deanzel edit)")).toBe("Static-Subs");
+	});
+});
+
+describe("extractGroupFromTitle — bracketed", () => {
+	it("extracts from [] and ()", () => {
+		expect(extractGroupFromTitle("English (SubsPlease)")).toBe("SubsPlease");
+		expect(extractGroupFromTitle("Signs/Songs [MTBB]")).toBe("MTBB");
+	});
+
+	it("skips blocked / descriptor tokens and picks the real group", () => {
+		expect(extractGroupFromTitle("English (CC) [SubsPlease]")).toBe("SubsPlease");
+		expect(extractGroupFromTitle("English [Styled] (MTBB)")).toBe("MTBB");
+	});
+
+	it("returns null when the only bracket token is blocked", () => {
+		expect(extractGroupFromTitle("English (CC)")).toBeNull();
+		expect(extractGroupFromTitle("Full Subtitles [SDH]")).toBeNull();
+	});
+});
+
+describe("extractGroupFromTitle — bare title (score-gated)", () => {
+	it("accepts clearly group-like bare titles", () => {
+		expect(extractGroupFromTitle("Kaleido-subs")).toBe("Kaleido-subs");
+		expect(extractGroupFromTitle("SubsPlease")).toBe("SubsPlease");
+		expect(extractGroupFromTitle("Erai-raws")).toBe("Erai-raws");
+	});
+
+	it("picks a group-like trailing token from a bare multi-word title", () => {
+		expect(extractGroupFromTitle("Full Subtitles Kaleido-subs")).toBe("Kaleido-subs");
+	});
+
+	it("rejects bare language / descriptor titles", () => {
+		expect(extractGroupFromTitle("English")).toBeNull();
+		expect(extractGroupFromTitle("Spanish")).toBeNull();
+		expect(extractGroupFromTitle("Latin American Spanish")).toBeNull();
+		expect(extractGroupFromTitle("Brazilian Portuguese")).toBeNull();
+		expect(extractGroupFromTitle("Full Subtitles")).toBeNull();
+	});
+
+	it("returns null for empty / undefined input", () => {
+		expect(extractGroupFromTitle(undefined)).toBeNull();
+		expect(extractGroupFromTitle("")).toBeNull();
+	});
+});
+
+describe("buildSubtitleTrackName — group integration", () => {
+	it("appends the @-extracted group", () => {
+		expect(buildSubtitleTrackName("full", "Full Sub@Kaleido-subs")).toBe("Full Subtitles [Kaleido-subs]");
+	});
+
+	it("appends a bracketed group", () => {
+		expect(buildSubtitleTrackName("full", "English (SubsPlease)")).toBe("Full Subtitles [SubsPlease]");
+	});
+
+	it("leaves the label clean when no group is detected", () => {
+		expect(buildSubtitleTrackName("full", "English")).toBe("Full Subtitles");
+	});
+});

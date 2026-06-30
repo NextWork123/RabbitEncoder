@@ -21,6 +21,7 @@ import { classifyAssLines } from "./ass-classifier";
 import { LANG_ALIASES } from "./naming";
 import { getOpusBitrateForLayout, normalizeLayout } from "./probe";
 
+const BARE_SCORE_THRESHOLD = 3;
 const MIN_LINES_FOR_LANG_DETECTION = 5;
 
 type WithLanguage = { language?: string };
@@ -290,85 +291,391 @@ export function detectSubtitleTrackType(stream: SubtitleStreamInfo): SubtitleTra
 }
 
 const GROUP_BLOCKLIST = new Set([
+	// Subtitle track types / content descriptors
 	"cc",
 	"sdh",
+	"hi",
+	"ad",
 	"forced",
 	"full",
-	"signs",
-	"songs",
+	"fullsub",
+	"fullsubs",
+	"full_subs",
+	"full_subtitles",
+	"default",
+	"descriptive",
+	"hearing_impaired",
 	"commentary",
+	"signs",
+	"sign",
+	"songs",
+	"song",
+	"signs_songs",
+	"signs_and_songs",
+	"sings_and_songs",
+	"dialogue",
+	"dialog",
+	"narrative",
+	"narration",
+	"captions",
+	"caption",
+	"lyrics",
+	"lyric",
+	"karaoke",
+	"kara",
 	"honorifics",
+	"honorific",
 	"honours",
+	"honors",
+	"honor",
 	"hon",
 	"subtitles",
 	"subtitle",
 	"subs",
 	"sub",
-	"pgs",
-	"ass",
-	"srt",
-	"full_subtitles",
-	"signs_songs",
-	"signs_and_songs",
-	"sings_and_songs",
-	"default",
-	"descriptive",
-	"hearing_impaired",
-	"us",
-	"gb",
-	"hi",
-	"ad",
-	"eng",
-	"jpn",
-	"spa",
-	"fre",
-	"ger",
-	"ita",
-	"por",
-	"rus",
-	"chi",
-	"kor",
-	"ara",
-	"dut",
-	"pol",
-	"english",
-	"japanese",
-	"spanish",
-	"spain",
-	"españa",
-	"espana",
-	"iberian",
-	"french",
-	"france",
-	"german",
-	"italian",
-	"portugal",
-	"portuguese",
-	"parisian",
-	"castilian",
-	"canadian",
-	"russian",
-	"chinese",
-	"korean",
-	"arabic",
-	"simplified",
-	"traditional",
-	"hong_kong",
-	"la",
-	"latin_america",
-	"latin_american",
-	"brazil",
-	"brasil",
-	"brazilian",
-	"british",
-	"dialogue",
-	"dialog",
-	"karaoke",
-	"kara",
 	"ts",
 	"op",
 	"ed",
 	"oped",
+	"ncop",
+	"nced",
+
+	// Subtitle / file formats
+	"pgs",
+	"ass",
+	"ssa",
+	"srt",
+	"vtt",
+	"webvtt",
+	"vobsub",
+	"vobsubs",
+	"idx",
+	"sup",
+	"smi",
+	"sami",
+	"sbv",
+	"stl",
+	"ttml",
+	"dfxp",
+	"mks",
+	"mov_text",
+
+	// Styling / version / status descriptors
+	"styled",
+	"unstyled",
+	"restyled",
+	"fixed",
+	"fix",
+	"patched",
+	"final",
+	"complete",
+	"raw",
+	"raws",
+	"vanilla",
+	"plain",
+	"text",
+	"graphics",
+	"main",
+	"alt",
+	"alternate",
+	"retail",
+	"official",
+	"multi",
+	"multisub",
+	"multisubs",
+	"dual",
+
+	// Media / episode descriptors
+	"movie",
+	"film",
+	"ova",
+	"ona",
+	"oad",
+	"special",
+	"specials",
+	"episode",
+	"ep",
+	"season",
+	"volume",
+	"vol",
+	"disc",
+	"disk",
+	"bonus",
+	"extra",
+	"extras",
+	"menu",
+	"preview",
+	"trailer",
+	"intro",
+	"outro",
+	"credits",
+	"creditless",
+
+	// Dub-related
+	"dub",
+	"dubs",
+	"dubbed",
+	"dubtitle",
+	"dubtitles",
+
+	// French release / subtitle descriptors
+	"vo",
+	"vf",
+	"vff",
+	"vfq",
+	"vfi",
+	"vost",
+	"vostfr",
+
+	// Language names (English)
+	"english",
+	"japanese",
+	"spanish",
+	"french",
+	"german",
+	"italian",
+	"portuguese",
+	"russian",
+	"chinese",
+	"mandarin",
+	"cantonese",
+	"korean",
+	"arabic",
+	"dutch",
+	"polish",
+	"thai",
+	"vietnamese",
+	"viet",
+	"hindi",
+	"turkish",
+	"swedish",
+	"norwegian",
+	"danish",
+	"finnish",
+	"greek",
+	"hebrew",
+	"czech",
+	"slovak",
+	"slovenian",
+	"slovene",
+	"hungarian",
+	"romanian",
+	"ukrainian",
+	"croatian",
+	"serbian",
+	"bosnian",
+	"bulgarian",
+	"macedonian",
+	"albanian",
+	"belarusian",
+	"indonesian",
+	"malay",
+	"filipino",
+	"tagalog",
+	"persian",
+	"farsi",
+	"estonian",
+	"latvian",
+	"lithuanian",
+	"icelandic",
+	"catalan",
+	"basque",
+	"welsh",
+	"georgian",
+	"armenian",
+	"bengali",
+	"tamil",
+	"telugu",
+	"urdu",
+	"malayalam",
+	"kannada",
+	"marathi",
+	"burmese",
+	"khmer",
+	"lao",
+	"mongolian",
+	"nepali",
+	"sinhala",
+
+	// Region / variant words
+	"us",
+	"uk",
+	"gb",
+	"la",
+	"spain",
+	"españa",
+	"espana",
+	"iberian",
+	"castilian",
+	"latin",
+	"latam",
+	"latino",
+	"latina",
+	"latin_america",
+	"latin_american",
+	"mexico",
+	"mexican",
+	"argentina",
+	"brazil",
+	"brasil",
+	"brazilian",
+	"portugal",
+	"europe",
+	"european",
+	"parisian",
+	"france",
+	"canada",
+	"canadian",
+	"quebec",
+	"quebecois",
+	"britain",
+	"british",
+	"america",
+	"american",
+	"mainland",
+	"taiwan",
+	"taiwanese",
+	"hongkong",
+	"hong_kong",
+	"simplified",
+	"traditional",
+
+	// ISO 639 two-letter codes (whole-token match only)
+	"en",
+	"ja",
+	"es",
+	"fr",
+	"de",
+	"it",
+	"pt",
+	"ru",
+	"zh",
+	"ko",
+	"ar",
+	"nl",
+	"pl",
+	"th",
+	"vi",
+	"tr",
+	"sv",
+	"da",
+	"fi",
+	"el",
+	"he",
+	"cs",
+	"sk",
+	"sl",
+	"hu",
+	"ro",
+	"uk",
+	"hr",
+	"sr",
+	"bg",
+	"id",
+	"ms",
+	"tl",
+	"fa",
+	"et",
+	"lv",
+	"lt",
+	"ca",
+	"cy",
+	"bn",
+	"ta",
+	"te",
+	"ur",
+	"ml",
+	"kn",
+	"mr",
+	"my",
+	"km",
+	"lo",
+	"mn",
+	"ne",
+	"si",
+
+	// ISO 639 three-letter codes (terminology + bibliographic)
+	"eng",
+	"jpn",
+	"spa",
+	"fre",
+	"fra",
+	"ger",
+	"deu",
+	"ita",
+	"por",
+	"rus",
+	"chi",
+	"zho",
+	"kor",
+	"ara",
+	"dut",
+	"nld",
+	"pol",
+	"tha",
+	"vie",
+	"tur",
+	"swe",
+	"nor",
+	"dan",
+	"fin",
+	"gre",
+	"ell",
+	"heb",
+	"cze",
+	"ces",
+	"slo",
+	"slk",
+	"slv",
+	"hun",
+	"rum",
+	"ron",
+	"ukr",
+	"hrv",
+	"srp",
+	"bos",
+	"bul",
+	"mac",
+	"mkd",
+	"alb",
+	"sqi",
+	"bel",
+	"ind",
+	"may",
+	"msa",
+	"fil",
+	"tgl",
+	"per",
+	"fas",
+	"est",
+	"lav",
+	"lit",
+	"ice",
+	"isl",
+	"cat",
+	"baq",
+	"eus",
+	"wel",
+	"cym",
+	"geo",
+	"kat",
+	"arm",
+	"hye",
+	"ben",
+	"tam",
+	"tel",
+	"urd",
+	"mal",
+	"kan",
+	"mar",
+	"bur",
+	"mya",
+	"khm",
+	"lao",
+	"mon",
+	"nep",
+	"sin",
+	"hin",
 ]);
 
 function normalizeToken(s: string): string {
@@ -400,21 +707,41 @@ function looksLikeGroupName(s: string): boolean {
 	return true;
 }
 
+/** True when every word in the string is a blocked language/descriptor token. */
+function isAllLanguageWords(s: string): boolean {
+	const words = s.split(/[\s/_-]+/).filter(Boolean);
+	return words.length > 0 && words.every((w) => isBlockedToken(w));
+}
+
+/**
+ * Confidence that a token is a release/fansub group name. Higher = more
+ * group-like. Used to rank bracket candidates, and to gate the risky bare-title
+ * path (which requires a score >= BARE_SCORE_THRESHOLD before it accepts).
+ */
 function scoreGroupCandidate(s: string): number {
+	const t = s.trim();
 	let score = 0;
-	const trimmed = s.trim();
 
-	// Acronym-ish groups like MTBB, DB, ASW score higher
-	if (/[A-Z]{2,}/.test(trimmed)) score += 3;
+	// Fansub suffix ("Kaleido-subs", "BlubberSubs") - but not a bare "sub"/"subs".
+	if (/(?:fan)?subs?\b/i.test(t) && !/^(?:fan)?subs?$/i.test(t)) score += 4;
+	// Hyphen joining two alpha parts ("Erai-raws", "GST-subs").
+	if (/[A-Za-z]+-[A-Za-z]+/.test(t)) score += 2;
+	// Internal CamelCase ("SubsPlease", "BlubberSubs").
+	if (/[a-z][A-Z]/.test(t)) score += 3;
+	// All-caps acronym ("MTBB", "GJM", "ASW").
+	if (/^[A-Z][A-Z0-9]+$/.test(t)) score += 3;
+	// Official-studio keywords ("Sentai Filmworks").
+	if (/\b(filmworks|studios?|media|entertainment|works|productions?|fansubs?)\b/i.test(t)) score += 2;
+	// Group-ish punctuation / mixed digits.
+	if (/[._@+]/.test(t)) score += 2;
+	if (/-/.test(t)) score += 1;
+	if (/[A-Za-z]/.test(t) && /\d/.test(t)) score += 1;
 
-	// Mixed chars are often more group-like than plain words
-	if (/[._@+\-]/.test(trimmed)) score += 2;
-
-	// Single plain English-looking word is weaker
-	if (/^[A-Za-z]+$/.test(trimmed)) score -= 1;
-
-	// Longer but reasonable names can be valid
-	if (trimmed.length >= 4 && trimmed.length <= 15) score += 1;
+	// Penalty: a single plain word, no internal capital, not an acronym
+	// (most likely a descriptor or language name).
+	if (/^[A-Za-z]+$/.test(t) && !/[a-z][A-Z]/.test(t) && !/^[A-Z]+$/.test(t)) score -= 2;
+	// Penalty: composed entirely of language/descriptor words.
+	if (isAllLanguageWords(t)) score -= 5;
 
 	return score;
 }
@@ -437,42 +764,70 @@ function isEditCredit(s: string): boolean {
 }
 
 /**
- * Extract likely fansub/release group name from subtitle title.
+ * Extract likely fansub/release group name from a subtitle title.
  *
- * Strategy 1 - Pipe-separated format (preferred):
- *   "Full Subtitles | Static-Subs (Doki/deanzel edit)" => "Static-Subs"
- *   "Signs/Songs | Sentai Filmworks"                   => "Sentai Filmworks"
- *   "Subtitles | BlubberSubs (???/Mysteria edit)"      => "BlubberSubs"
- *
- * Strategy 2 - Bracketed group names (fallback):
- *   "English (SubsPlease)"            => "SubsPlease"
- *   "Signs/Songs [MTBB]"              => "MTBB"
- *   "English (CC) [SubsPlease]"       => "SubsPlease"
- *   "English [Styled] (MTBB)"         => "MTBB"
+ * Strategy 1 - Pipe-separated:   "Full Subtitles | Static-Subs (edit)" => "Static-Subs"
+ * Strategy 2 - "@"-separated:    "Full Sub@Kaleido-subs"               => "Kaleido-subs"
+ * Strategy 3 - Bracketed:        "English (SubsPlease)" / "[MTBB]"     => group
+ * Strategy 4 - Bare title (risky, score-gated): "Erai-raws"           => "Erai-raws"
+ *                                                "English"            => null
  */
 export function extractGroupFromTitle(title: string | undefined): string | null {
 	if (!title) return null;
 
-	// Strategy 1: Pipe-separated format "{Type} | {GroupName} ({credits})"
+	// Strategy 1: "{Type} | {Group} ({credits})"
 	const pipeIndex = title.indexOf("|");
 	if (pipeIndex >= 0) {
-		const afterPipe = title.substring(pipeIndex + 1).trim();
-		// Take text before any parenthesized credits
+		const afterPipe = title.slice(pipeIndex + 1).trim();
 		const parenIndex = afterPipe.indexOf("(");
-		const groupPart = (parenIndex >= 0 ? afterPipe.substring(0, parenIndex) : afterPipe).trim();
-		if (groupPart && !isBlockedToken(groupPart)) {
+		const groupPart = (parenIndex >= 0 ? afterPipe.slice(0, parenIndex) : afterPipe).trim();
+		if (groupPart && looksLikeGroupName(groupPart) && !isEditCredit(groupPart)) {
 			return groupPart;
 		}
 	}
 
-	// Strategy 2: Bracketed group names [Group] or (Group)
+	// Strategy 2: "{Whatever}@{Group}" - text after the last "@", minus any trailing tag/credit block.
+	const atIndex = title.lastIndexOf("@");
+	if (atIndex >= 0) {
+		const afterAt = title
+			.slice(atIndex + 1)
+			.replace(/[\[(].*$/, "")
+			.trim();
+		if (afterAt && looksLikeGroupName(afterAt) && !isEditCredit(afterAt)) {
+			return afterAt;
+		}
+	}
+
+	// Strategy 3: bracketed [Group] / (Group), ranked by score.
 	const matches = [...title.matchAll(/[\[(]([^[\]()]*)[\])]/g)].map((m) => m[1]?.trim()).filter((s): s is string => Boolean(s));
+	const bracketCandidates = matches.filter((s) => looksLikeGroupName(s) && !isEditCredit(s));
+	if (bracketCandidates.length > 0) {
+		bracketCandidates.sort((a, b) => scoreGroupCandidate(b) - scoreGroupCandidate(a));
+		return bracketCandidates[0] ?? null;
+	}
 
-	const candidates = matches.filter((s) => looksLikeGroupName(s) && !isEditCredit(s));
-	if (candidates.length === 0) return null;
+	// Strategy 4 (risky): bare title with no delimiters/brackets. Trim blocked
+	// descriptor/language words off both ends ("Full Subtitles Kaleido-subs" =>
+	// "Kaleido-subs"), then accept the remainder only if it scores group-like.
+	if (!/[|@\[\](){}]/.test(title)) {
+		const tokens = title.trim().split(/\s+/).filter(Boolean);
+		let start = 0;
+		let end = tokens.length;
+		while (start < end && isBlockedToken(tokens[start]!)) start++;
+		while (end > start && isBlockedToken(tokens[end - 1]!)) end--;
+		const candidate = tokens.slice(start, end).join(" ");
+		if (
+			candidate &&
+			looksLikeGroupName(candidate) &&
+			!isEditCredit(candidate) &&
+			!isAllLanguageWords(candidate) &&
+			scoreGroupCandidate(candidate) >= BARE_SCORE_THRESHOLD
+		) {
+			return candidate;
+		}
+	}
 
-	candidates.sort((a, b) => scoreGroupCandidate(b) - scoreGroupCandidate(a));
-	return candidates[0] ?? null;
+	return null;
 }
 
 export function isEnglish(lang: string | undefined): boolean {
