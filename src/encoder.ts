@@ -36,6 +36,7 @@ import { cpus } from "os";
 import { getEncoder } from "./encoders";
 import { axisSuffix, chooseAvailableFontFamily, fontAttachmentFileName, instancedFontNames, instanceFont } from "./font-instance";
 import { DEFAULT_STYLE_APPEARANCE, type StyleAppearance } from "./subtitle-style";
+import { runTranslateStep, orderOutputSubtitles, type TranslatedTrack } from "./translate-step";
 
 export { CancelledError } from "./process";
 
@@ -47,7 +48,8 @@ const S_SCENES = 4;
 const S_ZONES = 5;
 const S_FINAL = 6;
 const S_AUDIO = 7;
-const S_MUX = 8;
+const S_TRANSLATE = 8;
+const S_MUX = 9;
 
 function makeSteps(): JobStep[] {
 	return [
@@ -59,6 +61,7 @@ function makeSteps(): JobStep[] {
 		{ label: "Zones", status: "pending", progress: 0 },
 		{ label: "Final Encode", status: "pending", progress: 0 },
 		{ label: "Audio", status: "pending", progress: 0 },
+		{ label: "Translate", status: "pending", progress: 0 },
 		{ label: "Mux & Finish", status: "pending", progress: 0 },
 	];
 }
@@ -1238,6 +1241,87 @@ export async function encodeJob(
 			setStep(S_AUDIO, { status: "done", progress: 100 });
 		}
 
+		let subtitleStreams: SubtitleStreamInfo[] = [];
+		if (!skipSubtitleProcessing) {
+			if (opts.precomputed) {
+				subtitleStreams = opts.precomputed.subtitleStreams;
+			} else {
+				const allSubtitleStreams = probe.subtitleStreams || [];
+				await analyzeSubtitleStreams(
+					allSubtitleStreams,
+					job.inputPath,
+					tempDir,
+					{
+						langDetect: job.settings.subtitleLangDetect,
+						langDetectConfidence: job.settings.subtitleLangDetectConfidence,
+						detectSignsSongs: job.settings.detectSignsSongs,
+						detectSDH: job.settings.detectSDH,
+						detectHonorifics: job.settings.detectHonorifics,
+						signsSongsStyleRatio: job.settings.signsSongsStyleRatio,
+						signsSongsLineRatio: job.settings.signsSongsLineRatio,
+						sdhRatioThreshold: job.settings.sdhRatioThreshold,
+						sdhMinLines: job.settings.sdhMinLines,
+						honorificsMinCount: job.settings.honorificsMinCount,
+						honorificsRatio: job.settings.honorificsRatio,
+						assumeMislabeled: job.settings.assumeMislabeledTracks,
+					},
+					signal,
+				);
+
+				const sortedSubtitleStreams = sortSubtitleStreams(allSubtitleStreams, {
+					sourcePriority: job.settings.subtitleSourcePriority,
+					fansubTiebreak: job.settings.subtitleFansubTiebreak,
+					formatPriority: job.settings.subtitleFormatPriority,
+					languagePriority: job.settings.subtitleLanguagePriority,
+				});
+				const allowedSubLangs = job.settings.subtitleLanguages || [];
+				const langFilteredSubs = filterStreamsByLanguage(sortedSubtitleStreams, allowedSubLangs, "subtitle");
+				const typeFilteredSubs = filterSubtitleTypes(langFilteredSubs, {
+					removeSDH: job.settings.removeSDHSubtitles,
+					removeCommentary: job.settings.removeCommentarySubtitles,
+					removeForcedSignsSongs: job.settings.removeForcedSignsSongs,
+					removeStoryboard: job.settings.removeStoryboardSubtitles,
+					removeHonorifics: job.settings.removeHonorificsSubtitles,
+					dropPicture: job.settings.dropPictureSubtitles,
+				});
+				subtitleStreams = job.settings.dedupeSubtitles
+					? deduplicateSubtitleStreams(typeFilteredSubs, { acrossFormat: job.settings.dedupeAcrossFormat })
+					: typeFilteredSubs;
+			}
+		}
+
+		checkCancelled();
+		setStep(S_TRANSLATE, { status: "active", progress: 0 });
+		let translatedTracks: TranslatedTrack[] = [];
+		if (!skipSubtitleProcessing && job.settings.translateSubtitles && !previewMode && subtitleStreams.length > 0) {
+			try {
+				translatedTracks = await runTranslateStep({
+					subtitleStreams,
+					inputPath: job.inputPath,
+					tempDir,
+					settings: job.settings,
+					subtitleStyle: { ...DEFAULT_STYLE_APPEARANCE, fontName: job.settings.fontGroup },
+					organization: config.organization,
+					signal,
+					onProgress: ({ lang, langIndex, langCount, done, total }) => {
+						const frac = total > 0 ? done / total : 1;
+						const overall = Math.round(((langIndex + frac) / Math.max(1, langCount)) * 100);
+						setStep(S_TRANSLATE, { progress: overall, detail: `Translating ${lang}: ${done}/${total}` });
+					},
+				});
+				setStep(S_TRANSLATE, {
+					status: "done",
+					progress: 100,
+					detail: translatedTracks.length ? `Added ${translatedTracks.length} track(s)` : "Nothing to translate",
+				});
+			} catch (err) {
+				setStep(S_TRANSLATE, { status: "error", progress: 100 });
+				throw err; // fail the job with a clear message (Ollama unreachable / model missing)
+			}
+		} else {
+			setStep(S_TRANSLATE, { status: "done", progress: 100, detail: "Skipped" });
+		}
+
 		checkCancelled();
 		setStep(S_MUX, { status: "active", progress: 0, detail: "Merging MKV" });
 		updateJob({ status: "muxing" });
@@ -1394,7 +1478,6 @@ export async function encodeJob(
 
 		if (!skipSubtitleProcessing) {
 			// Subtitle tracks
-			let subtitleStreams: SubtitleStreamInfo[];
 			if (opts.precomputed) {
 				// Preview: reuse the whole-source subtitle selection
 				subtitleStreams = opts.precomputed.subtitleStreams;
@@ -1712,16 +1795,34 @@ export async function encodeJob(
 					}
 				}
 
-				for (const planned of plannedSubs) {
-					checkCancelled();
-					if (!existsSync(planned.subFile)) {
-						Logger.warn(`[subtitle] Extracted file missing for track ${planned.stream.index}, skipping`);
+				const orderedSubs = orderOutputSubtitles(
+					plannedSubs.map((p) => ({
+						stream: p.stream,
+						emit: { language: p.effectiveLang, trackName: p.trackName, flagArgs: p.flagArgs, file: p.subFile },
+					})),
+					translatedTracks.map((t) => ({
+						sourceIndex: t.sourceIndex,
+						emit: { language: t.language, trackName: t.trackName, flagArgs: t.flagArgs, file: t.file },
+					})),
+					subtitleStreams,
+					(streams) =>
+						sortSubtitleStreams(streams, {
+							sourcePriority: job.settings.subtitleSourcePriority,
+							fansubTiebreak: job.settings.subtitleFansubTiebreak,
+							formatPriority: job.settings.subtitleFormatPriority,
+							languagePriority: job.settings.subtitleLanguagePriority,
+						}),
+				);
+
+				for (const e of orderedSubs) {
+					if (!existsSync(e.file)) {
+						Logger.warn(`[subtitle] Output file missing, skipping: ${e.file}`);
 						continue;
 					}
-					mkvArgs.push("--language", `0:${sanitizeLanguageTag(planned.effectiveLang, `sub idx ${planned.stream.index}`)}`);
-					mkvArgs.push("--track-name", `0:${planned.trackName}`);
-					mkvArgs.push(...planned.flagArgs);
-					mkvArgs.push(planned.subFile);
+					mkvArgs.push("--language", `0:${sanitizeLanguageTag(e.language, `sub ${e.language}`)}`);
+					mkvArgs.push("--track-name", `0:${e.trackName}`);
+					mkvArgs.push(...e.flagArgs);
+					mkvArgs.push(e.file);
 				}
 			} else {
 				Logger.info("[subtitle] No subtitle streams found");

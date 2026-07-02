@@ -962,7 +962,7 @@ export function buildAudioTrackName(trackType: AudioTrackType, sourceTitle?: str
  *   "Signs & Songs"
  *   "Full Subtitles [MTBB]"
  */
-export function buildSubtitleTrackName(trackType: SubtitleTrackType, sourceTitle?: string): string {
+export function buildSubtitleTrackName(trackType: SubtitleTrackType, sourceTitle?: string, groupOverride?: string): string {
 	const title = sourceTitle || "";
 	const isDubtitle = /dubtitle|\bdub\b/i.test(title);
 
@@ -974,8 +974,9 @@ export function buildSubtitleTrackName(trackType: SubtitleTrackType, sourceTitle
 		commentary: "Commentary",
 		storyboard: "Storyboards",
 	};
-
 	let label = labels[trackType];
+
+	if (groupOverride) return `${label} [${groupOverride}]`;
 
 	const source = extractSourceTag(title);
 	if (source) return `${label} [${source}]`;

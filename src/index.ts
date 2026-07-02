@@ -43,6 +43,8 @@ import { getSystemStats } from "./system";
 import { fontRegistry } from "./fonts";
 import type { GroupStyleConfig } from "./subtitle-style";
 import { isInsideRoots, listSystemFonts } from "./system-fonts";
+import { checkOllama, translateOne } from "./ollama";
+import { resolveTranslateLang } from "./translate-languages";
 
 export const config = await loadConfig();
 
@@ -382,6 +384,31 @@ app.post("/api/config/import-code", async (c) => {
 	} catch (err) {
 		if (err instanceof SettingsCodeError) return c.json({ error: err.message }, 400);
 		throw err;
+	}
+});
+
+app.post("/api/translate/test", async (c) => {
+	const body = (await c.req.json().catch(() => ({}))) as { url?: string; model?: string; target?: string };
+	const url = (body.url || "").trim();
+	const model = (body.model || "").trim();
+	if (!url || !model) return c.json({ ok: false, error: "Missing Ollama URL or model" }, 400);
+
+	const health = await checkOllama(url, model);
+	if (!health.ok) return c.json({ ok: false, error: health.detail });
+
+	// Prove the model actually generates: translate a tiny sample.
+	const target = resolveTranslateLang(body.target || "slv") ?? { name: "Slovenian", code: "sl" };
+	try {
+		const sample = await translateOne("The goal of all life is death.", {
+			url,
+			model,
+			source: { name: "English", code: "en" },
+			target,
+			timeoutMs: 30000,
+		});
+		return c.json({ ok: true, sample, model, target: target.name });
+	} catch (err: any) {
+		return c.json({ ok: false, error: `Model reachable but translation failed: ${err?.message || err}` });
 	}
 });
 

@@ -114,6 +114,14 @@ const BASELINE: JobSettings = {
 		"7.1": 384,
 		"7.1.4": 512,
 	},
+	translateSubtitles: false,
+	translateOllamaUrl: "http://localhost:11434",
+	translateModel: "translategemma:12b",
+	translateTargetLanguages: [],
+	translateBatchSize: 40,
+	translateSignsSongs: true,
+	translateNumCtx: 8192,
+	translateTimeoutMs: 120000,
 	vsFilters: [],
 };
 

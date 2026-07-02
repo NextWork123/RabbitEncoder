@@ -82,6 +82,14 @@ const DEFAULT_JOB_SETTINGS: JobSettings = {
 	removeUnusedFonts: false,
 	fontGroup: "Noto Sans",
 	audioBitrates: DEFAULT_BITRATES,
+	translateSubtitles: false,
+	translateOllamaUrl: "http://localhost:11434",
+	translateModel: "translategemma:12b",
+	translateTargetLanguages: [],
+	translateBatchSize: 40,
+	translateSignsSongs: true,
+	translateNumCtx: 8192,
+	translateTimeoutMs: 120000,
 	vsFilters: [],
 };
 

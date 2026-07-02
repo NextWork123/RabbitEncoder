@@ -520,6 +520,31 @@ export function renderLanguageFilterInput(container: HTMLElement, value: string[
 	container.appendChild(hint);
 }
 
+export function renderTranslationLanguagesInput(container: HTMLElement, value: string[], onChange: (value: string[]) => void): void {
+	container.innerHTML = "";
+
+	const input = document.createElement("input");
+	input.type = "text";
+	input.className = "lang-filter-input";
+	input.placeholder = "jpn, eng";
+	input.value = (value || []).join(", ");
+
+	const hint = document.createElement("div");
+	hint.className = "lang-filter-hint";
+	hint.textContent = "Comma-separated ISO codes.";
+
+	input.oninput = () =>
+		onChange(
+			input.value
+				.split(",")
+				.map((s) => s.trim())
+				.filter((s) => s.length > 0),
+		);
+
+	container.appendChild(input);
+	container.appendChild(hint);
+}
+
 export function renderNlmeansParamsEditor(container: HTMLElement, params: NlmeansLevelParams, onChange: (value: NlmeansLevelParams) => void): void {
 	container.innerHTML = "";
 	const grid = document.createElement("div");

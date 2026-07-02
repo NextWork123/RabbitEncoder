@@ -393,3 +393,20 @@ export async function fetchVsDefaultEntry(presetId: string): Promise<VsFilterEnt
 	const res = await authFetch(`${API}/api/vs-presets/${encodeURIComponent(presetId)}/default-entry`);
 	return res.json();
 }
+
+export async function testTranslateConnection(
+	url: string,
+	model: string,
+	target?: string,
+): Promise<{ ok: boolean; error?: string; sample?: string; target?: string }> {
+	try {
+		const res = await authFetch(`${API}/api/translate/test`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ url, model, target }),
+		});
+		return await res.json();
+	} catch (err: any) {
+		return { ok: false, error: err?.message || "Request failed" };
+	}
+}

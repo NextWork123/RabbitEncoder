@@ -11,7 +11,6 @@ import type {
 	EncoderSpeed,
 	StyleAppearance,
 	SubtitleProcessingMode,
-	SubtitleStyle,
 	VideoEncodeMode,
 } from "../types";
 import type { PipelinePreset } from "../ui/models";
@@ -86,6 +85,8 @@ export const PIPELINE_PRESET_HELP: Record<PipelinePreset, string> = {
 	prepare: "Run denoise & VS only; pass audio/subs/video through (FFV1). For GPU-only servers.",
 	custom: "Configure each pipeline stage individually below.",
 };
+
+export const TRANSLATE_MODEL_OPTIONS = ["translategemma:4b", "translategemma:12b", "translategemma:27b"];
 
 export const DEFAULT_STYLE_APPEARANCE: StyleAppearance = {
 	fontSize: 80,

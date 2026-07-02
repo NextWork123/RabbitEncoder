@@ -196,6 +196,23 @@ export interface JobSettings {
 	removeUnusedFonts: boolean;
 	/** Selected font group (folder label under the user fonts dir). */
 	fontGroup: string;
+	// Subtitle translation (Ollama / TranslateGemma)
+	/** Master switch: translate missing target languages via Ollama. */
+	translateSubtitles: boolean;
+	/** Ollama base URL (http://localhost:11434) */
+	translateOllamaUrl: string;
+	/** Model tag (translategemma:12b) */
+	translateModel: string;
+	/** Languages to ensure exist (["eng","deu","fra","slv"]). */
+	translateTargetLanguages: string[];
+	/** Dialogs sent to the model per request. */
+	translateBatchSize: number;
+	/** Also translate sign/song lines (keeps signs consistent in the target track). */
+	translateSignsSongs: boolean;
+	/** Ollama context window (num_ctx). TranslateGemma supports up to 131072. */
+	translateNumCtx: number;
+	/** Per-request timeout, ms. */
+	translateTimeoutMs: number;
 	/**
 	 * Ordered list of VapourSynth filter passes to apply during the prepare
 	 * stage, before the FFmpeg -vf chain. Each entry references a preset by

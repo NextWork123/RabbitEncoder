@@ -17,6 +17,7 @@ import {
 	SUBTITLE_FORMAT_PRIORITY_OPTIONS,
 	SUBTITLE_PROCESSING_OPTIONS,
 	SUBTITLE_SOURCE_PRIORITY_OPTIONS,
+	TRANSLATE_MODEL_OPTIONS,
 	VIDEO_ENCODE_OPTIONS,
 } from "../config/options";
 import {
@@ -40,9 +41,12 @@ import {
 	renderSubtitleConfidenceControl,
 	renderSubtitleLangDetectControl,
 	renderSubtitleStyleTargets,
+	renderTextControl,
+	renderTranslationLanguagesInput,
 	wireEncoderControls,
 } from "./settings-controls";
 import { byId } from "../shared/dom";
+import { testTranslateConnection } from "../api/client";
 
 export type SettingsFormPrefix = "default" | "job";
 
@@ -311,4 +315,46 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 	renderAudioLanguagesInput(el("audio-languages"), settings.audioLanguages || [], (v) => (settings.audioLanguages = v));
 	renderLanguageFilterInput(el("subtitle-languages"), settings.subtitleLanguages || [], (v) => (settings.subtitleLanguages = v));
 	renderBitrateInputs(el("bitrates"), settings.audioBitrates, (ch, val) => (settings.audioBitrates[ch] = val));
+
+	renderLabeledToggle(el("translate-enabled"), settings.translateSubtitles, "Translate missing languages", (v) => {
+		settings.translateSubtitles = v;
+	});
+
+	renderTextControl(el("translate-url"), "Ollama URL", settings.translateOllamaUrl, "http://localhost:11434", (v) => {
+		settings.translateOllamaUrl = v.trim();
+	});
+
+	renderRadioPills(el("translate-model"), TRANSLATE_MODEL_OPTIONS, settings.translateModel, (v) => {
+		settings.translateModel = v;
+	});
+
+	renderTranslationLanguagesInput(el("translate-targets"), settings.translateTargetLanguages, (langs) => {
+		settings.translateTargetLanguages = langs;
+	});
+
+	renderNumberControl(el("translate-batch"), "Dialogs per request", settings.translateBatchSize, { min: 1, max: 1000, step: 1 }, (v) => {
+		settings.translateBatchSize = v;
+	});
+
+	renderLabeledToggle(el("translate-signs"), settings.translateSignsSongs, "Also translate signs & songs", (v) => {
+		settings.translateSignsSongs = v;
+	});
+
+	const testBtn = el("translate-test") as HTMLButtonElement;
+	const testResult = el("translate-test-result");
+	testBtn.addEventListener("click", async () => {
+		testBtn.disabled = true;
+		testResult.textContent = "Testing…";
+		testResult.className = "test-result";
+		const firstTarget = settings.translateTargetLanguages[0];
+		const r = await testTranslateConnection(settings.translateOllamaUrl, settings.translateModel, firstTarget);
+		testBtn.disabled = false;
+		if (r.ok) {
+			testResult.textContent = `✓ OK - sample (${r.target}): "${r.sample}"`;
+			testResult.classList.add("ok");
+		} else {
+			testResult.textContent = `✗ ${r.error}`;
+			testResult.classList.add("error");
+		}
+	});
 }

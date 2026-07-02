@@ -263,6 +263,15 @@ const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	removeUnusedFonts: bool,
 	assRestyleTargets: strList,
 	fontGroup: str(256),
+
+	translateSubtitles: bool,
+	translateOllamaUrl: str(512),
+	translateModel: str(128),
+	translateTargetLanguages: strList,
+	translateBatchSize: intIn(1, 1000),
+	translateSignsSongs: bool,
+	translateNumCtx: intIn(512, 131072),
+	translateTimeoutMs: intIn(1000, 3600000),
 };
 
 function sanitizeSettingsInto(target: JobSettings, partial: Partial<JobSettings>): void {
