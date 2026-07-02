@@ -8,6 +8,7 @@ import { dialogueStyleNames } from "./ass-classifier";
 import { styleSrtAss, restyleAssDialogueFont } from "./ass-style";
 import { checkOllama, type OllamaOptions } from "./ollama";
 import { planTargetLanguages, translateSubtitleContent, type KeptSubDescriptor } from "./subtitle-translate";
+import { createSemaphore } from "./concurrency";
 
 /**
  * A finished, on-disk translated subtitle ready to hand to mkvmerge. Shaped to
@@ -218,46 +219,71 @@ export async function runTranslateStep(params: RunTranslateStepParams): Promise<
 
 	const dialogueStyles = format === "ass" ? dialogueStyleNames(styledSource) : new Set<string>();
 
-	const out: TranslatedTrack[] = [];
+	const out: TranslatedTrack[] = new Array(plan.productions.length);
 	const langCount = plan.productions.length;
 
-	for (let li = 0; li < plan.productions.length; li++) {
-		const prod = plan.productions[li]!;
-		const ollama: OllamaOptions = {
-			url: settings.translateOllamaUrl,
-			model: settings.translateModel,
-			source: prod.source,
-			target: prod.target,
-			numCtx: settings.translateNumCtx,
-			timeoutMs: settings.translateTimeoutMs,
-			signal,
-		};
+	// ONE budget for every in-flight Ollama request - across all target languages
+	// AND all chunks within each language. Languages and chunks fan out freely;
+	// this cap keeps total requests <= what the server can serve in parallel.
+	// Keep it <= the Ollama server's OLLAMA_NUM_PARALLEL.
+	const sem = createSemaphore(Math.max(1, settings.translateConcurrency ?? 1));
 
-		const translated = await translateSubtitleContent(styledSource, {
-			format,
-			batchSize: settings.translateBatchSize,
-			translateSignsSongs: settings.translateSignsSongs,
-			isDialogueStyle: (style) => dialogueStyles.has(style),
-			ollama,
-			onProgress: (done, total) => onProgress?.({ lang: prod.target.name, langIndex: li, langCount, done, total }),
-		});
+	// Aggregate progress across concurrently-running languages.
+	const perLangDone = new Array<number>(langCount).fill(0);
+	const perLangTotal = new Array<number>(langCount).fill(0);
+	const emitProgress = (li: number, lang: string) => {
+		let done = 0;
+		let total = 0;
+		for (let i = 0; i < langCount; i++) {
+			done += perLangDone[i]!;
+			total += perLangTotal[i]!;
+		}
+		onProgress?.({ lang, langIndex: li, langCount, done, total });
+	};
 
-		const ext = format === "ass" ? "ass" : "srt";
-		const file = join(tempDir, `translated_${prod.targetTag}_${sourceStream.index}.${ext}`);
-		writeFileSync(file, translated, "utf-8");
+	await Promise.all(
+		plan.productions.map(async (prod, li) => {
+			const ollama: OllamaOptions = {
+				url: settings.translateOllamaUrl,
+				model: settings.translateModel,
+				source: prod.source,
+				target: prod.target,
+				numCtx: settings.translateNumCtx,
+				timeoutMs: settings.translateTimeoutMs,
+				signal,
+			};
 
-		out.push({
-			file,
-			language: prod.targetTag,
-			trackName: buildSubtitleTrackName(prod.trackType, undefined, organization),
-			trackType: prod.trackType,
-			flagArgs: computeTranslatedFlagArgs(prod.trackType),
-			format,
-			sourceIndex: sourceStream.index,
-		});
+			const translated = await translateSubtitleContent(styledSource, {
+				format,
+				batchSize: settings.translateBatchSize,
+				translateSignsSongs: settings.translateSignsSongs,
+				isDialogueStyle: (style) => dialogueStyles.has(style),
+				ollama,
+				sem,
+				onProgress: (done, total) => {
+					perLangDone[li] = done;
+					perLangTotal[li] = total;
+					emitProgress(li, prod.target.name);
+				},
+			});
 
-		Logger.info(`[translate] Produced ${prod.target.name} (${prod.trackType}) from track ${sourceStream.index}`);
-	}
+			const ext = format === "ass" ? "ass" : "srt";
+			const file = join(tempDir, `translated_${prod.targetTag}_${sourceStream.index}.${ext}`);
+			writeFileSync(file, translated, "utf-8");
+
+			out[li] = {
+				file,
+				language: prod.targetTag,
+				trackName: buildSubtitleTrackName(prod.trackType, undefined, organization),
+				trackType: prod.trackType,
+				flagArgs: computeTranslatedFlagArgs(prod.trackType),
+				format,
+				sourceIndex: sourceStream.index,
+			};
+
+			Logger.info(`[translate] Produced ${prod.target.name} (${prod.trackType}) from track ${sourceStream.index}`);
+		}),
+	);
 
 	return out;
 }

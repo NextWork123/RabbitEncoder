@@ -238,6 +238,10 @@ export interface JobSettings {
 	translateNumCtx: number;
 	/** Per-request timeout, ms. */
 	translateTimeoutMs: number;
+	/** Max concurrent in-flight Ollama requests (all languages + chunks). Keep <= server OLLAMA_NUM_PARALLEL. Default 1. */
+	translateConcurrency?: number;
+	/** May translation overlap the video encode? "auto" overlaps only when Ollama is NOT on a loopback address. Default "auto". */
+	translateDuringEncode?: "auto" | "always" | "never";
 	/**
 	 * Ordered list of VapourSynth filter passes to apply during the prepare
 	 * stage, before the FFmpeg -vf chain. Each entry references a preset by

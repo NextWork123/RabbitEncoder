@@ -612,714 +612,749 @@ export async function encodeJob(
 		const skipVideoEncode = job.settings.videoEncode === "off";
 		const skipAudioEncode = job.settings.audioEncode === "copy";
 		const skipSubtitleProcessing = job.settings.subtitleProcessing === "copy";
-
-		if (skipVideoEncode) {
-			for (const si of [S_FAST, S_METRICS, S_SCENES, S_ZONES, S_FINAL]) {
-				setStep(si, { status: "done", progress: 100, detail: "Skipped — video encoding off" });
-			}
-		}
-
-		let videoMkv: string;
-
-		if (!skipVideoEncode) {
-			// ABE or direct encode
-			checkCancelled();
-			updateJob({ status: "encoding_video" });
-
-			const ivfFile = join(tempDir, "source_video.ivf");
-			const inProgressIvf = join(tempDir, "abe_temp", "source_video.ivf");
-			const enc = getEncoder(job.settings.encoder);
-
-			const estimatedAudioStreams = (probe.audioStreams || []).filter((s) => !s.title || !/compatibility/i.test(s.title));
-			const estimatedAudioBytes = Math.round(
-				((estimatedAudioStreams.reduce((sum, s) => {
-					const layout = normalizeLayout(s.channelLayout);
-					return sum + getOpusBitrateForLayout(layout, job.settings.audioBitrates);
-				}, 0) *
-					1000) /
-					8) *
-					probe.duration,
-			);
-
-			if (enc.usesAutoBoost) {
-				const colorParams = svtColorParamsFromProbe(probe);
-				const custom = job.settings.customEncoderParams?.trim() ?? "";
-				const finalParams = custom ? `${colorParams} ${custom}` : colorParams;
-
-				const abeArgs = [
-					"python3",
-					"-u",
-					"/opt/Auto-Boost-Essential/Auto-Boost-Essential.py",
-					"-i",
-					preparedVideo,
-					"-t",
-					join(tempDir, "abe_temp"),
-					"--quality",
-					job.settings.quality,
-					"--final-speed",
-					job.settings.finalSpeed,
-					"--fast-params",
-					colorParams,
-					"--final-params",
-					finalParams,
-					"--json-stream",
-				];
-
-				if (job.settings.skipBoosting) {
-					abeArgs.push("-nb");
-				}
-
-				const abeProc = Bun.spawn(abeArgs, {
-					stdout: "pipe",
-					stderr: "pipe",
-					cwd: tempDir,
-				});
-
-				const onAbortAbe = () => {
-					try {
-						abeProc.kill("SIGTERM");
-					} catch {}
-					setTimeout(() => {
-						try {
-							abeProc.kill("SIGKILL");
-						} catch {}
-					}, 3000);
-				};
-				signal?.addEventListener("abort", onAbortAbe, { once: true });
-
-				const abeStageToStep: Record<number, number> = {
-					0: S_FAST,
-					1: S_METRICS,
-					2: S_SCENES,
-					3: S_ZONES,
-					4: S_FINAL,
-				};
-
-				let abeStderr = "";
-				let abeLastError = "";
-
-				const handleAbeEvent = (evt: any) => {
-					const si = abeStageToStep[evt.stage];
-
-					if (evt.event === "stage" && si !== undefined) {
-						setStep(si, {
-							status: "active",
-							progress: 0,
-							detail: evt.total_frames ? fmtFrames(0, evt.total_frames) : undefined,
-						});
-						return;
-					}
-
-					if (evt.event === "progress" && si !== undefined) {
-						let estVideo: string | undefined;
-						let estTotal: string | undefined;
-
-						if (evt.stage === 4 && evt.current > 0 && evt.total > 0) {
-							const frac = evt.current / evt.total;
-							if (frac >= 0.02) {
-								try {
-									const curBytes = statSync(inProgressIvf).size;
-									const estVideoBytes = curBytes / frac;
-									const estTotalBytes = estVideoBytes + estimatedAudioBytes + 2 * 1024 * 1024;
-									estVideo = humanSize(estVideoBytes);
-									estTotal = humanSize(estTotalBytes);
-									updateJob({
-										estimatedVideoSize: estVideo,
-										estimatedFinalSize: estTotal,
-									});
-								} catch {}
-							}
-						}
-
-						setStep(si, {
-							progress: pct2(evt.current, evt.total),
-							detail: evt.total ? fmtFramesWithFps(evt.current, evt.total, steps[si]!.startedAt, estVideo, estTotal) : undefined,
-						});
-						return;
-					}
-
-					if (evt.event === "stage_complete" && si !== undefined) {
-						setStep(si, {
-							status: "done",
-							progress: 100,
-							detail: evt.total_frames ? fmtFramesWithFps(evt.total_frames, evt.total_frames, steps[si]!.startedAt) : steps[si]!.detail,
-						});
-						return;
-					}
-
-					if (evt.event === "error") {
-						abeLastError = evt.message || "Unknown error";
-						Logger.error("[ABE error]", { message: evt.message });
-					}
-				};
-
-				const abeStdoutTask = (async () => {
-					if (!abeProc.stdout) return;
-
-					try {
-						const reader = abeProc.stdout.getReader();
-						const decoder = new TextDecoder();
-						let buffer = "";
-
-						while (true) {
-							try {
-								const { done, value } = await reader.read();
-								if (done) break;
-
-								buffer += decoder.decode(value, { stream: true });
-								const lines = buffer.split("\n");
-								buffer = lines.pop() || "";
-
-								for (const rawLine of lines) {
-									const line = rawLine.trim();
-									if (!line) continue;
-
-									try {
-										const evt = JSON.parse(line);
-										handleAbeEvent(evt);
-									} catch {
-										Logger.warn(`[ABE stdout non-json]`, { output: rawLine });
-									}
-								}
-							} catch {
-								break;
-							}
-						}
-
-						buffer += decoder.decode();
-
-						const trailing = buffer.trim();
-						if (trailing) {
-							try {
-								const evt = JSON.parse(trailing);
-								handleAbeEvent(evt);
-							} catch {
-								Logger.warn(`[ABE stdout trailing non-json]`, { output: trailing });
-							}
-						}
-					} catch {}
-				})();
-
-				const abeStderrTask = (async () => {
-					if (!abeProc.stderr) return;
-
-					try {
-						const reader = abeProc.stderr.getReader();
-						const decoder = new TextDecoder();
-
-						while (true) {
-							try {
-								const { done, value } = await reader.read();
-								if (done) break;
-
-								const chunk = decoder.decode(value, { stream: true });
-								abeStderr += chunk;
-
-								if (chunk.trim()) {
-									Logger.error("[ABE stderr]", { error: chunk.trimEnd() });
-								}
-							} catch {
-								break;
-							}
-						}
-
-						abeStderr += decoder.decode();
-					} catch {}
-				})();
-
-				const [abeCode] = await Promise.all([abeProc.exited, abeStdoutTask, abeStderrTask]);
-				signal?.removeEventListener("abort", onAbortAbe);
-				checkCancelled();
-
-				if (abeCode !== 0) {
-					const exitSignal = abeCode > 128 ? describeExitCode(abeCode) : null;
-					const detail = abeLastError || abeStderr.trim().slice(-500) || exitSignal || "No error details available";
-					throw new Error(`Auto-Boost-Essential failed (exit ${abeCode}): ${detail}`);
-				}
-
-				if (job.settings.skipBoosting) {
-					// Skip boosting: mark ABE-only steps as done (skipped)
-					for (const si of [S_FAST, S_METRICS, S_SCENES, S_ZONES]) {
-						setStep(si, { status: "done", progress: 100, detail: "Skipped" });
-					}
-				}
-			} else {
-				// DIRECT ENCODE
-				// ABE-only steps don't apply (mark them skipped)
-				for (const si of [S_FAST, S_METRICS, S_SCENES, S_ZONES]) {
-					setStep(si, { status: "done", progress: 100, detail: `Skipped — ${enc.label}` });
-				}
-
-				setStep(S_FINAL, { status: "active", progress: 0 });
-
-				const colorParams = svtColorParamsFromProbe(probe); // string of SVT --flags
-				const totalFrames = Math.max(1, Math.round(probe.duration * probe.videoStreamFps));
-
-				const customParams = (job.settings.customEncoderParams || "").trim();
-				const customList = customParams.length > 0 ? customParams.split(/\s+/) : [];
-
-				const y4mFifo = join(tempDir, "direct_y4m.fifo");
-				try {
-					unlinkSync(y4mFifo);
-				} catch {}
-				const mkfifoRes = await run(["mkfifo", y4mFifo], { signal });
-				if (mkfifoRes.code !== 0) {
-					throw new Error(`Failed to create encode FIFO: ${mkfifoRes.stderr || mkfifoRes.stdout}`);
-				}
-
-				const ffArgs = ["ffmpeg", "-nostdin", "-y", "-i", preparedVideo, "-f", "yuv4mpegpipe", "-strict", "-1", "-pix_fmt", "yuv420p10le", y4mFifo];
-				const encArgs = [
-					enc.binary,
-					"-i",
-					y4mFifo,
-					"--progress",
-					"2",
-					...colorParams.split(/\s+/).filter(Boolean),
-					"--crf",
-					String(job.settings.manualCrf),
-					"--preset",
-					String(job.settings.manualPreset),
-					...customList,
-					"-b",
-					inProgressIvf,
-				];
-
-				mkdirSync(join(tempDir, "abe_temp"), { recursive: true });
-
-				const ffProc = Bun.spawn(ffArgs, { stdout: "ignore", stderr: "ignore", cwd: tempDir });
-				const encProc = Bun.spawn(encArgs, {
-					stdout: "ignore",
-					stderr: "pipe",
-					cwd: tempDir,
-				});
-
-				const onAbort = () => {
-					for (const p of [ffProc, encProc]) {
-						try {
-							p.kill("SIGTERM");
-						} catch {}
-					}
-					setTimeout(() => {
-						for (const p of [ffProc, encProc]) {
-							try {
-								p.kill("SIGKILL");
-							} catch {}
-						}
-					}, 3000);
-				};
-				signal?.addEventListener("abort", onAbort, { once: true });
-
-				// Parse SVT stderr/stdout progress for the current frame count.
-				let encStderr = "";
-
-				const stderrTask = (async () => {
-					if (!encProc.stderr) return;
-
-					const reader = encProc.stderr.getReader();
-					const decoder = new TextDecoder();
-					let buffer = "";
-
-					const handleProgressLine = (rawLine: string) => {
-						const line = stripAnsiAndControls(rawLine).trim();
-
-						// Supports:
-						//   Encoding frame   123
-						//   Encoding:   123 Frames @ 8.67 fps | ...
-						const m = line.match(/Encoding frame\s+(\d+)/i) || line.match(/Encoding:\s*(\d+)\s+Frames?\b/i);
-
-						if (!m) return;
-
-						const current = parseInt(m[1]!, 10);
-						if (!Number.isFinite(current) || current <= 0) return;
-
-						let estVideo: string | undefined;
-						let estTotal: string | undefined;
-
-						const frac = current / totalFrames;
-
-						if (frac >= 0.02) {
-							try {
-								const curBytes = statSync(inProgressIvf).size;
-								const estVideoBytes = curBytes / frac;
-								const estTotalBytes = estVideoBytes + estimatedAudioBytes + 2 * 1024 * 1024;
-
-								estVideo = humanSize(estVideoBytes);
-								estTotal = humanSize(estTotalBytes);
-
-								updateJob({
-									estimatedVideoSize: estVideo,
-									estimatedFinalSize: estTotal,
-								});
-							} catch {}
-						}
-
-						setStep(S_FINAL, {
-							progress: pct2(current, totalFrames),
-							detail: fmtFramesWithFps(current, totalFrames, steps[S_FINAL]!.startedAt, estVideo, estTotal),
-						});
-					};
-
-					while (true) {
-						let chunk;
-
-						try {
-							chunk = await reader.read();
-						} catch {
-							break;
-						}
-
-						if (chunk.done) break;
-
-						const text = decoder.decode(chunk.value, { stream: true });
-						encStderr += text;
-						buffer += text;
-
-						const lines = buffer.split(/\r|\n/);
-						buffer = lines.pop() || "";
-
-						for (const line of lines) {
-							handleProgressLine(line);
-						}
-					}
-
-					if (buffer.trim()) {
-						handleProgressLine(buffer);
-					}
-				})();
-
-				const encCode = await encProc.exited;
-
-				try {
-					ffProc.kill("SIGTERM");
-				} catch {}
-				await ffProc.exited;
-				await stderrTask;
-
-				signal?.removeEventListener("abort", onAbort);
-
-				try {
-					unlinkSync(y4mFifo);
-				} catch {}
-
-				checkCancelled();
-
-				if (encCode !== 0) {
-					const detail = encStderr.trim().slice(-500) || describeExitCode(encCode);
-					throw new Error(`${enc.label} failed (exit ${encCode}): ${detail}`);
-				}
-
-				setStep(S_FINAL, { status: "done", progress: 100 });
-
-				if (existsSync(inProgressIvf)) renameSync(inProgressIvf, ivfFile);
-			}
-
-			if (!existsSync(ivfFile)) {
-				throw new Error("Encoder did not produce output .ivf file");
-			}
-
-			videoMkv = join(tempDir, "video_only.mkv");
-			const muxVidRes = await run(["mkvmerge", "-o", videoMkv, ivfFile], { signal });
-			if (muxVidRes.code !== 0 && muxVidRes.code !== 1) {
-				throw new Error(`mkvmerge video: ${muxVidRes.stderr || muxVidRes.stdout}`);
-			}
-			updateJob({ encodedVideoSize: humanSize(statSync(videoMkv).size) });
-		} else {
-			// FFV1 prepared video is the final video track.
-			videoMkv = preparedVideo;
-			setStep(S_FINAL, { status: "done", progress: 100, detail: "Skipped — video encoding off" });
-		}
-
-		checkCancelled();
-		setStep(S_AUDIO, { status: "active", progress: 0 });
-		updateJob({ status: "encoding_audio" });
-
-		const allAudioStreams = probe.audioStreams || [];
-
 		const audioDetect = {
 			commentary: job.settings.detectCommentaryAudio,
 			descriptive: job.settings.detectDescriptiveAudio,
 			karaoke: job.settings.detectKaraokeAudio,
 		};
 
-		let audioStreams: AudioStreamInfo[];
-		if (opts.precomputed) {
-			// Preview: reuse the whole-source audio selection so every clip keeps identical ordering/naming.
-			audioStreams = opts.precomputed.audioStreams;
-		} else {
-			const allowedAudioLangs = job.settings.audioLanguages || [];
-			const langFiltered = filterStreamsByLanguage(allAudioStreams, allowedAudioLangs, "audio");
-			const skippedLang = allAudioStreams.length - langFiltered.length;
-			if (skippedLang > 0) Logger.info(`[audio] Filtered ${skippedLang} track(s) not in [${allowedAudioLangs.join(", ")}]`);
+		const ollamaIsLoopback = /(?:\/\/)(?:localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0)(?::|\/|$)/i.test(job.settings.translateOllamaUrl);
+		const overlapPolicy = job.settings.translateDuringEncode ?? "auto";
+		const overlapTranslate = overlapPolicy === "always" || (overlapPolicy === "auto" && !ollamaIsLoopback);
 
-			const typeFiltered = filterAudioTypes(
-				langFiltered,
-				{
-					removeCommentary: job.settings.removeCommentaryAudio,
-					removeDescriptive: job.settings.removeDescriptiveAudio,
-					removeKaraoke: job.settings.removeKaraokeAudio,
-					dropCompatibility: job.settings.dropCompatibilityAudio,
-				},
-				audioDetect,
-			);
-			const droppedByType = langFiltered.length - typeFiltered.length;
-			if (droppedByType > 0) Logger.info(`[audio] Dropped ${droppedByType} track(s) by type/compatibility filters`);
-
-			const sorted = sortAudioStreams(typeFiltered, {
-				languagePriority: job.settings.audioLanguagePriority,
-				preferUncensored: job.settings.preferUncensoredAudio,
-				detect: audioDetect,
-			});
-
-			audioStreams = job.settings.dedupeAudio
-				? deduplicateAudioStreams(sorted, {
-						collapseChannels: job.settings.keepBestAudioChannelsOnly,
-						codecPriority: job.settings.audioCodecPriority,
-						preferUncensored: job.settings.preferUncensoredAudio,
-						detect: audioDetect,
-					})
-				: sorted;
-
-			if (job.settings.dedupeAudio && sorted.length !== audioStreams.length) {
-				Logger.info(`[audio] Deduplicated ${sorted.length - audioStreams.length} redundant track(s)`);
-			}
+		const stageAbort = new AbortController();
+		const stageSignal = stageAbort.signal;
+		const onOuterAbort = () => stageAbort.abort((signal as any)?.reason ?? new CancelledError());
+		if (signal) {
+			if (signal.aborted) stageAbort.abort((signal as any).reason);
+			else signal.addEventListener("abort", onOuterAbort, { once: true });
 		}
 
-		const sortedTypes = audioStreams.map((s) => `${s.language || "und"}:${detectAudioTrackType(s, audioDetect)}:${s.channels || "?"}ch`);
-		Logger.info(`[audio] Track order: ${sortedTypes.join(", ")}`);
-
+		let videoMkv: string;
+		let audioStreams: AudioStreamInfo[] = [];
 		const encodedAudioFiles: string[] = [];
+		let subtitleStreams: SubtitleStreamInfo[] = [];
+		let translatedTracks: TranslatedTrack[] = [];
 
-		if (skipAudioEncode) {
-			setStep(S_AUDIO, {
-				status: "done",
-				progress: 100,
-				detail: "Skipped — audio copied from source",
-			});
-		} else if (audioStreams.length === 0) {
-			setStep(S_AUDIO, { status: "done", progress: 100, detail: "No audio streams" });
-		} else {
-			setStep(S_AUDIO, { progress: 5, detail: `Extracting ${audioStreams.length} audio stream(s)` });
-
-			interface AudioEncodeJob {
-				index: number;
-				flacFile: string;
-				opusFile: string;
-				bitrate: number;
-				copy: boolean;
+		const encodeVideo = async (): Promise<void> => {
+			if (skipVideoEncode) {
+				for (const si of [S_FAST, S_METRICS, S_SCENES, S_ZONES, S_FINAL]) {
+					setStep(si, { status: "done", progress: 100, detail: "Skipped — video encoding off" });
+				}
 			}
 
-			const audioJobs: AudioEncodeJob[] = [];
-
-			for (let i = 0; i < audioStreams.length; i++) {
+			if (!skipVideoEncode) {
+				// ABE or direct encode
 				checkCancelled();
+				updateJob({ status: "encoding_video" });
 
-				const stream = audioStreams[i]!;
-				const flacFile = join(tempDir, `audio_${i}.flac`);
-				const opusFile = join(tempDir, `audio_${i}.opus`);
-				encodedAudioFiles.push(opusFile);
+				const ivfFile = join(tempDir, "source_video.ivf");
+				const inProgressIvf = join(tempDir, "abe_temp", "source_video.ivf");
+				const enc = getEncoder(job.settings.encoder);
 
-				const layout = normalizeLayout(stream.channelLayout);
-				const bitrate = getOpusBitrateForLayout(layout, job.settings.audioBitrates);
+				const estimatedAudioStreams = (probe.audioStreams || []).filter((s) => !s.title || !/compatibility/i.test(s.title));
+				const estimatedAudioBytes = Math.round(
+					((estimatedAudioStreams.reduce((sum, s) => {
+						const layout = normalizeLayout(s.channelLayout);
+						return sum + getOpusBitrateForLayout(layout, job.settings.audioBitrates);
+					}, 0) *
+						1000) /
+						8) *
+						probe.duration,
+				);
 
-				const delayMs = stream.delayMs;
-				const delaySec = delayMs / 1000;
+				if (enc.usesAutoBoost) {
+					const colorParams = svtColorParamsFromProbe(probe);
+					const custom = job.settings.customEncoderParams?.trim() ?? "";
+					const finalParams = custom ? `${colorParams} ${custom}` : colorParams;
 
-				const isOpusSource = (stream.codec || "").toLowerCase() === "opus";
-				const sourceKbps = stream.bitrate ? stream.bitrate / 1000 : undefined;
-				const canCopy = isOpusSource && delayMs === 0 && sourceKbps !== undefined && sourceKbps <= bitrate;
-
-				if (canCopy) {
-					const copyArgs = [
-						"ffmpeg",
-						"-y",
+					const abeArgs = [
+						"python3",
+						"-u",
+						"/opt/Auto-Boost-Essential/Auto-Boost-Essential.py",
 						"-i",
-						job.inputPath,
-						"-map",
-						`0:${stream.index}`,
-						"-vn",
-						"-sn",
-						"-dn",
-						"-map_metadata",
-						"-1",
-						"-map_chapters",
-						"-1",
-						"-c:a",
-						"copy",
-						opusFile,
+						preparedVideo,
+						"-t",
+						join(tempDir, "abe_temp"),
+						"--quality",
+						job.settings.quality,
+						"--final-speed",
+						job.settings.finalSpeed,
+						"--fast-params",
+						colorParams,
+						"--final-params",
+						finalParams,
+						"--json-stream",
 					];
-					const copyRes = await run(copyArgs, { signal });
-					if (copyRes.code !== 0) {
-						throw new Error(`FFmpeg audio copy failed for stream ${i}: ${copyRes.stderr || copyRes.stdout}`);
+
+					if (job.settings.skipBoosting) {
+						abeArgs.push("-nb");
 					}
 
-					audioJobs.push({ index: i, flacFile, opusFile, bitrate, copy: true });
-					Logger.info(`[audio] Stream ${i} already Opus @ ~${Math.round(sourceKbps)}kbps (<= ${bitrate}kbps target) — copying without re-encode`);
+					const abeProc = Bun.spawn(abeArgs, {
+						stdout: "pipe",
+						stderr: "pipe",
+						cwd: tempDir,
+					});
+
+					const onAbortAbe = () => {
+						try {
+							abeProc.kill("SIGTERM");
+						} catch {}
+						setTimeout(() => {
+							try {
+								abeProc.kill("SIGKILL");
+							} catch {}
+						}, 3000);
+					};
+					stageSignal?.addEventListener("abort", onAbortAbe, { once: true });
+
+					const abeStageToStep: Record<number, number> = {
+						0: S_FAST,
+						1: S_METRICS,
+						2: S_SCENES,
+						3: S_ZONES,
+						4: S_FINAL,
+					};
+
+					let abeStderr = "";
+					let abeLastError = "";
+
+					const handleAbeEvent = (evt: any) => {
+						const si = abeStageToStep[evt.stage];
+
+						if (evt.event === "stage" && si !== undefined) {
+							setStep(si, {
+								status: "active",
+								progress: 0,
+								detail: evt.total_frames ? fmtFrames(0, evt.total_frames) : undefined,
+							});
+							return;
+						}
+
+						if (evt.event === "progress" && si !== undefined) {
+							let estVideo: string | undefined;
+							let estTotal: string | undefined;
+
+							if (evt.stage === 4 && evt.current > 0 && evt.total > 0) {
+								const frac = evt.current / evt.total;
+								if (frac >= 0.02) {
+									try {
+										const curBytes = statSync(inProgressIvf).size;
+										const estVideoBytes = curBytes / frac;
+										const estTotalBytes = estVideoBytes + estimatedAudioBytes + 2 * 1024 * 1024;
+										estVideo = humanSize(estVideoBytes);
+										estTotal = humanSize(estTotalBytes);
+										updateJob({
+											estimatedVideoSize: estVideo,
+											estimatedFinalSize: estTotal,
+										});
+									} catch {}
+								}
+							}
+
+							setStep(si, {
+								progress: pct2(evt.current, evt.total),
+								detail: evt.total ? fmtFramesWithFps(evt.current, evt.total, steps[si]!.startedAt, estVideo, estTotal) : undefined,
+							});
+							return;
+						}
+
+						if (evt.event === "stage_complete" && si !== undefined) {
+							setStep(si, {
+								status: "done",
+								progress: 100,
+								detail: evt.total_frames ? fmtFramesWithFps(evt.total_frames, evt.total_frames, steps[si]!.startedAt) : steps[si]!.detail,
+							});
+							return;
+						}
+
+						if (evt.event === "error") {
+							abeLastError = evt.message || "Unknown error";
+							Logger.error("[ABE error]", { message: evt.message });
+						}
+					};
+
+					const abeStdoutTask = (async () => {
+						if (!abeProc.stdout) return;
+
+						try {
+							const reader = abeProc.stdout.getReader();
+							const decoder = new TextDecoder();
+							let buffer = "";
+
+							while (true) {
+								try {
+									const { done, value } = await reader.read();
+									if (done) break;
+
+									buffer += decoder.decode(value, { stream: true });
+									const lines = buffer.split("\n");
+									buffer = lines.pop() || "";
+
+									for (const rawLine of lines) {
+										const line = rawLine.trim();
+										if (!line) continue;
+
+										try {
+											const evt = JSON.parse(line);
+											handleAbeEvent(evt);
+										} catch {
+											Logger.warn(`[ABE stdout non-json]`, { output: rawLine });
+										}
+									}
+								} catch {
+									break;
+								}
+							}
+
+							buffer += decoder.decode();
+
+							const trailing = buffer.trim();
+							if (trailing) {
+								try {
+									const evt = JSON.parse(trailing);
+									handleAbeEvent(evt);
+								} catch {
+									Logger.warn(`[ABE stdout trailing non-json]`, { output: trailing });
+								}
+							}
+						} catch {}
+					})();
+
+					const abeStderrTask = (async () => {
+						if (!abeProc.stderr) return;
+
+						try {
+							const reader = abeProc.stderr.getReader();
+							const decoder = new TextDecoder();
+
+							while (true) {
+								try {
+									const { done, value } = await reader.read();
+									if (done) break;
+
+									const chunk = decoder.decode(value, { stream: true });
+									abeStderr += chunk;
+
+									if (chunk.trim()) {
+										Logger.error("[ABE stderr]", { error: chunk.trimEnd() });
+									}
+								} catch {
+									break;
+								}
+							}
+
+							abeStderr += decoder.decode();
+						} catch {}
+					})();
+
+					const [abeCode] = await Promise.all([abeProc.exited, abeStdoutTask, abeStderrTask]);
+					stageSignal?.removeEventListener("abort", onAbortAbe);
+					checkCancelled();
+
+					if (abeCode !== 0) {
+						const exitSignal = abeCode > 128 ? describeExitCode(abeCode) : null;
+						const detail = abeLastError || abeStderr.trim().slice(-500) || exitSignal || "No error details available";
+						throw new Error(`Auto-Boost-Essential failed (exit ${abeCode}): ${detail}`);
+					}
+
+					if (job.settings.skipBoosting) {
+						// Skip boosting: mark ABE-only steps as done (skipped)
+						for (const si of [S_FAST, S_METRICS, S_SCENES, S_ZONES]) {
+							setStep(si, { status: "done", progress: 100, detail: "Skipped" });
+						}
+					}
+				} else {
+					// DIRECT ENCODE
+					// ABE-only steps don't apply (mark them skipped)
+					for (const si of [S_FAST, S_METRICS, S_SCENES, S_ZONES]) {
+						setStep(si, { status: "done", progress: 100, detail: `Skipped — ${enc.label}` });
+					}
+
+					setStep(S_FINAL, { status: "active", progress: 0 });
+
+					const colorParams = svtColorParamsFromProbe(probe); // string of SVT --flags
+					const totalFrames = Math.max(1, Math.round(probe.duration * probe.videoStreamFps));
+
+					const customParams = (job.settings.customEncoderParams || "").trim();
+					const customList = customParams.length > 0 ? customParams.split(/\s+/) : [];
+
+					const y4mFifo = join(tempDir, "direct_y4m.fifo");
+					try {
+						unlinkSync(y4mFifo);
+					} catch {}
+					const mkfifoRes = await run(["mkfifo", y4mFifo], { signal: stageSignal });
+					if (mkfifoRes.code !== 0) {
+						throw new Error(`Failed to create encode FIFO: ${mkfifoRes.stderr || mkfifoRes.stdout}`);
+					}
+
+					const ffArgs = ["ffmpeg", "-nostdin", "-y", "-i", preparedVideo, "-f", "yuv4mpegpipe", "-strict", "-1", "-pix_fmt", "yuv420p10le", y4mFifo];
+					const encArgs = [
+						enc.binary,
+						"-i",
+						y4mFifo,
+						"--progress",
+						"2",
+						...colorParams.split(/\s+/).filter(Boolean),
+						"--crf",
+						String(job.settings.manualCrf),
+						"--preset",
+						String(job.settings.manualPreset),
+						...customList,
+						"-b",
+						inProgressIvf,
+					];
+
+					mkdirSync(join(tempDir, "abe_temp"), { recursive: true });
+
+					const ffProc = Bun.spawn(ffArgs, { stdout: "ignore", stderr: "ignore", cwd: tempDir });
+					const encProc = Bun.spawn(encArgs, {
+						stdout: "ignore",
+						stderr: "pipe",
+						cwd: tempDir,
+					});
+
+					const onAbort = () => {
+						for (const p of [ffProc, encProc]) {
+							try {
+								p.kill("SIGTERM");
+							} catch {}
+						}
+						setTimeout(() => {
+							for (const p of [ffProc, encProc]) {
+								try {
+									p.kill("SIGKILL");
+								} catch {}
+							}
+						}, 3000);
+					};
+					stageSignal?.addEventListener("abort", onAbort, { once: true });
+
+					// Parse SVT stderr/stdout progress for the current frame count.
+					let encStderr = "";
+
+					const stderrTask = (async () => {
+						if (!encProc.stderr) return;
+
+						const reader = encProc.stderr.getReader();
+						const decoder = new TextDecoder();
+						let buffer = "";
+
+						const handleProgressLine = (rawLine: string) => {
+							const line = stripAnsiAndControls(rawLine).trim();
+
+							// Supports:
+							//   Encoding frame   123
+							//   Encoding:   123 Frames @ 8.67 fps | ...
+							const m = line.match(/Encoding frame\s+(\d+)/i) || line.match(/Encoding:\s*(\d+)\s+Frames?\b/i);
+
+							if (!m) return;
+
+							const current = parseInt(m[1]!, 10);
+							if (!Number.isFinite(current) || current <= 0) return;
+
+							let estVideo: string | undefined;
+							let estTotal: string | undefined;
+
+							const frac = current / totalFrames;
+
+							if (frac >= 0.02) {
+								try {
+									const curBytes = statSync(inProgressIvf).size;
+									const estVideoBytes = curBytes / frac;
+									const estTotalBytes = estVideoBytes + estimatedAudioBytes + 2 * 1024 * 1024;
+
+									estVideo = humanSize(estVideoBytes);
+									estTotal = humanSize(estTotalBytes);
+
+									updateJob({
+										estimatedVideoSize: estVideo,
+										estimatedFinalSize: estTotal,
+									});
+								} catch {}
+							}
+
+							setStep(S_FINAL, {
+								progress: pct2(current, totalFrames),
+								detail: fmtFramesWithFps(current, totalFrames, steps[S_FINAL]!.startedAt, estVideo, estTotal),
+							});
+						};
+
+						while (true) {
+							let chunk;
+
+							try {
+								chunk = await reader.read();
+							} catch {
+								break;
+							}
+
+							if (chunk.done) break;
+
+							const text = decoder.decode(chunk.value, { stream: true });
+							encStderr += text;
+							buffer += text;
+
+							const lines = buffer.split(/\r|\n/);
+							buffer = lines.pop() || "";
+
+							for (const line of lines) {
+								handleProgressLine(line);
+							}
+						}
+
+						if (buffer.trim()) {
+							handleProgressLine(buffer);
+						}
+					})();
+
+					const encCode = await encProc.exited;
+
+					try {
+						ffProc.kill("SIGTERM");
+					} catch {}
+					await ffProc.exited;
+					await stderrTask;
+
+					stageSignal?.removeEventListener("abort", onAbort);
+
+					try {
+						unlinkSync(y4mFifo);
+					} catch {}
+
+					checkCancelled();
+
+					if (encCode !== 0) {
+						const detail = encStderr.trim().slice(-500) || describeExitCode(encCode);
+						throw new Error(`${enc.label} failed (exit ${encCode}): ${detail}`);
+					}
+
+					setStep(S_FINAL, { status: "done", progress: 100 });
+
+					if (existsSync(inProgressIvf)) renameSync(inProgressIvf, ivfFile);
+				}
+
+				if (!existsSync(ivfFile)) {
+					throw new Error("Encoder did not produce output .ivf file");
+				}
+
+				videoMkv = join(tempDir, "video_only.mkv");
+				const muxVidRes = await run(["mkvmerge", "-o", videoMkv, ivfFile], { signal: stageSignal });
+				if (muxVidRes.code !== 0 && muxVidRes.code !== 1) {
+					throw new Error(`mkvmerge video: ${muxVidRes.stderr || muxVidRes.stdout}`);
+				}
+				updateJob({ encodedVideoSize: humanSize(statSync(videoMkv).size) });
+			} else {
+				// FFV1 prepared video is the final video track.
+				videoMkv = preparedVideo;
+				setStep(S_FINAL, { status: "done", progress: 100, detail: "Skipped — video encoding off" });
+			}
+		};
+
+		const doAudio = async (): Promise<void> => {
+			checkCancelled();
+			setStep(S_AUDIO, { status: "active", progress: 0 });
+			updateJob({ status: "encoding_audio" });
+
+			const allAudioStreams = probe.audioStreams || [];
+
+			if (opts.precomputed) {
+				// Preview: reuse the whole-source audio selection so every clip keeps identical ordering/naming.
+				audioStreams = opts.precomputed.audioStreams;
+			} else {
+				const allowedAudioLangs = job.settings.audioLanguages || [];
+				const langFiltered = filterStreamsByLanguage(allAudioStreams, allowedAudioLangs, "audio");
+				const skippedLang = allAudioStreams.length - langFiltered.length;
+				if (skippedLang > 0) Logger.info(`[audio] Filtered ${skippedLang} track(s) not in [${allowedAudioLangs.join(", ")}]`);
+
+				const typeFiltered = filterAudioTypes(
+					langFiltered,
+					{
+						removeCommentary: job.settings.removeCommentaryAudio,
+						removeDescriptive: job.settings.removeDescriptiveAudio,
+						removeKaraoke: job.settings.removeKaraokeAudio,
+						dropCompatibility: job.settings.dropCompatibilityAudio,
+					},
+					audioDetect,
+				);
+				const droppedByType = langFiltered.length - typeFiltered.length;
+				if (droppedByType > 0) Logger.info(`[audio] Dropped ${droppedByType} track(s) by type/compatibility filters`);
+
+				const sorted = sortAudioStreams(typeFiltered, {
+					languagePriority: job.settings.audioLanguagePriority,
+					preferUncensored: job.settings.preferUncensoredAudio,
+					detect: audioDetect,
+				});
+
+				audioStreams = job.settings.dedupeAudio
+					? deduplicateAudioStreams(sorted, {
+							collapseChannels: job.settings.keepBestAudioChannelsOnly,
+							codecPriority: job.settings.audioCodecPriority,
+							preferUncensored: job.settings.preferUncensoredAudio,
+							detect: audioDetect,
+						})
+					: sorted;
+
+				if (job.settings.dedupeAudio && sorted.length !== audioStreams.length) {
+					Logger.info(`[audio] Deduplicated ${sorted.length - audioStreams.length} redundant track(s)`);
+				}
+			}
+
+			const sortedTypes = audioStreams.map((s) => `${s.language || "und"}:${detectAudioTrackType(s, audioDetect)}:${s.channels || "?"}ch`);
+			Logger.info(`[audio] Track order: ${sortedTypes.join(", ")}`);
+
+			if (skipAudioEncode) {
+				setStep(S_AUDIO, {
+					status: "done",
+					progress: 100,
+					detail: "Skipped — audio copied from source",
+				});
+			} else if (audioStreams.length === 0) {
+				setStep(S_AUDIO, { status: "done", progress: 100, detail: "No audio streams" });
+			} else {
+				setStep(S_AUDIO, { progress: 5, detail: `Extracting ${audioStreams.length} audio stream(s)` });
+
+				interface AudioEncodeJob {
+					index: number;
+					flacFile: string;
+					opusFile: string;
+					bitrate: number;
+					copy: boolean;
+				}
+
+				const audioJobs: AudioEncodeJob[] = [];
+
+				for (let i = 0; i < audioStreams.length; i++) {
+					checkCancelled();
+
+					const stream = audioStreams[i]!;
+					const flacFile = join(tempDir, `audio_${i}.flac`);
+					const opusFile = join(tempDir, `audio_${i}.opus`);
+					encodedAudioFiles.push(opusFile);
+
+					const layout = normalizeLayout(stream.channelLayout);
+					const bitrate = getOpusBitrateForLayout(layout, job.settings.audioBitrates);
+
+					const delayMs = stream.delayMs;
+					const delaySec = delayMs / 1000;
+
+					const isOpusSource = (stream.codec || "").toLowerCase() === "opus";
+					const sourceKbps = stream.bitrate ? stream.bitrate / 1000 : undefined;
+					const canCopy = isOpusSource && delayMs === 0 && sourceKbps !== undefined && sourceKbps <= bitrate;
+
+					if (canCopy) {
+						const copyArgs = [
+							"ffmpeg",
+							"-y",
+							"-i",
+							job.inputPath,
+							"-map",
+							`0:${stream.index}`,
+							"-vn",
+							"-sn",
+							"-dn",
+							"-map_metadata",
+							"-1",
+							"-map_chapters",
+							"-1",
+							"-c:a",
+							"copy",
+							opusFile,
+						];
+						const copyRes = await run(copyArgs, { signal: stageSignal });
+						if (copyRes.code !== 0) {
+							throw new Error(`FFmpeg audio copy failed for stream ${i}: ${copyRes.stderr || copyRes.stdout}`);
+						}
+
+						audioJobs.push({ index: i, flacFile, opusFile, bitrate, copy: true });
+						Logger.info(`[audio] Stream ${i} already Opus @ ~${Math.round(sourceKbps)}kbps (<= ${bitrate}kbps target) — copying without re-encode`);
+
+						setStep(S_AUDIO, {
+							progress: 5 + Math.round(((i + 1) / audioStreams.length) * 35),
+							detail: `Copying audio (${i + 1}/${audioStreams.length})`,
+						});
+						continue;
+					}
+
+					const ffArgs = ["ffmpeg", "-y", "-i", job.inputPath, "-map", `0:${stream.index}`, "-vn", "-sn", "-dn", "-c:a", "flac"];
+
+					if (delaySec < 0) {
+						ffArgs.push("-af", `atrim=start=${Math.abs(delaySec)}`);
+					} else if (delaySec > 0) {
+						ffArgs.push("-af", `adelay=${delayMs}:all=1`);
+					}
+
+					ffArgs.push(flacFile);
+
+					const ffRes = await run(ffArgs, { signal: stageSignal });
+					if (ffRes.code !== 0) {
+						throw new Error(`FFmpeg audio extraction failed for stream ${i}: ${ffRes.stderr || ffRes.stdout}`);
+					}
+
+					audioJobs.push({ index: i, flacFile, opusFile, bitrate, copy: false });
 
 					setStep(S_AUDIO, {
 						progress: 5 + Math.round(((i + 1) / audioStreams.length) * 35),
-						detail: `Copying audio (${i + 1}/${audioStreams.length})`,
+						detail: `Extracting audio (${i + 1}/${audioStreams.length})`,
 					});
-					continue;
 				}
 
-				const ffArgs = ["ffmpeg", "-y", "-i", job.inputPath, "-map", `0:${stream.index}`, "-vn", "-sn", "-dn", "-c:a", "flac"];
+				setStep(S_AUDIO, { progress: 40, detail: `Encoding ${audioJobs.length} audio stream(s)` });
 
-				if (delaySec < 0) {
-					ffArgs.push("-af", `atrim=start=${Math.abs(delaySec)}`);
-				} else if (delaySec > 0) {
-					ffArgs.push("-af", `adelay=${delayMs}:all=1`);
-				}
+				const concurrency = Math.max(1, Math.min(audioJobs.length, cpus().length));
+				let nextJob = 0;
+				let completed = 0;
+				let failed = false;
 
-				ffArgs.push(flacFile);
+				const encodeWorker = async (): Promise<void> => {
+					while (!failed) {
+						const jobIdx = nextJob++;
+						if (jobIdx >= audioJobs.length) return;
 
-				const ffRes = await run(ffArgs, { signal });
-				if (ffRes.code !== 0) {
-					throw new Error(`FFmpeg audio extraction failed for stream ${i}: ${ffRes.stderr || ffRes.stdout}`);
-				}
+						try {
+							checkCancelled();
 
-				audioJobs.push({ index: i, flacFile, opusFile, bitrate, copy: false });
+							const aj = audioJobs[jobIdx]!;
 
-				setStep(S_AUDIO, {
-					progress: 5 + Math.round(((i + 1) / audioStreams.length) * 35),
-					detail: `Extracting audio (${i + 1}/${audioStreams.length})`,
-				});
-			}
+							if (aj.copy) {
+								completed++;
+								setStep(S_AUDIO, {
+									progress: 40 + Math.round((completed / audioJobs.length) * 60),
+									detail: `Encoding audio (${completed}/${audioJobs.length})`,
+								});
+								continue;
+							}
 
-			setStep(S_AUDIO, { progress: 40, detail: `Encoding ${audioJobs.length} audio stream(s)` });
+							const opusArgs = ["opusenc", "--bitrate", String(aj.bitrate)];
+							if (job.settings.noPhaseInv) {
+								opusArgs.push("--no-phase-inv");
+							}
+							opusArgs.push("--discard-comments");
+							opusArgs.push("--discard-pictures");
+							opusArgs.push(aj.flacFile, aj.opusFile);
 
-			const concurrency = Math.max(1, Math.min(audioJobs.length, cpus().length));
-			let nextJob = 0;
-			let completed = 0;
-			let failed = false;
+							const opusRes = await run(opusArgs, { signal: stageSignal });
+							if (opusRes.code !== 0) {
+								throw new Error(`Audio encoding failed for stream ${aj.index}: ${opusRes.stderr || opusRes.stdout}`);
+							}
 
-			const encodeWorker = async (): Promise<void> => {
-				while (!failed) {
-					const jobIdx = nextJob++;
-					if (jobIdx >= audioJobs.length) return;
-
-					try {
-						checkCancelled();
-
-						const aj = audioJobs[jobIdx]!;
-
-						if (aj.copy) {
 							completed++;
 							setStep(S_AUDIO, {
 								progress: 40 + Math.round((completed / audioJobs.length) * 60),
 								detail: `Encoding audio (${completed}/${audioJobs.length})`,
 							});
-							continue;
+						} catch (err) {
+							failed = true;
+							throw err;
 						}
-
-						const opusArgs = ["opusenc", "--bitrate", String(aj.bitrate)];
-						if (job.settings.noPhaseInv) {
-							opusArgs.push("--no-phase-inv");
-						}
-						opusArgs.push("--discard-comments");
-						opusArgs.push("--discard-pictures");
-						opusArgs.push(aj.flacFile, aj.opusFile);
-
-						const opusRes = await run(opusArgs, { signal });
-						if (opusRes.code !== 0) {
-							throw new Error(`Audio encoding failed for stream ${aj.index}: ${opusRes.stderr || opusRes.stdout}`);
-						}
-
-						completed++;
-						setStep(S_AUDIO, {
-							progress: 40 + Math.round((completed / audioJobs.length) * 60),
-							detail: `Encoding audio (${completed}/${audioJobs.length})`,
-						});
-					} catch (err) {
-						failed = true;
-						throw err;
 					}
+				};
+
+				await Promise.all(Array.from({ length: concurrency }, () => encodeWorker()));
+
+				setStep(S_AUDIO, { status: "done", progress: 100 });
+			}
+		};
+
+		const doSubtitleAnalysis = async (): Promise<void> => {
+			if (!skipSubtitleProcessing) {
+				if (opts.precomputed) {
+					subtitleStreams = opts.precomputed.subtitleStreams;
+				} else {
+					const allSubtitleStreams = probe.subtitleStreams || [];
+					await analyzeSubtitleStreams(
+						allSubtitleStreams,
+						job.inputPath,
+						tempDir,
+						{
+							langDetect: job.settings.subtitleLangDetect,
+							langDetectConfidence: job.settings.subtitleLangDetectConfidence,
+							detectSignsSongs: job.settings.detectSignsSongs,
+							detectSDH: job.settings.detectSDH,
+							detectHonorifics: job.settings.detectHonorifics,
+							signsSongsStyleRatio: job.settings.signsSongsStyleRatio,
+							signsSongsLineRatio: job.settings.signsSongsLineRatio,
+							sdhRatioThreshold: job.settings.sdhRatioThreshold,
+							sdhMinLines: job.settings.sdhMinLines,
+							honorificsMinCount: job.settings.honorificsMinCount,
+							honorificsRatio: job.settings.honorificsRatio,
+							assumeMislabeled: job.settings.assumeMislabeledTracks,
+						},
+						stageSignal,
+					);
+
+					const sortedSubtitleStreams = sortSubtitleStreams(allSubtitleStreams, {
+						sourcePriority: job.settings.subtitleSourcePriority,
+						fansubTiebreak: job.settings.subtitleFansubTiebreak,
+						formatPriority: job.settings.subtitleFormatPriority,
+						languagePriority: job.settings.subtitleLanguagePriority,
+					});
+					const allowedSubLangs = job.settings.subtitleLanguages || [];
+					const langFilteredSubs = filterStreamsByLanguage(sortedSubtitleStreams, allowedSubLangs, "subtitle");
+					const typeFilteredSubs = filterSubtitleTypes(langFilteredSubs, {
+						removeSDH: job.settings.removeSDHSubtitles,
+						removeCommentary: job.settings.removeCommentarySubtitles,
+						removeForcedSignsSongs: job.settings.removeForcedSignsSongs,
+						removeStoryboard: job.settings.removeStoryboardSubtitles,
+						removeHonorifics: job.settings.removeHonorificsSubtitles,
+						dropPicture: job.settings.dropPictureSubtitles,
+					});
+					subtitleStreams = job.settings.dedupeSubtitles
+						? deduplicateSubtitleStreams(typeFilteredSubs, { acrossFormat: job.settings.dedupeAcrossFormat })
+						: typeFilteredSubs;
 				}
-			};
+			}
+		};
 
-			await Promise.all(Array.from({ length: concurrency }, () => encodeWorker()));
-
-			setStep(S_AUDIO, { status: "done", progress: 100 });
-		}
-
-		let subtitleStreams: SubtitleStreamInfo[] = [];
-		if (!skipSubtitleProcessing) {
-			if (opts.precomputed) {
-				subtitleStreams = opts.precomputed.subtitleStreams;
+		const doTranslate = async (): Promise<void> => {
+			checkCancelled();
+			setStep(S_TRANSLATE, { status: "active", progress: 0 });
+			if (!skipSubtitleProcessing && job.settings.translateSubtitles && !previewMode && subtitleStreams.length > 0) {
+				try {
+					translatedTracks = await runTranslateStep({
+						subtitleStreams,
+						inputPath: job.inputPath,
+						tempDir,
+						settings: job.settings,
+						subtitleStyle: { ...DEFAULT_STYLE_APPEARANCE, fontName: job.settings.fontGroup },
+						organization: config.organization,
+						signal: stageSignal,
+						onProgress: ({ done, total }) => {
+							const overall = total > 0 ? Math.round((done / total) * 100) : 0;
+							setStep(S_TRANSLATE, { progress: overall, detail: `Translating ${done}/${total} lines` });
+						},
+					});
+					setStep(S_TRANSLATE, {
+						status: "done",
+						progress: 100,
+						detail: translatedTracks.length ? `Added ${translatedTracks.length} track(s)` : "Nothing to translate",
+					});
+				} catch (err) {
+					setStep(S_TRANSLATE, { status: "error", progress: 100 });
+					throw err;
+				}
 			} else {
-				const allSubtitleStreams = probe.subtitleStreams || [];
-				await analyzeSubtitleStreams(
-					allSubtitleStreams,
-					job.inputPath,
-					tempDir,
-					{
-						langDetect: job.settings.subtitleLangDetect,
-						langDetectConfidence: job.settings.subtitleLangDetectConfidence,
-						detectSignsSongs: job.settings.detectSignsSongs,
-						detectSDH: job.settings.detectSDH,
-						detectHonorifics: job.settings.detectHonorifics,
-						signsSongsStyleRatio: job.settings.signsSongsStyleRatio,
-						signsSongsLineRatio: job.settings.signsSongsLineRatio,
-						sdhRatioThreshold: job.settings.sdhRatioThreshold,
-						sdhMinLines: job.settings.sdhMinLines,
-						honorificsMinCount: job.settings.honorificsMinCount,
-						honorificsRatio: job.settings.honorificsRatio,
-						assumeMislabeled: job.settings.assumeMislabeledTracks,
-					},
-					signal,
-				);
-
-				const sortedSubtitleStreams = sortSubtitleStreams(allSubtitleStreams, {
-					sourcePriority: job.settings.subtitleSourcePriority,
-					fansubTiebreak: job.settings.subtitleFansubTiebreak,
-					formatPriority: job.settings.subtitleFormatPriority,
-					languagePriority: job.settings.subtitleLanguagePriority,
-				});
-				const allowedSubLangs = job.settings.subtitleLanguages || [];
-				const langFilteredSubs = filterStreamsByLanguage(sortedSubtitleStreams, allowedSubLangs, "subtitle");
-				const typeFilteredSubs = filterSubtitleTypes(langFilteredSubs, {
-					removeSDH: job.settings.removeSDHSubtitles,
-					removeCommentary: job.settings.removeCommentarySubtitles,
-					removeForcedSignsSongs: job.settings.removeForcedSignsSongs,
-					removeStoryboard: job.settings.removeStoryboardSubtitles,
-					removeHonorifics: job.settings.removeHonorificsSubtitles,
-					dropPicture: job.settings.dropPictureSubtitles,
-				});
-				subtitleStreams = job.settings.dedupeSubtitles
-					? deduplicateSubtitleStreams(typeFilteredSubs, { acrossFormat: job.settings.dedupeAcrossFormat })
-					: typeFilteredSubs;
+				setStep(S_TRANSLATE, { status: "done", progress: 100, detail: "Skipped" });
 			}
-		}
+		};
 
-		checkCancelled();
-		setStep(S_TRANSLATE, { status: "active", progress: 0 });
-		let translatedTracks: TranslatedTrack[] = [];
-		if (!skipSubtitleProcessing && job.settings.translateSubtitles && !previewMode && subtitleStreams.length > 0) {
-			try {
-				translatedTracks = await runTranslateStep({
-					subtitleStreams,
-					inputPath: job.inputPath,
-					tempDir,
-					settings: job.settings,
-					subtitleStyle: { ...DEFAULT_STYLE_APPEARANCE, fontName: job.settings.fontGroup },
-					organization: config.organization,
-					signal,
-					onProgress: ({ lang, langIndex, langCount, done, total }) => {
-						const frac = total > 0 ? done / total : 1;
-						const overall = Math.round(((langIndex + frac) / Math.max(1, langCount)) * 100);
-						setStep(S_TRANSLATE, { progress: overall, detail: `Translating ${lang}: ${done}/${total}` });
-					},
-				});
-				setStep(S_TRANSLATE, {
-					status: "done",
-					progress: 100,
-					detail: translatedTracks.length ? `Added ${translatedTracks.length} track(s)` : "Nothing to translate",
-				});
-			} catch (err) {
-				setStep(S_TRANSLATE, { status: "error", progress: 100 });
-				throw err; // fail the job with a clear message (Ollama unreachable / model missing)
+		try {
+			if (overlapTranslate) {
+				// Audio + subtitle analysis + translation all overlap the encode.
+				const subsThenTranslate = doSubtitleAnalysis().then(doTranslate);
+				await Promise.all([encodeVideo(), doAudio(), subsThenTranslate]);
+			} else {
+				// Local Ollama: still overlap audio + subtitle analysis (both cheap and
+				// source-only), but keep the heavy translation off the encode.
+				await Promise.all([encodeVideo(), doAudio(), doSubtitleAnalysis()]);
+				await doTranslate();
 			}
-		} else {
-			setStep(S_TRANSLATE, { status: "done", progress: 100, detail: "Skipped" });
+		} catch (err) {
+			stageAbort.abort(err);
+			throw err;
+		} finally {
+			signal?.removeEventListener("abort", onOuterAbort);
 		}
 
 		checkCancelled();
@@ -1386,7 +1421,7 @@ export async function encodeJob(
 			Logger.info(`[mux] Preserving display aspect ratio: ${probe.displayAspectRatio}`);
 		}
 
-		mkvArgs.push(videoMkv);
+		mkvArgs.push(videoMkv!);
 
 		if (!skipAudioEncode) {
 			// Audio tracks

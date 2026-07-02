@@ -3,6 +3,7 @@ import { parseAssEvents, splitAssText, joinAssText, buildTranslatedAss, type Ass
 import { parseSrt, buildSrt } from "./srt-edit";
 import { translateBatch, type OllamaOptions } from "./ollama";
 import { resolveTranslateLang, normalizeTag, type TranslateLang } from "./translate-languages";
+import { createSemaphore, type Semaphore } from "./concurrency";
 
 /**
  * Split a timed line sequence into translation chunks of roughly `batchSize`,
@@ -62,6 +63,8 @@ export function planChunks(startsMs: number[], endsMs: number[], batchSize: numb
 export interface TranslateContentOptions {
 	format: "ass" | "srt";
 	batchSize: number;
+	/** Shared Ollama-request budget. If omitted, chunks run sequentially (limit 1). */
+	sem?: Semaphore;
 	/** When false, only dialogue-classified ASS lines are translated. */
 	translateSignsSongs: boolean;
 	/**
@@ -104,20 +107,24 @@ async function translateUnits(units: Unit[], opts: TranslateContentOptions): Pro
 	const ends = units.map((u) => u.endMs);
 	const chunks = planChunks(starts, ends, opts.batchSize);
 
-	let done = 0;
 	const total = units.length;
+	let done = 0;
 	opts.onProgress?.(0, total);
 
-	for (const [lo, hi] of chunks) {
-		const slice = units.slice(lo, hi);
-		const visibles = slice.map((u) => u.visible);
-		const translated = await translateBatch(visibles, opts.ollama);
-		for (let k = 0; k < slice.length; k++) {
-			out.set(slice[k]!.key, translated[k]!);
-		}
-		done += slice.length;
-		opts.onProgress?.(done, total);
-	}
+	const sem = opts.sem ?? createSemaphore(1);
+
+	await Promise.all(
+		chunks.map(async ([lo, hi]) => {
+			const slice = units.slice(lo, hi);
+			const visibles = slice.map((u) => u.visible);
+			const translated = await sem.run(() => translateBatch(visibles, opts.ollama));
+			for (let k = 0; k < slice.length; k++) {
+				out.set(slice[k]!.key, translated[k]!);
+			}
+			done += slice.length; // safe: runs synchronously between awaits
+			opts.onProgress?.(done, total);
+		}),
+	);
 
 	return out;
 }
