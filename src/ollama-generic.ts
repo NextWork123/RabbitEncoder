@@ -46,6 +46,8 @@ export interface GenericOptions {
 	temperature?: number;
 	/** Per-request timeout in ms. */
 	timeoutMs?: number;
+	/** Max output tokens per request. Cloud providers only; ignored by Ollama. */
+	maxTokens?: number;
 	/** External cancellation (job abort). */
 	signal?: AbortSignal;
 	/**
@@ -277,6 +279,7 @@ async function chat(prompt: string, opts: GenericOptions): Promise<string> {
 			apiKey: opts.apiKey ?? "",
 			model: opts.model,
 			temperature: opts.temperature,
+			maxTokens: opts.maxTokens,
 			timeoutMs: opts.timeoutMs,
 			signal: opts.signal,
 		});

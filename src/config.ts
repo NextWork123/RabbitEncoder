@@ -93,6 +93,7 @@ const DEFAULT_JOB_SETTINGS: JobSettings = {
 	translateSignsSongs: true,
 	translateNumCtx: 8192,
 	translateTimeoutMs: 120000,
+	translateMaxTokens: 8192,
 	vsFilters: [],
 };
 

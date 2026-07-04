@@ -1,10 +1,24 @@
 import { Logger } from "./logger";
 import { parseAssEvents, splitAssText, joinAssText, buildTranslatedAss, type AssEventLine } from "./ass-edit";
 import { parseSrt, buildSrt } from "./srt-edit";
-import { translateBatch, type OllamaOptions } from "./ollama";
+import { translateBatch } from "./ollama";
 import { resolveTranslateLang, normalizeTag, type TranslateLang } from "./translate-languages";
 import { translateBatchGeneric, type GenericOptions, type TranslateItem } from "./ollama-generic";
 import { createSemaphore, type Semaphore } from "./concurrency";
+
+/**
+ * True when a sign/song's visible text is a single character. Animated
+ * typesetting is often split into one event per character ("S", "H", "O",
+ * "P" as four events, sometimes duplicated per frame); a lone character
+ * carries no translatable meaning, so those are kept verbatim. Applies only
+ * to non-dialogue (sign/song) events.
+ */
+export function isSingleCharSign(visible: string): boolean {
+	const t = visible.trim();
+	// Count code points, not UTF-16 units, so surrogate-pair characters
+	// (rare CJK, symbols) still count as one.
+	return t === "" || [...t].length === 1;
+}
 
 /**
  * Split a timed line sequence into translation chunks of roughly `batchSize`,
@@ -149,11 +163,23 @@ async function translateAss(content: string, opts: TranslateContentOptions): Pro
 	const isDialogue = opts.isDialogueStyle ?? (() => true);
 
 	const units: Unit[] = [];
+	let skippedSigns = 0;
 	for (const ev of events) {
-		if (dialogueOnly && !isDialogue(ev.style)) continue;
+		const dialogue = isDialogue(ev.style);
+		if (dialogueOnly && !dialogue) continue;
 		const parts = splitAssText(ev.rawText);
 		if (!parts.translatable) continue;
+
+		if (!dialogue && isSingleCharSign(parts.visible)) {
+			skippedSigns++;
+			continue;
+		}
+
 		units.push({ key: ev.lineNo, startMs: ev.startMs, endMs: ev.endMs, visible: parts.visible, lead: parts.lead, name: ev.name || undefined });
+	}
+
+	if (skippedSigns > 0) {
+		Logger.info(`[translate] Skipped ${skippedSigns} single-word sign/song event(s) (animated typesetting)`);
 	}
 
 	if (units.length === 0) {

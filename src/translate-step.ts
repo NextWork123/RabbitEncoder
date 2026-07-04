@@ -3,10 +3,10 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { Logger } from "./logger";
 import { run } from "./process";
 import type { JobSettings, SubtitleStreamInfo, SubtitleStyle } from "./types";
-import { detectSubtitleTrackType, buildSubtitleTrackName, isTextSubtitleCodec, sortSubtitleStreams } from "./tracks";
+import { detectSubtitleTrackType, buildSubtitleTrackName, isTextSubtitleCodec } from "./tracks";
 import { dialogueStyleNames } from "./ass-classifier";
 import { styleSrtAss, restyleAssDialogueFont } from "./ass-style";
-import { checkOllama, type OllamaOptions } from "./ollama";
+import { checkOllama } from "./ollama";
 import { planTargetLanguages, translateSubtitleContent, type KeptSubDescriptor } from "./subtitle-translate";
 import { createSemaphore } from "./concurrency";
 import { resolveTranslateStrategy } from "./translate-provider";
@@ -261,6 +261,7 @@ export async function runTranslateStep(params: RunTranslateStepParams): Promise<
 				source: prod.source,
 				target: prod.target,
 				numCtx: settings.translateNumCtx,
+				maxTokens: settings.translateMaxTokens,
 				timeoutMs: settings.translateTimeoutMs,
 				signal,
 			};

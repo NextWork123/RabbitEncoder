@@ -349,12 +349,19 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 			hint.className = "lang-filter-hint";
 			hint.textContent = "Any Ollama model tag. TranslateGemma models use the dedicated translation prompt; other models use the generic format automatically.";
 			providerSettings.appendChild(hint);
+
+			renderNumberControl(group(), "Context window (num_ctx)", settings.translateNumCtx ?? 8192, { min: 2048, max: 131072, step: 1024 }, (v) => {
+				settings.translateNumCtx = v;
+			});
 		} else {
 			renderSelectControl(group(), "Model", DEEPSEEK_MODELS, settings.translateDeepseekModel ?? DEEPSEEK_MODELS[0], (v) => {
 				settings.translateDeepseekModel = v;
 			});
 			renderPasswordControl(group(), "API key", settings.translateApiKey ?? "", "sk-...", (v) => {
 				settings.translateApiKey = v.trim();
+			});
+			renderNumberControl(group(), "Max output tokens", settings.translateMaxTokens ?? 8192, { min: 1024, max: 32768, step: 512 }, (v) => {
+				settings.translateMaxTokens = v;
 			});
 		}
 	};
@@ -382,6 +389,18 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 
 	renderNumberControl(el("translate-batch"), "Dialogs per request", settings.translateBatchSize, { min: 1, max: 1000, step: 1 }, (v) => {
 		settings.translateBatchSize = v;
+	});
+
+	renderNumberControl(
+		el("translate-timeout"),
+		"Request timeout (s)",
+		Math.round((settings.translateTimeoutMs ?? 180_000) / 1000),
+		{ min: 10, max: 3600, step: 10 },
+		(v) => (settings.translateTimeoutMs = v * 1000),
+	);
+
+	renderNumberControl(el("translate-concurrency"), "Parallel requests", settings.translateConcurrency ?? 1, { min: 1, max: 16, step: 1 }, (v) => {
+		settings.translateConcurrency = v;
 	});
 
 	renderLabeledToggle(el("translate-signs"), settings.translateSignsSongs, "Also translate signs & songs", (v) => {
