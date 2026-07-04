@@ -115,14 +115,16 @@ const BASELINE: JobSettings = {
 		"7.1.4": 512,
 	},
 	translateSubtitles: false,
-	translateOllamaUrl: "http://localhost:11434",
+	translateProvider: "ollama",
 	translateModel: "translategemma:12b",
+	translateOllamaUrl: "http://localhost:11434",
+	translateDeepseekModel: "deepseek-v4-flash",
+	translateApiKey: "",
 	translateTargetLanguages: [],
 	translateBatchSize: 40,
 	translateSignsSongs: true,
 	translateNumCtx: 8192,
 	translateTimeoutMs: 120000,
-	translateStrategy: "translategemma",
 	vsFilters: [],
 };
 

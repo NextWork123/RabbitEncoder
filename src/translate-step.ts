@@ -9,6 +9,9 @@ import { styleSrtAss, restyleAssDialogueFont } from "./ass-style";
 import { checkOllama, type OllamaOptions } from "./ollama";
 import { planTargetLanguages, translateSubtitleContent, type KeptSubDescriptor } from "./subtitle-translate";
 import { createSemaphore } from "./concurrency";
+import { resolveTranslateStrategy } from "./translate-provider";
+import { checkDeepseek } from "./deepseek";
+import type { GenericOptions } from "./ollama-generic";
 
 /**
  * A finished, on-disk translated subtitle ready to hand to mkvmerge. Shaped to
@@ -180,8 +183,12 @@ export async function runTranslateStep(params: RunTranslateStepParams): Promise<
 	const targets = settings.translateTargetLanguages ?? [];
 	if (!settings.translateSubtitles || targets.length === 0) return [];
 
+	const provider = settings.translateProvider ?? "ollama";
+	const model = provider === "deepseek" ? settings.translateDeepseekModel || "deepseek-v4-flash" : settings.translateModel;
+	const strategy = resolveTranslateStrategy(provider, model);
+
 	const descriptors = buildKeptDescriptors(subtitleStreams);
-	const plan = planTargetLanguages(descriptors, targets);
+	const plan = planTargetLanguages(descriptors, targets, strategy);
 	for (const note of plan.skipped) Logger.info(`[translate] Skipped ${note}`);
 	if (plan.productions.length === 0) {
 		Logger.info("[translate] Nothing to translate (all target languages already present or unsupported)");
@@ -189,7 +196,10 @@ export async function runTranslateStep(params: RunTranslateStepParams): Promise<
 	}
 
 	// Preflight: fail fast with a clear message rather than shipping untranslated.
-	const health = await checkOllama(settings.translateOllamaUrl, settings.translateModel, signal);
+	const health =
+		provider === "deepseek"
+			? await checkDeepseek(settings.translateApiKey ?? "", model, signal)
+			: await checkOllama(settings.translateOllamaUrl, model, signal);
 	if (!health.ok) {
 		throw new Error(`Subtitle translation is enabled but ${health.detail}`);
 	}
@@ -243,9 +253,11 @@ export async function runTranslateStep(params: RunTranslateStepParams): Promise<
 
 	await Promise.all(
 		plan.productions.map(async (prod, li) => {
-			const ollama: OllamaOptions = {
+			const ollama: GenericOptions = {
+				provider,
 				url: settings.translateOllamaUrl,
-				model: settings.translateModel,
+				apiKey: settings.translateApiKey,
+				model,
 				source: prod.source,
 				target: prod.target,
 				numCtx: settings.translateNumCtx,
@@ -257,7 +269,7 @@ export async function runTranslateStep(params: RunTranslateStepParams): Promise<
 				format,
 				batchSize: settings.translateBatchSize,
 				translateSignsSongs: settings.translateSignsSongs,
-				strategy: settings.translateStrategy === "generic" ? "generic" : "translategemma",
+				strategy,
 				isDialogueStyle: (style) => dialogueStyles.has(style),
 				ollama,
 				sem,

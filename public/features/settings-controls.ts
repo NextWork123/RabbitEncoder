@@ -865,7 +865,7 @@ export function renderFontDropdown(container: HTMLElement, value: string, fonts:
 	container.appendChild(label);
 }
 
-/** Free-text control (used for ASS &HAABBGGRR colours). */
+/** Free-text control. */
 export function renderTextControl(container: HTMLElement, label: string, value: string, placeholder: string, onChange: (v: string) => void): void {
 	container.innerHTML = "";
 	const wrap = document.createElement("label");
@@ -881,4 +881,52 @@ export function renderTextControl(container: HTMLElement, label: string, value: 
 	wrap.appendChild(span);
 	wrap.appendChild(input);
 	container.appendChild(wrap);
+}
+
+/** Free-password control. */
+export function renderPasswordControl(container: HTMLElement, label: string, value: string, placeholder: string, onChange: (v: string) => void): void {
+	container.innerHTML = "";
+	const wrap = document.createElement("label");
+	wrap.className = "toggle-label";
+	const span = document.createElement("span");
+	span.textContent = `${label}\u00A0`;
+	const input = document.createElement("input");
+	input.type = "password";
+	input.className = "lang-filter-input";
+	input.placeholder = placeholder;
+	input.value = value;
+	input.oninput = () => onChange(input.value);
+	wrap.appendChild(span);
+	wrap.appendChild(input);
+	container.appendChild(wrap);
+}
+
+export function renderSelectControl(
+	container: HTMLElement,
+	labelText: string,
+	options: readonly string[],
+	value: string,
+	onChange: (value: string) => void,
+): void {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const span = document.createElement("span");
+	span.textContent = `${labelText}\u00A0`;
+
+	const select = document.createElement("select");
+	select.className = "select-input";
+	for (const opt of options) {
+		const o = document.createElement("option");
+		o.value = opt;
+		o.textContent = opt;
+		if (opt === value) o.selected = true;
+		select.appendChild(o);
+	}
+	select.onchange = () => onChange(select.value);
+
+	label.appendChild(span);
+	label.appendChild(select);
+	container.appendChild(label);
 }

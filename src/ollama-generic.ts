@@ -1,3 +1,4 @@
+import { deepseekChat } from "./deepseek";
 import { Logger } from "./logger";
 import type { TranslateLang } from "./translate-languages";
 
@@ -29,9 +30,13 @@ export interface TranslateItem {
 }
 
 export interface GenericOptions {
-	/** Base URL, e.g. "http://localhost:11434". */
+	/** Transport. Default "ollama". */
+	provider?: "ollama" | "deepseek";
+	/** Ollama base URL, e.g. "http://localhost:11434". Ignored for cloud providers. */
 	url: string;
-	/** Model tag, e.g. "qwen2.5:14b", "llama3.1:8b". */
+	/** API key for cloud providers. Ignored for Ollama. */
+	apiKey?: string;
+	/** Model tag ("qwen2.5:14b") or cloud model id ("deepseek-v4-flash"). */
 	model: string;
 	source: TranslateLang;
 	target: TranslateLang;
@@ -55,11 +60,107 @@ const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_NUM_CTX = 8192;
 const DEFAULT_TEMPERATURE = 0.1;
 
+/** Below this many missing entries, per-line recovery is cheaper than another batch. */
+const MIN_BATCH_RECOVERY = 3;
+/** Hard cap on recovery recursion depth (each level strictly shrinks the batch). */
+const MAX_RECOVERY_DEPTH = 5;
+
 /** Payload row sent to the model. */
 interface PayloadRow {
 	id: string;
 	name?: string;
 	text: string;
+}
+
+/** One prompt round-trip: per-entry translations, null where the id was dropped/unusable. */
+async function attemptBatch(payload: TranslateItem[], opts: GenericOptions): Promise<(string | null)[]> {
+	const prompt = buildGenericPrompt(payload, opts);
+	const content = await chat(prompt, opts);
+	return parseGenericResponse(content, payload.length);
+}
+
+/**
+ * Repair invalid JSON escape sequences the model may emit when reproducing
+ * protected subtitle formatting (typically the ASS line break written raw as
+ * `\N` instead of `\\N`, which makes the whole array unparseable).
+ *
+ * The regex matches, in order: a complete valid escape (`\"`, `\\`, `\/`,
+ * `\b`, `\f`, `\n`, `\r`, `\t`, or `\uXXXX`) — kept verbatim and consumed
+ * whole so its trailing character is never re-examined — or otherwise a lone
+ * backslash, which is never valid JSON and is doubled. Lossless on
+ * well-formed input.
+ */
+export function repairJsonEscapes(s: string): string {
+	return s.replace(/\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})|\\/g, (m) => (m.length > 1 ? m : "\\\\"));
+}
+
+/**
+ * Translate a payload of non-blank items, recovering failures by re-batching
+ * progressively smaller groups instead of dropping to per-line requests.
+ * Per-line recovery costs roughly a full prompt per dialog, so a mangled
+ * 40-line batch would cost ~40 extra requests; re-batching the missing subset
+ * (or halving on total failure) recovers the same lines in one or two.
+ */
+async function translateResilient(payload: TranslateItem[], opts: GenericOptions, depth: number): Promise<string[]> {
+	if (payload.length === 0) return [];
+	if (payload.length === 1) return [await translateOneGeneric(payload[0]!.text, opts)];
+
+	const halve = async (): Promise<string[]> => {
+		const mid = Math.ceil(payload.length / 2);
+		const left = await translateResilient(payload.slice(0, mid), opts, depth + 1);
+		const right = await translateResilient(payload.slice(mid), opts, depth + 1);
+		return [...left, ...right];
+	};
+
+	let parsed: (string | null)[];
+	try {
+		parsed = await attemptBatch(payload, opts);
+	} catch (err) {
+		// Transport failure that survived the client's own retries. Smaller
+		// prompts are cheaper to retry and likelier to fit/succeed.
+		if (depth >= MAX_RECOVERY_DEPTH) throw err;
+		Logger.warn(
+			`[translate] Generic batch of ${payload.length} failed (${(err as Error).message}) ` + `(${opts.source.code}->${opts.target.code}); splitting in half`,
+		);
+		return halve();
+	}
+
+	const result = new Array<string>(payload.length);
+	const missingIdx: number[] = [];
+	for (let i = 0; i < payload.length; i++) {
+		const t = parsed[i];
+		if (t === null || t === undefined) missingIdx.push(i);
+		else result[i] = t;
+	}
+	if (missingIdx.length === 0) return result;
+
+	// Last resort, or a tail so small the batch wrapper no longer pays for itself.
+	if (depth >= MAX_RECOVERY_DEPTH || missingIdx.length < MIN_BATCH_RECOVERY) {
+		Logger.warn(`[translate] Recovering ${missingIdx.length} straggler line(s) individually (${opts.source.code}->${opts.target.code})`);
+		for (const i of missingIdx) result[i] = await translateOneGeneric(payload[i]!.text, opts);
+		return result;
+	}
+
+	// Nothing usable at all: the response was garbage, so change the prompt
+	// size rather than resending the same thing.
+	if (missingIdx.length === payload.length) {
+		Logger.warn(`[translate] Generic batch of ${payload.length} returned no usable ids ` + `(${opts.source.code}->${opts.target.code}); splitting in half`);
+		return halve();
+	}
+
+	// Partial drop: the format works, the model just lost some ids.
+	// Re-batch only the missing entries in one smaller request.
+	Logger.warn(
+		`[translate] Generic batch of ${payload.length} returned ${payload.length - missingIdx.length} usable ids ` +
+			`(${opts.source.code}->${opts.target.code}); re-batching ${missingIdx.length} missing entrie(s)`,
+	);
+	const sub = await translateResilient(
+		missingIdx.map((i) => payload[i]!),
+		opts,
+		depth + 1,
+	);
+	for (let k = 0; k < missingIdx.length; k++) result[missingIdx[k]!] = sub[k]!;
+	return result;
 }
 
 /**
@@ -87,6 +188,7 @@ export function buildGenericInstruction(source: TranslateLang, target: Translate
 		`- Preserve protected formatting verbatim: any leading "{...}" override block and every "\\N" line break must appear unchanged in the output text.`,
 		`- Do not merge, split, reorder, add or remove entries.`,
 		`- Return ONLY a JSON array of objects {"id": "...", "text": "..."}, one per input entry, with no commentary, no explanations and no markdown fences.`,
+		`- In the JSON output, remember "\\N" must be escaped as "\\\\N" inside string values.`,
 	].join("\n");
 }
 
@@ -123,6 +225,11 @@ export function extractJsonArray(s: string): string | null {
 /**
  * Parse a model response into a map id->text. Returns an array aligned to
  * `count` (index === numeric id); entries the model dropped are `null`.
+ *
+ * Tolerates: markdown fences, prose around the array, reordered rows,
+ * numeric ids, and raw `\N` escapes inside strings (repaired on a second
+ * parse attempt so a formatting slip doesn't discard an otherwise-good
+ * batch and trigger expensive recovery).
  */
 export function parseGenericResponse(content: string, count: number): (string | null)[] {
 	const out: (string | null)[] = new Array(count).fill(null);
@@ -133,7 +240,15 @@ export function parseGenericResponse(content: string, count: number): (string | 
 	try {
 		parsed = JSON.parse(json);
 	} catch {
-		return out;
+		// Second chance: the array shape is usually fine and only the string
+		// escaping is broken (typically a raw `\N`). Repair and retry before
+		// declaring the batch unusable.
+		try {
+			parsed = JSON.parse(repairJsonEscapes(json));
+			Logger.warn("[translate] Model emitted invalid JSON escapes (raw \\N?); repaired and parsed successfully");
+		} catch {
+			return out;
+		}
 	}
 	if (!Array.isArray(parsed)) return out;
 
@@ -157,6 +272,16 @@ interface OllamaChatResponse {
 
 /** One /api/chat round-trip. Throws on HTTP, network, timeout or abort. */
 async function chat(prompt: string, opts: GenericOptions): Promise<string> {
+	if (opts.provider === "deepseek") {
+		return deepseekChat(prompt, {
+			apiKey: opts.apiKey ?? "",
+			model: opts.model,
+			temperature: opts.temperature,
+			timeoutMs: opts.timeoutMs,
+			signal: opts.signal,
+		});
+	}
+
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(new Error("Ollama request timed out")), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 	const onExternalAbort = () => controller.abort(opts.signal?.reason ?? new Error("aborted"));
@@ -213,7 +338,6 @@ export async function translateOneGeneric(text: string, opts: GenericOptions): P
 export async function translateBatchGeneric(items: TranslateItem[], opts: GenericOptions): Promise<string[]> {
 	if (items.length === 0) return [];
 
-	// Indices that actually need translation.
 	const payloadIdx: number[] = [];
 	for (let i = 0; i < items.length; i++) {
 		if (items[i]!.text.trim() !== "") payloadIdx.push(i);
@@ -222,34 +346,10 @@ export async function translateBatchGeneric(items: TranslateItem[], opts: Generi
 	if (payloadIdx.length === 0) return result;
 
 	const payload = payloadIdx.map((i) => items[i]!);
-
-	if (payload.length === 1) {
-		result[payloadIdx[0]!] = await translateOneGeneric(payload[0]!.text, opts);
-		return result;
-	}
-
-	const prompt = buildGenericPrompt(payload, opts);
-	const content = await chat(prompt, opts);
-	const parsed = parseGenericResponse(content, payload.length);
-
-	// Fill aligned ids; collect any the model dropped for per-line recovery.
-	const missing: number[] = [];
+	const translated = await translateResilient(payload, opts, 0);
 	for (let k = 0; k < payload.length; k++) {
-		const t = parsed[k];
-		if (t === null || t === undefined) missing.push(k);
-		else result[payloadIdx[k]!] = t;
+		result[payloadIdx[k]!] = translated[k]!;
 	}
-
-	if (missing.length > 0) {
-		Logger.warn(
-			`[translate] Generic batch of ${payload.length} returned ${payload.length - missing.length} usable ids ` +
-				`(${opts.source.code}->${opts.target.code}); recovering ${missing.length} line(s) individually`,
-		);
-		for (const k of missing) {
-			result[payloadIdx[k]!] = await translateOneGeneric(payload[k]!.text, opts);
-		}
-	}
-
 	return result;
 }
 
@@ -291,5 +391,21 @@ export async function checkGenericModel(
 		return { ok: true, detail: "", sample };
 	} catch (err) {
 		return { ok: false, detail: `Model reachable but translation failed: ${(err as Error).message}` };
+	}
+}
+
+/**
+ * Real JSON round-trip against any provider: translates two sample lines via
+ * the normal generic batch path so the Test button exercises exactly what a
+ * job will run.
+ */
+export async function checkGenericChat(opts: GenericOptions): Promise<{ ok: boolean; detail: string; sample?: string }> {
+	try {
+		const out = await translateBatchGeneric([{ text: "The goal of all life is death." }, { text: "See you tomorrow." }], opts);
+		const sample = out[0]?.trim();
+		if (!sample) return { ok: false, detail: "Model returned an empty translation" };
+		return { ok: true, detail: "", sample };
+	} catch (err) {
+		return { ok: false, detail: (err as Error).message };
 	}
 }

@@ -618,9 +618,10 @@ export async function encodeJob(
 			karaoke: job.settings.detectKaraokeAudio,
 		};
 
-		const ollamaIsLoopback = /(?:\/\/)(?:localhost|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0)(?::|\/|$)/i.test(job.settings.translateOllamaUrl);
+		const translateProvider = job.settings.translateProvider ?? "ollama";
+		const translateIsLocal = translateProvider === "ollama" && /(?:localhost|127\.0\.0\.1|\[?::1\]?)(?::|\/|$)/i.test(job.settings.translateOllamaUrl);
 		const overlapPolicy = job.settings.translateDuringEncode ?? "auto";
-		const overlapTranslate = overlapPolicy === "always" || (overlapPolicy === "auto" && !ollamaIsLoopback);
+		const overlapTranslate = overlapPolicy === "always" || (overlapPolicy === "auto" && !translateIsLocal);
 
 		const stageAbort = new AbortController();
 		const stageSignal = stageAbort.signal;

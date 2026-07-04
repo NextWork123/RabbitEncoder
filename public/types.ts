@@ -199,10 +199,16 @@ export interface JobSettings {
 	// Subtitle translation (Ollama / TranslateGemma)
 	/** Master switch: translate missing target languages via Ollama. */
 	translateSubtitles: boolean;
-	/** Ollama base URL (http://localhost:11434) */
+	/** Translation backend. Default "ollama". */
+	translateProvider: "ollama" | "deepseek";
+	/** Ollama base URL, e.g. "http://localhost:11434". */
 	translateOllamaUrl: string;
-	/** Model tag (translategemma:12b) */
+	/** Ollama model tag, free text, e.g. "translategemma:12b" or "qwen2.5:14b". */
 	translateModel: string;
+	/** DeepSeek model id (cloud provider). */
+	translateDeepseekModel: string;
+	/** API key for cloud providers. Empty for Ollama. */
+	translateApiKey: string;
 	/** Languages to ensure exist (["eng","deu","fra","slv"]). */
 	translateTargetLanguages: string[];
 	/** Dialogs sent to the model per request. */

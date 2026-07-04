@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach } from "bun:test";
 import { translateBatch, translateOne, buildTranslatePrompt } from "../src/ollama";
 import { planTargetLanguages, type KeptSubDescriptor } from "../src/subtitle-translate";
 import type { OllamaOptions } from "../src/ollama";
+import { repairJsonEscapes } from "../src/ollama-generic";
 
 const EN = { name: "English", code: "en" };
 const SL = { name: "Slovenian", code: "sl" };
@@ -80,6 +81,43 @@ describe("ollama.translateBatch", () => {
 	it("throws on HTTP errors", async () => {
 		globalThis.fetch = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
 		await expect(translateOne("hi", opts())).rejects.toThrow(/Ollama HTTP 500/);
+	});
+
+	it("bisects misaligned batches instead of going per-line", async () => {
+		let calls = 0;
+		globalThis.fetch = (async (_url: string, init: any) => {
+			calls++;
+			const prompt = JSON.parse(init.body).messages[0].content as string;
+			const block = prompt.split("\n\n\n")[1] ?? "";
+			const lines = block.split("\n");
+			// Blocks containing the poison line misalign; everything else is clean.
+			const content = lines.includes("POISON") && lines.length > 1 ? "merged output" : lines.map((l) => `X:${l}`).join("\n");
+			return new Response(JSON.stringify({ message: { content } }), { status: 200 });
+		}) as unknown as typeof fetch;
+
+		const input = ["a", "b", "c", "POISON", "d", "e", "f", "g"];
+		const out = await translateBatch(input, opts());
+		expect(out).toEqual(input.map((l) => `X:${l}`));
+		expect(calls).toBe(7);
+	});
+
+	it("bisection cost stays logarithmic at real batch sizes", async () => {
+		let calls = 0;
+		globalThis.fetch = (async (_url: string, init: any) => {
+			calls++;
+			const prompt = JSON.parse(init.body).messages[0].content as string;
+			const block = prompt.split("Slovenian:\n\n\n")[1] ?? "";
+			const lines = block.split("\n");
+			const content = lines.includes("POISON") && lines.length > 1 ? "merged output" : lines.map((l) => `X:${l}`).join("\n");
+			return new Response(JSON.stringify({ message: { content } }), { status: 200 });
+		}) as unknown as typeof fetch;
+
+		// 40 lines, one poison line in the middle.
+		const input = Array.from({ length: 40 }, (_, i) => (i === 17 ? "POISON" : `line ${i}`));
+		const out = await translateBatch(input, opts());
+		expect(out).toEqual(input.map((l) => `X:${l}`));
+
+		expect(calls).toBeLessThanOrEqual(13);
 	});
 });
 

@@ -265,14 +265,16 @@ const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	fontGroup: str(256),
 
 	translateSubtitles: bool,
+	translateProvider: enumOf(["ollama", "deepseek"]),
 	translateOllamaUrl: str(512),
 	translateModel: str(128),
+	translateDeepseekModel: enumOf(["deepseek-v4-flash", "deepseek-v4-pro"]),
+	translateApiKey: str(512),
 	translateTargetLanguages: strList,
 	translateBatchSize: intIn(1, 1000),
 	translateSignsSongs: bool,
 	translateNumCtx: intIn(512, 131072),
 	translateTimeoutMs: intIn(1000, 3600000),
-	translateStrategy: (v: unknown) => (v === "generic" ? "generic" : "translategemma"),
 };
 
 function sanitizeSettingsInto(target: JobSettings, partial: Partial<JobSettings>): void {

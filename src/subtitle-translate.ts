@@ -3,7 +3,7 @@ import { parseAssEvents, splitAssText, joinAssText, buildTranslatedAss, type Ass
 import { parseSrt, buildSrt } from "./srt-edit";
 import { translateBatch, type OllamaOptions } from "./ollama";
 import { resolveTranslateLang, normalizeTag, type TranslateLang } from "./translate-languages";
-import { translateBatchGeneric, type TranslateItem } from "./ollama-generic";
+import { translateBatchGeneric, type GenericOptions, type TranslateItem } from "./ollama-generic";
 import { createSemaphore, type Semaphore } from "./concurrency";
 
 /**
@@ -75,7 +75,7 @@ export interface TranslateContentOptions {
 	 * `dialogueStyleNames` in production.
 	 */
 	isDialogueStyle?: (style: string) => boolean;
-	ollama: OllamaOptions;
+	ollama: GenericOptions;
 	/** Reports cumulative translated-line progress. */
 	onProgress?: (done: number, total: number) => void;
 }

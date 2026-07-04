@@ -89,6 +89,14 @@ async function chat(prompt: string, opts: OllamaOptions): Promise<string> {
 	}
 }
 
+/** One block attempt: returns aligned translations, or null on line-count mismatch. */
+async function attemptBlock(payload: string[], opts: OllamaOptions): Promise<string[] | null> {
+	const block = payload.join("\n");
+	const content = await chat(buildTranslatePrompt(opts.source, opts.target, block), opts);
+	const outLines = splitResponseLines(content);
+	return outLines.length === payload.length ? outLines : null;
+}
+
 /** Translate a single line/string. */
 export async function translateOne(text: string, opts: OllamaOptions): Promise<string> {
 	if (text.trim() === "") return text;
@@ -104,9 +112,30 @@ function splitResponseLines(content: string): string[] {
 }
 
 /**
+ * Translate non-blank lines, bisecting on misalignment. TranslateGemma
+ * occasionally merges/splits lines within a block; rather than redoing the
+ * whole chunk line-by-line (n requests, ~full prompt each), split the block
+ * in half and recurse — clean halves are kept, and the offending line is
+ * isolated in log(n) retries.
+ */
+async function translateBlockResilient(payload: string[], opts: OllamaOptions): Promise<string[]> {
+	if (payload.length === 0) return [];
+	if (payload.length === 1) return [await translateOne(payload[0]!, opts)];
+
+	const aligned = await attemptBlock(payload, opts);
+	if (aligned) return aligned;
+
+	Logger.warn(`[translate] Block of ${payload.length} lines misaligned (${opts.source.code}->${opts.target.code}); bisecting`);
+	const mid = Math.ceil(payload.length / 2);
+	const left = await translateBlockResilient(payload.slice(0, mid), opts);
+	const right = await translateBlockResilient(payload.slice(mid), opts);
+	return [...left, ...right];
+}
+
+/**
  * Translate a batch of lines in one request, returning exactly `lines.length`
- * results. If the response doesn't line up 1:1, fall back to translating each
- * line on its own so cue alignment is never lost.
+ * results. If the response doesn't line up 1:1, the block is bisected until
+ * aligned halves are found, so cue alignment is never lost.
  *
  * Empty input lines are passed through untouched and don't cost a request.
  */
@@ -123,29 +152,8 @@ export async function translateBatch(lines: string[], opts: OllamaOptions): Prom
 	const payload = payloadIdx.map((i) => lines[i]!);
 	const result = [...lines];
 
-	if (payload.length === 1) {
-		result[payloadIdx[0]!] = await translateOne(payload[0]!, opts);
-		return result;
-	}
-
-	const block = payload.join("\n");
-	const prompt = buildTranslatePrompt(opts.source, opts.target, block);
-	const content = await chat(prompt, opts);
-	const outLines = splitResponseLines(content);
-
-	if (outLines.length === payload.length) {
-		payloadIdx.forEach((origIdx, k) => (result[origIdx] = outLines[k]!));
-		return result;
-	}
-
-	// Misaligned - the model merged/split lines. Redo this batch line-by-line.
-	Logger.warn(
-		`[translate] Batch of ${payload.length} lines returned ${outLines.length} lines (${opts.source.code}->${opts.target.code}); ` +
-			`falling back to per-line translation for this chunk`,
-	);
-	for (let k = 0; k < payload.length; k++) {
-		result[payloadIdx[k]!] = await translateOne(payload[k]!, opts);
-	}
+	const translated = await translateBlockResilient(payload, opts);
+	payloadIdx.forEach((origIdx, k) => (result[origIdx] = translated[k]!));
 	return result;
 }
 

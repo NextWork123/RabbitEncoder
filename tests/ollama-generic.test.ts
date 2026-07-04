@@ -7,6 +7,7 @@ import {
 	parseGenericResponse,
 	type TranslateItem,
 	type GenericOptions,
+	repairJsonEscapes,
 } from "../src/ollama-generic";
 
 const EN = { name: "English", code: "en" };
@@ -68,5 +69,28 @@ describe("parseGenericResponse", () => {
 	it("accepts numeric ids and fenced output", () => {
 		const out = parseGenericResponse('```json\n[{"id":0,"text":"a"},{"id":1,"text":"b"}]\n```', 2);
 		expect(out).toEqual(["a", "b"]);
+	});
+});
+
+describe("repairJsonEscapes / lenient parsing", () => {
+	// Simulates DeepSeek writing the ASS break raw: `\N` instead of `\\N`.
+	const badJson = '[{"id":"0","text":"got a job \\Nat a firm"},{"id":"1","text":"ok"}]'.replace("\\N", "\\\u004E");
+
+	it("raw \\N breaks strict JSON.parse", () => {
+		// Build the invalid string explicitly: backslash + N inside a JSON string.
+		const invalid = '[{"id":"0","text":"a \\' + 'Nb"}]';
+		expect(() => JSON.parse(invalid)).toThrow();
+		expect(JSON.parse(repairJsonEscapes(invalid))[0].text).toBe("a \\Nb");
+	});
+
+	it("leaves valid escapes untouched", () => {
+		const valid = '[{"id":"0","text":"quote \\" newline \\n break \\\\N"}]';
+		expect(repairJsonEscapes(valid)).toBe(valid);
+	});
+
+	it("parseGenericResponse recovers a batch with raw \\N escapes", () => {
+		const invalid = '[{"id":"0","text":"prva \\' + 'Ndruga"},{"id":"1","text":"ok"}]';
+		const out = parseGenericResponse(invalid, 2);
+		expect(out).toEqual(["prva \\Ndruga", "ok"]);
 	});
 });

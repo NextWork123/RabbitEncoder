@@ -224,10 +224,16 @@ export interface JobSettings {
 	// Subtitle translation (Ollama / TranslateGemma)
 	/** Master switch: translate missing target languages via Ollama. */
 	translateSubtitles: boolean;
+	/** Translation backend. Default "ollama". */
+	translateProvider: "ollama" | "deepseek";
 	/** Ollama base URL, e.g. "http://localhost:11434". */
 	translateOllamaUrl: string;
-	/** Model tag, e.g. "translategemma:12b". */
+	/** Ollama model tag, free text, e.g. "translategemma:12b" or "qwen2.5:14b". */
 	translateModel: string;
+	/** DeepSeek model id (cloud provider). */
+	translateDeepseekModel: string;
+	/** API key for cloud providers. Empty for Ollama. */
+	translateApiKey: string;
 	/** Languages to ensure exist (ISO-639-2 or -1, e.g. ["eng","deu","fra","slv"]). */
 	translateTargetLanguages: string[];
 	/** Dialogs sent to the model per request. Lower = better context, slower. */
@@ -242,7 +248,6 @@ export interface JobSettings {
 	translateConcurrency?: number;
 	/** May translation overlap the video encode? "auto" overlaps only when Ollama is NOT on a loopback address. Default "auto". */
 	translateDuringEncode?: "auto" | "always" | "never";
-	translateStrategy: "translategemma" | "generic";
 	/**
 	 * Ordered list of VapourSynth filter passes to apply during the prepare
 	 * stage, before the FFmpeg -vf chain. Each entry references a preset by
