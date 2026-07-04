@@ -92,8 +92,9 @@ const DEFAULT_JOB_SETTINGS: JobSettings = {
 	translateBatchSize: 40,
 	translateSignsSongs: true,
 	translateNumCtx: 8192,
-	translateTimeoutMs: 120000,
+	translateTimeoutMs: 300_000,
 	translateMaxTokens: 8192,
+	translateConcurrency: 1,
 	vsFilters: [],
 };
 

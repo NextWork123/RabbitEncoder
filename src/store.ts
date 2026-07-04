@@ -275,6 +275,7 @@ const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	translateSignsSongs: bool,
 	translateNumCtx: intIn(512, 131072),
 	translateTimeoutMs: intIn(1000, 3600000),
+	translateConcurrency: intIn(1, 16),
 };
 
 function sanitizeSettingsInto(target: JobSettings, partial: Partial<JobSettings>): void {
