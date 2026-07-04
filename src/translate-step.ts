@@ -257,6 +257,7 @@ export async function runTranslateStep(params: RunTranslateStepParams): Promise<
 				format,
 				batchSize: settings.translateBatchSize,
 				translateSignsSongs: settings.translateSignsSongs,
+				strategy: settings.translateStrategy === "generic" ? "generic" : "translategemma",
 				isDialogueStyle: (style) => dialogueStyles.has(style),
 				ollama,
 				sem,

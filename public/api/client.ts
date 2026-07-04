@@ -398,12 +398,13 @@ export async function testTranslateConnection(
 	url: string,
 	model: string,
 	target?: string,
+	strategy: "translategemma" | "generic" = "translategemma",
 ): Promise<{ ok: boolean; error?: string; sample?: string; target?: string }> {
 	try {
 		const res = await authFetch(`${API}/api/translate/test`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ url, model, target }),
+			body: JSON.stringify({ url, model, target, strategy }),
 		});
 		return await res.json();
 	} catch (err: any) {

@@ -272,6 +272,7 @@ const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	translateSignsSongs: bool,
 	translateNumCtx: intIn(512, 131072),
 	translateTimeoutMs: intIn(1000, 3600000),
+	translateStrategy: (v: unknown) => (v === "generic" ? "generic" : "translategemma"),
 };
 
 function sanitizeSettingsInto(target: JobSettings, partial: Partial<JobSettings>): void {

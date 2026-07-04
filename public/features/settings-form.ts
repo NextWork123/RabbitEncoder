@@ -18,6 +18,7 @@ import {
 	SUBTITLE_PROCESSING_OPTIONS,
 	SUBTITLE_SOURCE_PRIORITY_OPTIONS,
 	TRANSLATE_MODEL_OPTIONS,
+	TRANSLATE_STRATEGIES,
 	VIDEO_ENCODE_OPTIONS,
 } from "../config/options";
 import {
@@ -347,7 +348,8 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 		testResult.textContent = "Testing…";
 		testResult.className = "test-result";
 		const firstTarget = settings.translateTargetLanguages[0];
-		const r = await testTranslateConnection(settings.translateOllamaUrl, settings.translateModel, firstTarget);
+		const strategy = settings.translateStrategy || "translategemma";
+		const r = await testTranslateConnection(settings.translateOllamaUrl, settings.translateModel, firstTarget, strategy);
 		testBtn.disabled = false;
 		if (r.ok) {
 			testResult.textContent = `✓ OK - sample (${r.target}): "${r.sample}"`;
@@ -356,5 +358,9 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 			testResult.textContent = `✗ ${r.error}`;
 			testResult.classList.add("error");
 		}
+	});
+
+	renderRadioPills(el("translate-strategy"), TRANSLATE_STRATEGIES, settings.translateStrategy, (v) => {
+		settings.translateStrategy = v as "translategemma" | "generic";
 	});
 }

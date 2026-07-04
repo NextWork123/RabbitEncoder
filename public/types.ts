@@ -217,6 +217,7 @@ export interface JobSettings {
 	translateConcurrency?: number;
 	/** May translation overlap the video encode? "auto" overlaps only when Ollama is NOT on a loopback address. Default "auto". */
 	translateDuringEncode?: "auto" | "always" | "never";
+	translateStrategy: "translategemma" | "generic";
 	/**
 	 * Ordered list of VapourSynth filter passes to apply during the prepare
 	 * stage, before the FFmpeg -vf chain. Each entry references a preset by

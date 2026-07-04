@@ -30,6 +30,7 @@ export interface AssEventLine {
 	 * with a (possibly new) text to rebuild the line.
 	 */
 	prefix: string;
+	name: string; // ASS "Name"/"Actor" column ("" when absent). Context only
 }
 
 export interface ParsedAssEvents {
@@ -65,6 +66,7 @@ export function parseAssEvents(assText: string): ParsedAssEvents {
 	let idxEnd = -1;
 	let idxStyle = -1;
 	let idxText = -1;
+	let idxName = -1;
 
 	for (let lineNo = 0; lineNo < lines.length; lineNo++) {
 		const raw = lines[lineNo]!;
@@ -88,6 +90,8 @@ export function parseAssEvents(assText: string): ParsedAssEvents {
 			idxEnd = eventKeys.indexOf("end");
 			idxStyle = eventKeys.indexOf("style");
 			idxText = eventKeys.indexOf("text");
+			idxName = eventKeys.indexOf("name");
+			if (idxName < 0) idxName = eventKeys.indexOf("actor");
 			continue;
 		}
 
@@ -125,6 +129,7 @@ export function parseAssEvents(assText: string): ParsedAssEvents {
 			endMs: assTimeToMs(fields[idxEnd] ?? ""),
 			rawText,
 			prefix,
+			name: idxName >= 0 ? (fields[idxName] ?? "").trim() : "",
 		});
 	}
 

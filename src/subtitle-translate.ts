@@ -3,6 +3,7 @@ import { parseAssEvents, splitAssText, joinAssText, buildTranslatedAss, type Ass
 import { parseSrt, buildSrt } from "./srt-edit";
 import { translateBatch, type OllamaOptions } from "./ollama";
 import { resolveTranslateLang, normalizeTag, type TranslateLang } from "./translate-languages";
+import { translateBatchGeneric, type TranslateItem } from "./ollama-generic";
 import { createSemaphore, type Semaphore } from "./concurrency";
 
 /**
@@ -67,6 +68,7 @@ export interface TranslateContentOptions {
 	sem?: Semaphore;
 	/** When false, only dialogue-classified ASS lines are translated. */
 	translateSignsSongs: boolean;
+	strategy: "translategemma" | "generic";
 	/**
 	 * ASS-only: predicate telling whether a style name is dialogue. Required when
 	 * `translateSignsSongs` is false; ignored for SRT. Supply via ass-classifier's
@@ -87,6 +89,8 @@ interface Unit {
 	visible: string;
 	/** ASS leading override block to re-prepend, or "". */
 	lead: string;
+	/** Speaking character (ASS Name/Actor), passed to generic models as context. */
+	name?: string;
 }
 
 /**
@@ -116,8 +120,17 @@ async function translateUnits(units: Unit[], opts: TranslateContentOptions): Pro
 	await Promise.all(
 		chunks.map(async ([lo, hi]) => {
 			const slice = units.slice(lo, hi);
-			const visibles = slice.map((u) => u.visible);
-			const translated = await sem.run(() => translateBatch(visibles, opts.ollama));
+			const translated = await sem.run(() =>
+				opts.strategy === "generic"
+					? translateBatchGeneric(
+							slice.map<TranslateItem>((u) => ({ text: u.visible, name: u.name })),
+							opts.ollama,
+						)
+					: translateBatch(
+							slice.map((u) => u.visible),
+							opts.ollama,
+						),
+			);
 			for (let k = 0; k < slice.length; k++) {
 				out.set(slice[k]!.key, translated[k]!);
 			}
@@ -140,7 +153,7 @@ async function translateAss(content: string, opts: TranslateContentOptions): Pro
 		if (dialogueOnly && !isDialogue(ev.style)) continue;
 		const parts = splitAssText(ev.rawText);
 		if (!parts.translatable) continue;
-		units.push({ key: ev.lineNo, startMs: ev.startMs, endMs: ev.endMs, visible: parts.visible, lead: parts.lead });
+		units.push({ key: ev.lineNo, startMs: ev.startMs, endMs: ev.endMs, visible: parts.visible, lead: parts.lead, name: ev.name || undefined });
 	}
 
 	if (units.length === 0) {
@@ -216,8 +229,8 @@ export interface TranslationPlan {
 const TEXT_CODECS = new Set(["subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text", "subviewer", "microdvd"]);
 
 /** Canonical language key for "does a full track in this language already exist". */
-function langKey(tag: string | undefined): string {
-	const t = resolveTranslateLang(tag);
+function langKey(tag: string | undefined, resolve: (t: string | undefined) => TranslateLang | null): string {
+	const t = resolve(tag);
 	if (t) return t.code;
 	return normalizeTag(tag).split(/[-_]/)[0] || "und";
 }
@@ -233,16 +246,22 @@ function langKey(tag: string | undefined): string {
  *  - The produced track mirrors the source role (honorifics source -> honorifics
  *    output; otherwise full).
  */
-export function planTargetLanguages(tracks: KeptSubDescriptor[], targetTags: string[]): TranslationPlan {
+export function planTargetLanguages(
+	tracks: KeptSubDescriptor[],
+	targetTags: string[],
+	strategy: "translategemma" | "generic" = "translategemma",
+): TranslationPlan {
 	const skipped: string[] = [];
 	const productions: TranslationProduction[] = [];
+
+	const resolve: (t: string | undefined) => TranslateLang | null = resolveTranslateLang;
 
 	// Languages already covered by a dialogue-bearing full/honorifics track.
 	const existing = new Set<string>();
 
 	for (const track of tracks) {
 		if (track.trackType === "full" || track.trackType === "honorifics") {
-			existing.add(langKey(track.language));
+			existing.add(langKey(track.language, resolve));
 		}
 	}
 
@@ -254,24 +273,24 @@ export function planTargetLanguages(tracks: KeptSubDescriptor[], targetTags: str
 		return { productions, skipped };
 	}
 
-	const sourceLang = resolveTranslateLang(source.language);
+	const sourceLang = resolve(source.language);
 
 	if (!sourceLang) {
-		skipped.push(`source track language "${source.language}" is not supported by the model`);
+		skipped.push(`source track language "${source.language}" could not be resolved to a translatable language`);
 		return { productions, skipped };
 	}
 
-	const sourceKey = langKey(source.language);
+	const sourceKey = langKey(source.language, resolve);
 	const seen = new Set<string>();
 
 	for (const rawTag of targetTags) {
 		const tag = rawTag.trim();
 		if (!tag) continue;
 
-		const target = resolveTranslateLang(tag);
+		const target = resolve(tag);
 
 		if (!target) {
-			skipped.push(`${tag}: not a language the model supports`);
+			skipped.push(`${tag}: not a language the ${strategy === "generic" ? "resolver recognizes" : "model supports"}`);
 			continue;
 		}
 

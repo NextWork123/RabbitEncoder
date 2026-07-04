@@ -90,6 +90,7 @@ const DEFAULT_JOB_SETTINGS: JobSettings = {
 	translateSignsSongs: true,
 	translateNumCtx: 8192,
 	translateTimeoutMs: 120000,
+	translateStrategy: "translategemma",
 	vsFilters: [],
 };
 

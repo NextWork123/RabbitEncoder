@@ -86,6 +86,7 @@ export const PIPELINE_PRESET_HELP: Record<PipelinePreset, string> = {
 	custom: "Configure each pipeline stage individually below.",
 };
 
+export const TRANSLATE_STRATEGIES = ["translategemma", "generic"];
 export const TRANSLATE_MODEL_OPTIONS = ["translategemma:4b", "translategemma:12b", "translategemma:27b"];
 
 export const DEFAULT_STYLE_APPEARANCE: StyleAppearance = {

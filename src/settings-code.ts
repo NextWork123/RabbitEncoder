@@ -122,6 +122,7 @@ const BASELINE: JobSettings = {
 	translateSignsSongs: true,
 	translateNumCtx: 8192,
 	translateTimeoutMs: 120000,
+	translateStrategy: "translategemma",
 	vsFilters: [],
 };
 

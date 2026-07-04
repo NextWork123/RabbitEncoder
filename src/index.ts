@@ -45,6 +45,7 @@ import type { GroupStyleConfig } from "./subtitle-style";
 import { isInsideRoots, listSystemFonts } from "./system-fonts";
 import { checkOllama, translateOne } from "./ollama";
 import { resolveTranslateLang } from "./translate-languages";
+import { checkGenericModel } from "./ollama-generic";
 
 export const config = await loadConfig();
 
@@ -388,7 +389,7 @@ app.post("/api/config/import-code", async (c) => {
 });
 
 app.post("/api/translate/test", async (c) => {
-	const body = (await c.req.json().catch(() => ({}))) as { url?: string; model?: string; target?: string };
+	const body = (await c.req.json().catch(() => ({}))) as { url?: string; strategy?: string; model?: string; target?: string };
 	const url = (body.url || "").trim();
 	const model = (body.model || "").trim();
 	if (!url || !model) return c.json({ ok: false, error: "Missing Ollama URL or model" }, 400);
@@ -396,13 +397,20 @@ app.post("/api/translate/test", async (c) => {
 	const health = await checkOllama(url, model);
 	if (!health.ok) return c.json({ ok: false, error: health.detail });
 
-	// Prove the model actually generates: translate a tiny sample.
+	const strategy = body.strategy === "generic" ? "generic" : "translategemma";
+	const source = { name: "English", code: "en" };
 	const target = resolveTranslateLang(body.target || "slv") ?? { name: "Slovenian", code: "sl" };
+
+	if (strategy === "generic") {
+		const r = await checkGenericModel(url, model, source, target);
+		return c.json(r.ok ? { ok: true, sample: r.sample, model, target: target.name } : { ok: false, error: r.detail });
+	}
+
 	try {
 		const sample = await translateOne("The goal of all life is death.", {
 			url,
 			model,
-			source: { name: "English", code: "en" },
+			source,
 			target,
 			timeoutMs: 30000,
 		});
