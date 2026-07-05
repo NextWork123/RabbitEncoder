@@ -164,6 +164,12 @@ async function translateAss(content: string, opts: TranslateContentOptions): Pro
 
 	const units: Unit[] = [];
 	let skippedSigns = 0;
+	let dedupedSigns = 0;
+
+	const leadByKey = new Map<number, string>(); // per-line leads (moved up)
+	const signFirstKey = new Map<string, number>(); // visible -> first unit's lineNo
+	const signDuplicates = new Map<string, number[]>(); // visible -> later lineNos
+
 	for (const ev of events) {
 		const dialogue = isDialogue(ev.style);
 		if (dialogueOnly && !dialogue) continue;
@@ -175,11 +181,27 @@ async function translateAss(content: string, opts: TranslateContentOptions): Pro
 			continue;
 		}
 
+		leadByKey.set(ev.lineNo, parts.lead);
+
+		// Animated typesetting often repeats the same text once per frame with
+		// only \pos/\clip changing; translate the text once and fan it out.
+		if (!dialogue) {
+			const firstKey = signFirstKey.get(parts.visible);
+			if (firstKey !== undefined) {
+				let dups = signDuplicates.get(parts.visible);
+				if (!dups) signDuplicates.set(parts.visible, (dups = []));
+				dups.push(ev.lineNo);
+				dedupedSigns++;
+				continue;
+			}
+			signFirstKey.set(parts.visible, ev.lineNo);
+		}
+
 		units.push({ key: ev.lineNo, startMs: ev.startMs, endMs: ev.endMs, visible: parts.visible, lead: parts.lead, name: ev.name || undefined });
 	}
 
 	if (skippedSigns > 0) {
-		Logger.info(`[translate] Skipped ${skippedSigns} single-word sign/song event(s) (animated typesetting)`);
+		Logger.info(`[translate] Deduplicated ${dedupedSigns} repeated sign/song event(s); translating ${signFirstKey.size} unique sign texts once each`);
 	}
 
 	if (units.length === 0) {
@@ -187,7 +209,6 @@ async function translateAss(content: string, opts: TranslateContentOptions): Pro
 		return content;
 	}
 
-	const leadByKey = new Map<number, string>();
 	for (const u of units) leadByKey.set(u.key, u.lead);
 
 	const translatedVisible = await translateUnits(units, opts);
@@ -195,6 +216,13 @@ async function translateAss(content: string, opts: TranslateContentOptions): Pro
 	const newTextByLineNo = new Map<number, string>();
 	for (const [key, visible] of translatedVisible) {
 		newTextByLineNo.set(key, joinAssText(leadByKey.get(key) ?? "", visible));
+	}
+	for (const [text, dups] of signDuplicates) {
+		const translated = translatedVisible.get(signFirstKey.get(text)!);
+		if (translated === undefined) continue;
+		for (const lineNo of dups) {
+			newTextByLineNo.set(lineNo, joinAssText(leadByKey.get(lineNo) ?? "", translated));
+		}
 	}
 
 	return buildTranslatedAss(content, newTextByLineNo, events as AssEventLine[]);
