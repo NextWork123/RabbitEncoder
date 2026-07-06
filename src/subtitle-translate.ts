@@ -156,19 +156,190 @@ async function translateUnits(units: Unit[], opts: TranslateContentOptions): Pro
 	return out;
 }
 
+/**
+ * True when a sign's visible text is random-letter ASCII noise (grain/static
+ * noise-font typesetting). Structural checks apply per \N segment; the
+ * statistical checks (case-flip rate, vowel ratio) are computed over all
+ * segments combined — per-segment samples are too small to be reliable.
+ * Non-ASCII scripts always return false (fails closed).
+ */
+export function isNoiseSign(visible: string, durationMs?: number): boolean {
+	const segs = visible
+		.split(/\\N/i)
+		.map((s) => s.trim())
+		.filter(Boolean);
+	if (segs.length === 0) return false;
+
+	const frameLength = durationMs !== undefined && durationMs <= 100;
+	const minLen = frameLength ? 8 : 12;
+
+	for (const seg of segs) {
+		if (seg.length < minLen || !/^[A-Za-z]+$/.test(seg)) return false;
+	}
+
+	let flips = 0;
+	let pairs = 0;
+	for (const seg of segs) {
+		for (let i = 1; i < seg.length; i++) {
+			pairs++;
+			if (seg[i - 1]! >= "a" !== seg[i]! >= "a") flips++;
+		}
+	}
+	const flipRate = pairs > 0 ? flips / pairs : 0;
+	const all = segs.join("");
+	const vowelRatio = (all.match(/[aeiou]/gi)?.length ?? 0) / all.length;
+
+	return flipRate >= (frameLength ? 0.2 : 0.3) && vowelRatio <= (frameLength ? 0.32 : 0.28);
+}
+
+/**
+ * Find per-frame "churn" effect events (grain, static, glitch text): runs of
+ * consecutive same-style non-dialogue events that are frame-length, temporally
+ * contiguous, and all carry distinct text. Readable text can't change every
+ * frame in any script, so this is language-agnostic. Returns lineNos to skip.
+ */
+export function findFrameChurnEvents(
+	events: AssEventLine[],
+	isDialogue: (style: string) => boolean,
+	opts = { maxEventMs: 100, maxGapMs: 50, minRun: 5 },
+): Set<number> {
+	const skip = new Set<number>();
+	const byGroup = new Map<string, AssEventLine[]>();
+
+	for (const ev of events) {
+		if (isDialogue(ev.style)) continue;
+		if (ev.endMs - ev.startMs > opts.maxEventMs) continue;
+		const key = `${ev.style}\u0000${ev.name}`;
+		let arr = byGroup.get(key);
+		if (!arr) byGroup.set(key, (arr = []));
+		arr.push(ev);
+	}
+
+	for (const arr of byGroup.values()) {
+		arr.sort((a, b) => a.startMs - b.startMs);
+		let run: AssEventLine[] = [];
+		const flush = () => {
+			const texts = new Set(run.map((e) => splitAssText(e.rawText).visible));
+			const uniqueRatio = texts.size / run.length;
+			if (run.length >= opts.minRun && uniqueRatio >= 0.5) {
+				for (const e of run) skip.add(e.lineNo);
+			}
+			run = [];
+		};
+		for (const ev of arr) {
+			const prev = run[run.length - 1];
+			if (prev && ev.startMs - prev.endMs > opts.maxGapMs) flush();
+			run.push(ev);
+		}
+		flush();
+	}
+	return skip;
+}
+
+/**
+ * Distance between two sign texts counting only letter↔letter substitutions
+ * (scramble/typewriter noise). Null when lengths differ or any differing
+ * position involves a digit, punctuation, or non-ASCII character - those are
+ * real content changes ("Floor 1" vs "Floor 2" must never merge).
+ */
+export function scrambleDistance(a: string, b: string, max: number): number | null {
+	if (a.length !== b.length) return null;
+	let d = 0;
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] === b[i]) continue;
+		if (!/[a-z]/i.test(a[i]!) || !/[a-z]/i.test(b[i]!)) return null;
+		if (++d > max) return null;
+	}
+	return d;
+}
+
+export interface SignEventInput {
+	lineNo: number;
+	startMs: number;
+	endMs: number;
+	visible: string;
+	/** Cluster grouping key, typically `${style}\u0000${name}`. */
+	group: string;
+}
+
+export interface SignCluster {
+	/** Longest-duration member (ties → latest); its text is what gets translated. */
+	representative: SignEventInput;
+	members: SignEventInput[];
+}
+
+/**
+ * Group sign events into clusters sharing one translation. Exact text repeats
+ * merge unconditionally (preserves the old dedup semantics for animated
+ * typesetting); scramble variants merge only within `windowMs` of the cluster
+ * and within `maxSubs` letter substitutions of its first-seen text.
+ */
+export function clusterSignEvents(signs: SignEventInput[], opts = { maxSubs: 2, windowMs: 5000 }): SignCluster[] {
+	interface Open {
+		anchor: string;
+		lastEndMs: number;
+		members: SignEventInput[];
+	}
+	const byGroup = new Map<string, SignEventInput[]>();
+	for (const s of signs) {
+		let arr = byGroup.get(s.group);
+		if (!arr) byGroup.set(s.group, (arr = []));
+		arr.push(s);
+	}
+
+	const clusters: SignCluster[] = [];
+	for (const arr of byGroup.values()) {
+		arr.sort((x, y) => x.startMs - y.startMs || x.endMs - y.endMs);
+		const open: Open[] = [];
+		const exactByText = new Map<string, Open>();
+
+		for (const ev of arr) {
+			let hit = exactByText.get(ev.visible);
+			if (!hit) {
+				for (const c of open) {
+					if (ev.startMs - c.lastEndMs > opts.windowMs) continue;
+					if (scrambleDistance(ev.visible, c.anchor, opts.maxSubs) !== null) {
+						hit = c;
+						break;
+					}
+				}
+			}
+			if (hit) {
+				hit.members.push(ev);
+				hit.lastEndMs = Math.max(hit.lastEndMs, ev.endMs);
+				if (!exactByText.has(ev.visible)) exactByText.set(ev.visible, hit);
+			} else {
+				const c: Open = { anchor: ev.visible, lastEndMs: ev.endMs, members: [ev] };
+				open.push(c);
+				exactByText.set(ev.visible, c);
+			}
+		}
+
+		for (const c of open) {
+			let rep = c.members[0]!;
+			for (const m of c.members) {
+				const dm = m.endMs - m.startMs;
+				const dr = rep.endMs - rep.startMs;
+				if (dm > dr || (dm === dr && m.startMs > rep.startMs)) rep = m;
+			}
+			clusters.push({ representative: rep, members: c.members });
+		}
+	}
+	return clusters;
+}
+
 async function translateAss(content: string, opts: TranslateContentOptions): Promise<string> {
 	const { events } = parseAssEvents(content);
 
 	const dialogueOnly = !opts.translateSignsSongs;
 	const isDialogue = opts.isDialogueStyle ?? (() => true);
+	const READABLE_MS = 500;
 
 	const units: Unit[] = [];
+	const leadByKey = new Map<number, string>();
+	const evByLineNo = new Map<number, AssEventLine>();
+	const signInputs: SignEventInput[] = [];
 	let skippedSigns = 0;
-	let dedupedSigns = 0;
-
-	const leadByKey = new Map<number, string>(); // per-line leads (moved up)
-	const signFirstKey = new Map<string, number>(); // visible -> first unit's lineNo
-	const signDuplicates = new Map<string, number[]>(); // visible -> later lineNos
 
 	for (const ev of events) {
 		const dialogue = isDialogue(ev.style);
@@ -176,32 +347,60 @@ async function translateAss(content: string, opts: TranslateContentOptions): Pro
 		const parts = splitAssText(ev.rawText);
 		if (!parts.translatable) continue;
 
-		if (!dialogue && isSingleCharSign(parts.visible)) {
+		if (!dialogue && (isSingleCharSign(parts.visible) || isNoiseSign(parts.visible, ev.endMs - ev.startMs))) {
 			skippedSigns++;
 			continue;
 		}
 
 		leadByKey.set(ev.lineNo, parts.lead);
 
-		// Animated typesetting often repeats the same text once per frame with
-		// only \pos/\clip changing; translate the text once and fan it out.
-		if (!dialogue) {
-			const firstKey = signFirstKey.get(parts.visible);
-			if (firstKey !== undefined) {
-				let dups = signDuplicates.get(parts.visible);
-				if (!dups) signDuplicates.set(parts.visible, (dups = []));
-				dups.push(ev.lineNo);
-				dedupedSigns++;
-				continue;
-			}
-			signFirstKey.set(parts.visible, ev.lineNo);
+		if (dialogue) {
+			units.push({ key: ev.lineNo, startMs: ev.startMs, endMs: ev.endMs, visible: parts.visible, lead: parts.lead, name: ev.name || undefined });
+		} else {
+			evByLineNo.set(ev.lineNo, ev);
+			signInputs.push({ lineNo: ev.lineNo, startMs: ev.startMs, endMs: ev.endMs, visible: parts.visible, group: `${ev.style}\u0000${ev.name}` });
 		}
-
-		units.push({ key: ev.lineNo, startMs: ev.startMs, endMs: ev.endMs, visible: parts.visible, lead: parts.lead, name: ev.name || undefined });
 	}
 
-	if (skippedSigns > 0) {
-		Logger.info(`[translate] Deduplicated ${dedupedSigns} repeated sign/song event(s); translating ${signFirstKey.size} unique sign texts once each`);
+	// Exact repeats and scramble variants collapse into clusters, each
+	// translated once from its most readable (longest-held) member.
+	const clusters = clusterSignEvents(signInputs);
+
+	// Clusters with no readably-held member are flicker: per-frame text nobody
+	// can read (e.g. non-ASCII grain isNoiseSign can't see). Those go to the
+	// language-agnostic churn detector; everything flagged stays verbatim.
+	const keptClusters: SignCluster[] = [];
+	const flickerEvents: AssEventLine[] = [];
+	const flickerClusters: SignCluster[] = [];
+	for (const c of clusters) {
+		if (c.members.some((m) => m.endMs - m.startMs >= READABLE_MS)) {
+			keptClusters.push(c);
+		} else {
+			flickerClusters.push(c);
+			for (const m of c.members) flickerEvents.push(evByLineNo.get(m.lineNo)!);
+		}
+	}
+	const churn = findFrameChurnEvents(flickerEvents, isDialogue);
+	for (const c of flickerClusters) {
+		if (c.members.every((m) => churn.has(m.lineNo))) skippedSigns += c.members.length;
+		else keptClusters.push(c); // short but legit sign (e.g. a lone 300ms stamp)
+	}
+
+	for (const c of keptClusters) {
+		const rep = c.representative;
+		units.push({
+			key: rep.lineNo,
+			startMs: rep.startMs,
+			endMs: rep.endMs,
+			visible: rep.visible,
+			lead: leadByKey.get(rep.lineNo) ?? "",
+			name: evByLineNo.get(rep.lineNo)?.name || undefined,
+		});
+	}
+	units.sort((a, b) => a.startMs - b.startMs); // planChunks expects chronological order
+
+	if (skippedSigns > 0 || signInputs.length > keptClusters.length) {
+		Logger.info(`[translate] Skipped ${skippedSigns} noise/churn sign event(s); ${keptClusters.length} sign cluster(s) translated once each`);
 	}
 
 	if (units.length === 0) {
@@ -209,23 +408,21 @@ async function translateAss(content: string, opts: TranslateContentOptions): Pro
 		return content;
 	}
 
-	for (const u of units) leadByKey.set(u.key, u.lead);
-
 	const translatedVisible = await translateUnits(units, opts);
 
 	const newTextByLineNo = new Map<number, string>();
 	for (const [key, visible] of translatedVisible) {
 		newTextByLineNo.set(key, joinAssText(leadByKey.get(key) ?? "", visible));
 	}
-	for (const [text, dups] of signDuplicates) {
-		const translated = translatedVisible.get(signFirstKey.get(text)!);
-		if (translated === undefined) continue;
-		for (const lineNo of dups) {
-			newTextByLineNo.set(lineNo, joinAssText(leadByKey.get(lineNo) ?? "", translated));
+	for (const c of keptClusters) {
+		const t = translatedVisible.get(c.representative.lineNo);
+		if (t === undefined) continue;
+		for (const m of c.members) {
+			newTextByLineNo.set(m.lineNo, joinAssText(leadByKey.get(m.lineNo) ?? "", t));
 		}
 	}
 
-	return buildTranslatedAss(content, newTextByLineNo, events as AssEventLine[]);
+	return buildTranslatedAss(content, newTextByLineNo, events);
 }
 
 async function translateSrt(content: string, opts: TranslateContentOptions): Promise<string> {
