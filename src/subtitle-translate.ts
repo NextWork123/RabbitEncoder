@@ -5,6 +5,7 @@ import { translateBatch } from "./ollama";
 import { resolveTranslateLang, normalizeTag, type TranslateLang } from "./translate-languages";
 import { translateBatchGeneric, type GenericOptions, type TranslateItem } from "./ollama-generic";
 import { createSemaphore, type Semaphore } from "./concurrency";
+import { letterSignReplacementTexts, reconstructLetterSigns } from "./letter-signs";
 
 /**
  * True when a sign/song's visible text is a single character. Animated
@@ -341,7 +342,19 @@ async function translateAss(content: string, opts: TranslateContentOptions): Pro
 	const signInputs: SignEventInput[] = [];
 	let skippedSigns = 0;
 
+	const { signs: letterSigns, consumed: letterConsumed } = reconstructLetterSigns(events, isDialogue);
+	const letterSignByRep = new Map(letterSigns.map((s) => [s.representativeLineNo, s]));
+
 	for (const ev of events) {
+		if (letterConsumed.has(ev.lineNo)) {
+			const sign = letterSignByRep.get(ev.lineNo);
+			if (!sign) continue;
+			leadByKey.set(ev.lineNo, sign.replacementLead);
+			evByLineNo.set(ev.lineNo, ev);
+			signInputs.push({ lineNo: ev.lineNo, startMs: sign.startMs, endMs: sign.endMs, visible: sign.text, group: `${ev.style}\u0000${ev.name}\u0000letters` });
+			continue;
+		}
+
 		const dialogue = isDialogue(ev.style);
 		if (dialogueOnly && !dialogue) continue;
 		const parts = splitAssText(ev.rawText);
@@ -418,7 +431,14 @@ async function translateAss(content: string, opts: TranslateContentOptions): Pro
 		const t = translatedVisible.get(c.representative.lineNo);
 		if (t === undefined) continue;
 		for (const m of c.members) {
-			newTextByLineNo.set(m.lineNo, joinAssText(leadByKey.get(m.lineNo) ?? "", t));
+			const sign = letterSignByRep.get(m.lineNo);
+			if (sign) {
+				for (const [lineNo, text] of letterSignReplacementTexts(sign, t)) {
+					newTextByLineNo.set(lineNo, text);
+				}
+			} else {
+				newTextByLineNo.set(m.lineNo, joinAssText(leadByKey.get(m.lineNo) ?? "", t));
+			}
 		}
 	}
 
