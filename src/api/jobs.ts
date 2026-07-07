@@ -1,0 +1,204 @@
+import { existsSync, mkdtempSync, rmSync } from "fs";
+import { join } from "path";
+import type { Web } from "@rabbit-company/web";
+import type { AppConfig, JobSettings } from "../core/types";
+import { cancelJob, getAllJobs, getJob, moveJob, removeJob, reorderJobs, retryJob, updateJobSettings } from "../queue/store";
+import { probeFile } from "../pipeline/probe";
+import { previewAudio, previewSubtitles } from "../tracks/tracks";
+import { decodeSettingsCode, SettingsCodeError } from "../settings/settings-code";
+
+export function registerJobRoutes(app: Web, config: AppConfig): void {
+	app.get("/api/jobs", (c) => {
+		return c.json(getAllJobs());
+	});
+
+	app.get("/api/jobs/:id", (c) => {
+		const job = getJob(c.params.id!);
+		if (!job) return c.json({ error: "Job not found" }, 404);
+		return c.json(job);
+	});
+
+	app.patch("/api/jobs/:id", async (c) => {
+		const body = (await c.req.json()) as Partial<JobSettings>;
+		const job = updateJobSettings(c.params.id!, body);
+		if (!job) return c.json({ error: "Job not found or not editable" }, 400);
+		return c.json(job);
+	});
+
+	app.delete("/api/jobs/:id", (c) => {
+		const ok = removeJob(c.params.id!);
+		if (!ok) return c.json({ error: "Cannot remove active job" }, 400);
+		return c.json({ ok: true });
+	});
+
+	app.post("/api/jobs/:id/retry", (c) => {
+		const job = retryJob(c.params.id!);
+		if (!job) return c.json({ error: "Job not found or not retryable" }, 400);
+		return c.json(job);
+	});
+
+	app.post("/api/jobs/:id/cancel", (c) => {
+		const ok = cancelJob(c.params.id!);
+		if (!ok) return c.json({ error: "Job not found or not currently encoding" }, 400);
+		return c.json({ ok: true });
+	});
+
+	app.get("/api/jobs/:id/subtitle-preview", async (c) => {
+		const job = getJob(c.params.id!);
+		if (!job) return c.json({ error: "Job not found" }, 404);
+
+		if (!existsSync(job.inputPath)) {
+			return c.json({ error: "Source file no longer accessible" }, 400);
+		}
+
+		let probe = job.probe;
+		if (!job.probe) {
+			probe = await probeFile(job.inputPath);
+		}
+
+		const subtitleStreams = probe!.subtitleStreams || [];
+		if (subtitleStreams.length === 0) {
+			return c.json({ source: [], output: [] });
+		}
+
+		try {
+			const tempDir = mkdtempSync(join(config.tempDir, "sub-preview-"));
+
+			const result = await previewSubtitles(job.inputPath, subtitleStreams, tempDir, {
+				dedupe: job.settings.dedupeSubtitles,
+				languages: job.settings.subtitleLanguages || [],
+				langDetect: job.settings.subtitleLangDetect,
+				langDetectConfidence: job.settings.subtitleLangDetectConfidence,
+				detectSignsSongs: job.settings.detectSignsSongs,
+				detectSDH: job.settings.detectSDH,
+				detectHonorifics: job.settings.detectHonorifics,
+				// Source / format ordering
+				sourcePriority: job.settings.subtitleSourcePriority,
+				fansubTiebreak: job.settings.subtitleFansubTiebreak,
+				formatPriority: job.settings.subtitleFormatPriority,
+				// Drop filters
+				dropPicture: job.settings.dropPictureSubtitles,
+				removeSDH: job.settings.removeSDHSubtitles,
+				removeCommentary: job.settings.removeCommentarySubtitles,
+				removeForcedSignsSongs: job.settings.removeForcedSignsSongs,
+				removeStoryboard: job.settings.removeStoryboardSubtitles,
+				removeHonorifics: job.settings.removeHonorificsSubtitles,
+				// Dedupe + naming
+				dedupeAcrossFormat: job.settings.dedupeAcrossFormat,
+				renameTracks: job.settings.renameSubtitleTracks,
+				// Advanced detection tuning
+				signsSongsStyleRatio: job.settings.signsSongsStyleRatio,
+				signsSongsLineRatio: job.settings.signsSongsLineRatio,
+				sdhRatioThreshold: job.settings.sdhRatioThreshold,
+				sdhMinLines: job.settings.sdhMinLines,
+				honorificsMinCount: job.settings.honorificsMinCount,
+				honorificsRatio: job.settings.honorificsRatio,
+				assumeMislabeled: job.settings.assumeMislabeledTracks,
+			});
+
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+			} catch {}
+
+			return c.json(result);
+		} catch (err: any) {
+			return c.json({ error: `Preview failed: ${err.message || err}` }, 500);
+		}
+	});
+
+	app.get("/api/jobs/:id/audio-preview", async (c) => {
+		const job = getJob(c.params.id!);
+		if (!job) return c.json({ error: "Job not found" }, 404);
+
+		if (!existsSync(job.inputPath)) {
+			return c.json({ error: "Source file no longer accessible" }, 400);
+		}
+
+		let probe = job.probe;
+		if (!probe) {
+			probe = await probeFile(job.inputPath);
+		}
+
+		const audioStreams = probe.audioStreams || [];
+		if (audioStreams.length === 0) {
+			return c.json({ source: [], output: [] });
+		}
+
+		try {
+			const result = previewAudio(audioStreams, job.settings.audioBitrates, {
+				languages: job.settings.audioLanguages || [],
+				languagePriority: job.settings.audioLanguagePriority,
+				collapseChannels: job.settings.keepBestAudioChannelsOnly,
+				dedupe: job.settings.dedupeAudio,
+				removeCommentary: job.settings.removeCommentaryAudio,
+				removeDescriptive: job.settings.removeDescriptiveAudio,
+				removeKaraoke: job.settings.removeKaraokeAudio,
+				dropCompatibility: job.settings.dropCompatibilityAudio,
+				codecPriority: job.settings.audioCodecPriority,
+				preferUncensored: job.settings.preferUncensoredAudio,
+				renameTracks: job.settings.renameAudioTracks,
+				detect: {
+					commentary: job.settings.detectCommentaryAudio,
+					descriptive: job.settings.detectDescriptiveAudio,
+					karaoke: job.settings.detectKaraokeAudio,
+				},
+			});
+			return c.json(result);
+		} catch (err: any) {
+			return c.json({ error: `Preview failed: ${err.message || err}` }, 500);
+		}
+	});
+
+	app.get("/api/jobs/:id/mediainfo", async (c) => {
+		const job = getJob(c.params.id!);
+		if (!job) return c.json({ error: "Job not found" }, 404);
+
+		if (!existsSync(job.inputPath)) {
+			return c.json({ error: "Source file no longer accessible" }, 400);
+		}
+
+		try {
+			const proc = Bun.spawn(["mediainfo", job.inputPath], { stdout: "pipe", stderr: "pipe" });
+			const text = await new Response(proc.stdout).text();
+			await proc.exited;
+			return c.json({ filename: job.filename, text: text.trim() });
+		} catch (err: any) {
+			return c.json({ error: `mediainfo failed: ${err.message || err}` }, 500);
+		}
+	});
+
+	app.post("/api/jobs/:id/move", async (c) => {
+		const body = (await c.req.json()) as { direction?: string };
+		const direction = body.direction;
+		if (!direction || !["up", "down", "top", "bottom"].includes(direction)) {
+			return c.json({ error: "Invalid direction. Use: up, down, top, bottom" }, 400);
+		}
+		const ok = moveJob(c.params.id!, direction as "up" | "down" | "top" | "bottom");
+		if (!ok) return c.json({ error: "Job not found, not queued, or already at boundary" }, 400);
+		return c.json({ ok: true });
+	});
+
+	app.post("/api/jobs/reorder", async (c) => {
+		const body = (await c.req.json()) as { ids?: string[] };
+		if (!body.ids || !Array.isArray(body.ids)) {
+			return c.json({ error: "Missing 'ids' array in request body" }, 400);
+		}
+		reorderJobs(body.ids);
+		return c.json({ ok: true });
+	});
+
+	app.post("/api/jobs/:id/import-code", async (c) => {
+		const body = (await c.req.json()) as { code?: string };
+		if (typeof body.code !== "string") return c.json({ error: "Missing 'code' string" }, 400);
+		let partial;
+		try {
+			partial = decodeSettingsCode(body.code);
+		} catch (err) {
+			if (err instanceof SettingsCodeError) return c.json({ error: err.message }, 400);
+			throw err;
+		}
+		const job = updateJobSettings(c.params.id!, partial);
+		if (!job) return c.json({ error: "Job not found or not editable" }, 400);
+		return c.json(job);
+	});
+}
