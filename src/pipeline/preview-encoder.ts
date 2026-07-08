@@ -89,6 +89,33 @@ function escapeSubtitlesFilterPath(p: string): string {
 	return p.replace(/\\/g, "\\\\").replace(/:/g, "\\:");
 }
 
+/**
+ * Sum of attachment sizes (fonts etc.) inside an MKV. These are per-file
+ * constants, so they must be excluded from linear duration scaling.
+ */
+async function probeAttachmentBytes(path: string, signal: AbortSignal): Promise<number> {
+	try {
+		const res = await run(["mkvmerge", "-J", path], { signal });
+		if (res.code !== 0 && res.code !== 1) return 0;
+		const attachments: Array<{ size?: number }> = JSON.parse(res.stdout)?.attachments ?? [];
+		return attachments.reduce((sum, a) => sum + (Number.isFinite(a.size) ? a.size! : 0), 0);
+	} catch {
+		return 0;
+	}
+}
+
+/** Actual container duration of the encoded clip (audio packet cuts can drift from the requested window). */
+async function probeClipDurationSec(path: string, signal: AbortSignal): Promise<number | null> {
+	try {
+		const res = await run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path], { signal });
+		if (res.code !== 0) return null;
+		const d = parseFloat(res.stdout.trim());
+		return Number.isFinite(d) && d > 0 ? d : null;
+	} catch {
+		return null;
+	}
+}
+
 async function captureFrame(
 	inputPath: string,
 	outPath: string,
@@ -308,7 +335,12 @@ export async function runPreviewEncode(args: RunPreviewArgs): Promise<PreviewSam
 
 			const encodedClip = join(sampleDir, "encoded.mkv");
 			const sizeBytes = existsSync(encodedClip) ? statSync(encodedClip).size : 0;
-			const projectedTotalBytes = Math.round((sizeBytes / opts.windowSeconds) * probe.duration);
+
+			const attachmentBytes = sizeBytes > 0 ? await probeAttachmentBytes(encodedClip, signal) : 0;
+			const clipDurationSec = sizeBytes > 0 ? ((await probeClipDurationSec(encodedClip, signal)) ?? opts.windowSeconds) : opts.windowSeconds;
+			const streamBytes = Math.max(0, sizeBytes - attachmentBytes);
+			const projectedTotalBytes = Math.round(attachmentBytes + (streamBytes / clipDurationSec) * probe.duration);
+
 			completed.push({
 				index: i,
 				timestampSec: stamps[i]!,
@@ -317,7 +349,7 @@ export async function runPreviewEncode(args: RunPreviewArgs): Promise<PreviewSam
 				encodedSizeHuman: humanSize(sizeBytes),
 				projectedTotalBytes,
 				projectedTotalHuman: humanSize(projectedTotalBytes),
-				encodedBitrateKbps: Math.round((sizeBytes * 8) / 1000 / opts.windowSeconds),
+				encodedBitrateKbps: Math.round((streamBytes * 8) / 1000 / clipDurationSec),
 				vsFrames,
 				prepareFrames: [],
 			});
