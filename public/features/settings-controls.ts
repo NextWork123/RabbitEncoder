@@ -520,6 +520,37 @@ export function renderLanguageFilterInput(container: HTMLElement, value: string[
 	container.appendChild(hint);
 }
 
+export function renderTranslationLanguagesInput(container: HTMLElement, value: string[], onChange: (value: string[]) => void): void {
+	container.innerHTML = "";
+
+	const label = document.createElement("label");
+	label.textContent = "Target languages";
+	container.appendChild(label);
+
+	const input = document.createElement("input");
+	input.type = "text";
+	input.className = "lang-filter-input";
+	input.placeholder = "eng, slv";
+	input.value = (value || []).join(", ");
+
+	const hint = document.createElement("div");
+	hint.className = "lang-filter-hint";
+	hint.textContent =
+		"Comma-separated ISO codes. Every listed language should end up with a full subtitle: " +
+		"if one is missing, it's translated with the LLM from an existing full subtitle.";
+
+	input.oninput = () =>
+		onChange(
+			input.value
+				.split(",")
+				.map((s) => s.trim())
+				.filter((s) => s.length > 0),
+		);
+
+	container.appendChild(input);
+	container.appendChild(hint);
+}
+
 export function renderNlmeansParamsEditor(container: HTMLElement, params: NlmeansLevelParams, onChange: (value: NlmeansLevelParams) => void): void {
 	container.innerHTML = "";
 	const grid = document.createElement("div");
@@ -840,7 +871,7 @@ export function renderFontDropdown(container: HTMLElement, value: string, fonts:
 	container.appendChild(label);
 }
 
-/** Free-text control (used for ASS &HAABBGGRR colours). */
+/** Free-text control. */
 export function renderTextControl(container: HTMLElement, label: string, value: string, placeholder: string, onChange: (v: string) => void): void {
 	container.innerHTML = "";
 	const wrap = document.createElement("label");
@@ -856,4 +887,52 @@ export function renderTextControl(container: HTMLElement, label: string, value: 
 	wrap.appendChild(span);
 	wrap.appendChild(input);
 	container.appendChild(wrap);
+}
+
+/** Free-password control. */
+export function renderPasswordControl(container: HTMLElement, label: string, value: string, placeholder: string, onChange: (v: string) => void): void {
+	container.innerHTML = "";
+	const wrap = document.createElement("label");
+	wrap.className = "toggle-label";
+	const span = document.createElement("span");
+	span.textContent = `${label}\u00A0`;
+	const input = document.createElement("input");
+	input.type = "password";
+	input.className = "lang-filter-input";
+	input.placeholder = placeholder;
+	input.value = value;
+	input.oninput = () => onChange(input.value);
+	wrap.appendChild(span);
+	wrap.appendChild(input);
+	container.appendChild(wrap);
+}
+
+export function renderSelectControl(
+	container: HTMLElement,
+	labelText: string,
+	options: readonly string[],
+	value: string,
+	onChange: (value: string) => void,
+): void {
+	container.innerHTML = "";
+	const label = document.createElement("label");
+	label.className = "toggle-label";
+
+	const span = document.createElement("span");
+	span.textContent = `${labelText}\u00A0`;
+
+	const select = document.createElement("select");
+	select.className = "select-input";
+	for (const opt of options) {
+		const o = document.createElement("option");
+		o.value = opt;
+		o.textContent = opt;
+		if (opt === value) o.selected = true;
+		select.appendChild(o);
+	}
+	select.onchange = () => onChange(select.value);
+
+	label.appendChild(span);
+	label.appendChild(select);
+	container.appendChild(label);
 }

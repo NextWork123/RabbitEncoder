@@ -4,6 +4,7 @@ export type EncoderSpeed = "slower" | "slow" | "medium" | "fast" | "faster";
 export type DenoiseLevel = "off" | "light" | "medium" | "heavy" | "auto";
 export type DebandLevel = "off" | "light" | "medium" | "heavy";
 
+export type EncodeMode = "full" | "preview";
 export type VideoEncodeMode = "av1" | "off";
 export type AudioEncodeMode = "opus" | "copy";
 export type SubtitleProcessingMode = "full" | "copy";
@@ -13,10 +14,34 @@ export type CropMode = "off" | "auto";
 export type AudioTrackType = "main" | "commentary" | "descriptive" | "karaoke";
 export type AudioCodecPriority = "lossless-first" | "smallest-first";
 
+export type SubtitleBurnMode = "text" | "bitmap" | "none";
+
 export type SubtitleLangDetectMode = "enabled" | "und-only" | "disabled";
 export type SubtitleSourcePriority = "official-first" | "fansub-first";
 export type SubtitleFansubTiebreak = "alphabetical" | "source-order";
 export type SubtitleFormatPriority = "text-first" | "picture-first";
+
+export interface SourceTrackPlan {
+	subtitleStreams: SubtitleStreamInfo[];
+	audioStreams: AudioStreamInfo[];
+}
+
+export interface PreviewFrameSink {
+	/** Absolute dir for this sample's artifacts (source.png, encode.png, vs_*.png, prepare.png, encoded.mkv, source_clip.mkv). */
+	dir: string;
+	/** Seconds into the clip to grab stills (usually window/2). */
+	frameOffsetSec: number;
+	/** Color-aware still extractor (closure supplied by the preview driver). Non-fatal on failure. */
+	capture(inputPath: string, outName: string, burnSubs: SubtitleBurnMode): Promise<void>;
+}
+
+export interface EncodeJobOptions {
+	mode?: EncodeMode;
+	/** Skip whole-source detection; use these decisions instead. */
+	precomputed?: SourceTrackPlan;
+	/** Preview-only artifact sink. Presence implies preview mode. */
+	preview?: PreviewFrameSink;
+}
 
 /**
  * Backend used for the nlmeans denoise filter.
@@ -209,9 +234,9 @@ export interface JobSettings {
 	translateDeepseekModel: string;
 	/** API key for cloud providers. Empty for Ollama. */
 	translateApiKey: string;
-	/** Languages to ensure exist (["eng","deu","fra","slv"]). */
+	/** Languages to ensure exist (ISO-639-2 or -1, e.g. ["eng","deu","fra","slv"]). */
 	translateTargetLanguages: string[];
-	/** Dialogs sent to the model per request. */
+	/** Dialogs sent to the model per request. Lower = better context, slower. */
 	translateBatchSize: number;
 	/** Also translate sign/song lines (keeps signs consistent in the target track). */
 	translateSignsSongs: boolean;
@@ -225,7 +250,6 @@ export interface JobSettings {
 	translateConcurrency?: number;
 	/** May translation overlap the video encode? "auto" overlaps only when Ollama is NOT on a loopback address. Default "auto". */
 	translateDuringEncode?: "auto" | "always" | "never";
-	translateStrategy: "translategemma" | "generic";
 	/**
 	 * Ordered list of VapourSynth filter passes to apply during the prepare
 	 * stage, before the FFmpeg -vf chain. Each entry references a preset by
@@ -366,14 +390,6 @@ export interface SubtitlePreviewResult {
 	output: SubtitlePreviewTrack[];
 }
 
-export interface FontAxis {
-	tag: string;
-	min: number;
-	default: number;
-	max: number;
-	name: string;
-}
-
 /**
  * ASS V4+ "Default" style written when converting SRT->ASS, and the font used
  * when restyling existing ASS dialogue. Pixel values are in PlayResY=1080
@@ -441,7 +457,7 @@ export interface PreviewSampleVsFrame {
 
 export interface PreviewSamplePrepareFrame {
 	/** Which prepare-filter step this snapshot came from. */
-	kind: "downscale" | "deband" | "denoise";
+	kind: "crop" | "downscale" | "deband" | "denoise";
 	/** Human-readable label like "Debanding (medium)" or "Auto denoise (GPU/Vulkan)". */
 	label: string;
 }
@@ -471,12 +487,6 @@ export interface PreviewState {
 	settingsFingerprint: string;
 	sampleCount: number;
 	windowSeconds: number;
-}
-
-export type StyleAppearance = Omit<SubtitleStyle, "fontName">;
-export interface GroupStyleConfig {
-	style?: Partial<StyleAppearance>;
-	overrides?: Record<string, Partial<StyleAppearance>>;
 }
 
 export type VsParamType = "float" | "int" | "bool" | "enum";

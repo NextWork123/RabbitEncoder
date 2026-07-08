@@ -1,4 +1,4 @@
-import type { SubtitleStyle } from "../../src/types";
+import type { SubtitleStyle } from "../../src/core/types";
 
 /**
  * A known SubtitleStyle authored in 1080p space, used across styling tests.

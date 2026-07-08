@@ -11,7 +11,6 @@ import type {
 	EncoderSpeed,
 	StyleAppearance,
 	SubtitleProcessingMode,
-	SubtitleStyle,
 	VideoEncodeMode,
 } from "../types";
 import type { PipelinePreset } from "../ui/models";
@@ -86,6 +85,18 @@ export const PIPELINE_PRESET_HELP: Record<PipelinePreset, string> = {
 	prepare: "Run denoise & VS only; pass audio/subs/video through (FFV1). For GPU-only servers.",
 	custom: "Configure each pipeline stage individually below.",
 };
+
+export const TRANSLATE_PROVIDERS = ["ollama", "deepseek"] as const;
+export type TranslateProviderOption = (typeof TRANSLATE_PROVIDERS)[number];
+
+export const TRANSLATE_PROVIDER_LABELS: Record<TranslateProviderOption, string> = {
+	ollama: "Ollama (local)",
+	deepseek: "DeepSeek (cloud)",
+};
+export const DEEPSEEK_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
+
+export const TRANSLATE_STRATEGIES = ["translategemma", "generic"];
+export const TRANSLATE_MODEL_OPTIONS = ["translategemma:4b", "translategemma:12b", "translategemma:27b"];
 
 export const DEFAULT_STYLE_APPEARANCE: StyleAppearance = {
 	fontSize: 80,

@@ -5,6 +5,7 @@ import {
 	AUDIO_ENCODE_OPTIONS,
 	CROP_OPTIONS,
 	DEBAND_LEVELS,
+	DEEPSEEK_MODELS,
 	DEFAULT_AUTO_THRESHOLDS,
 	DEFAULT_GRADFUN_PARAMS,
 	DEFAULT_NLMEANS_PARAMS,
@@ -17,6 +18,10 @@ import {
 	SUBTITLE_FORMAT_PRIORITY_OPTIONS,
 	SUBTITLE_PROCESSING_OPTIONS,
 	SUBTITLE_SOURCE_PRIORITY_OPTIONS,
+	TRANSLATE_MODEL_OPTIONS,
+	TRANSLATE_PROVIDERS,
+	TRANSLATE_PROVIDER_LABELS,
+	TRANSLATE_STRATEGIES,
 	VIDEO_ENCODE_OPTIONS,
 } from "../config/options";
 import {
@@ -34,15 +39,20 @@ import {
 	renderLanguagePriorityInput,
 	renderNoPhaseInvToggle,
 	renderNumberControl,
+	renderPasswordControl,
 	renderRadioPills,
 	renderRemoveCommentaryAudioToggle,
+	renderSelectControl,
 	renderSkipBoostingToggle,
 	renderSubtitleConfidenceControl,
 	renderSubtitleLangDetectControl,
 	renderSubtitleStyleTargets,
+	renderTextControl,
+	renderTranslationLanguagesInput,
 	wireEncoderControls,
 } from "./settings-controls";
 import { byId } from "../shared/dom";
+import { testTranslateConnection } from "../api/client";
 
 export type SettingsFormPrefix = "default" | "job";
 
@@ -311,4 +321,114 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 	renderAudioLanguagesInput(el("audio-languages"), settings.audioLanguages || [], (v) => (settings.audioLanguages = v));
 	renderLanguageFilterInput(el("subtitle-languages"), settings.subtitleLanguages || [], (v) => (settings.subtitleLanguages = v));
 	renderBitrateInputs(el("bitrates"), settings.audioBitrates, (ch, val) => (settings.audioBitrates[ch] = val));
+
+	renderLabeledToggle(el("translate-enabled"), settings.translateSubtitles, "Translate missing languages", (v) => {
+		settings.translateSubtitles = v;
+	});
+
+	// Provider-specific settings, re-rendered when the provider pill changes.
+	const providerSettings = el("translate-provider-settings");
+	const renderProviderSettings = () => {
+		providerSettings.innerHTML = "";
+		const provider = settings.translateProvider ?? "ollama";
+		const group = (cls = "toggle-group") => {
+			const d = document.createElement("div");
+			d.className = cls;
+			providerSettings.appendChild(d);
+			return d;
+		};
+
+		if (provider === "ollama") {
+			renderTextControl(group(), "Ollama URL", settings.translateOllamaUrl, "http://localhost:11434", (v) => {
+				settings.translateOllamaUrl = v.trim();
+			});
+			renderTextControl(group(), "Model", settings.translateModel, "translategemma:12b", (v) => {
+				settings.translateModel = v.trim();
+			});
+			const hint = document.createElement("div");
+			hint.className = "lang-filter-hint";
+			hint.textContent = "Any Ollama model tag. TranslateGemma models use the dedicated translation prompt; other models use the generic format automatically.";
+			providerSettings.appendChild(hint);
+
+			renderNumberControl(group(), "Context window (num_ctx)", settings.translateNumCtx ?? 8192, { min: 2048, max: 131072, step: 1024 }, (v) => {
+				settings.translateNumCtx = v;
+			});
+		} else {
+			renderSelectControl(group(), "Model", DEEPSEEK_MODELS, settings.translateDeepseekModel ?? DEEPSEEK_MODELS[0], (v) => {
+				settings.translateDeepseekModel = v;
+			});
+			renderPasswordControl(group(), "API key", settings.translateApiKey ?? "", "sk-...", (v) => {
+				settings.translateApiKey = v.trim();
+			});
+			renderNumberControl(group(), "Max output tokens", settings.translateMaxTokens ?? 8192, { min: 1024, max: 32768, step: 512 }, (v) => {
+				settings.translateMaxTokens = v;
+			});
+		}
+	};
+
+	// Provider pills with human labels (same pattern as the encoder picker).
+	const provEl = el("translate-provider");
+	provEl.innerHTML = "";
+	for (const p of TRANSLATE_PROVIDERS) {
+		const pill = document.createElement("div");
+		pill.className = `radio-pill${p === (settings.translateProvider ?? "ollama") ? " selected" : ""}`;
+		pill.textContent = TRANSLATE_PROVIDER_LABELS[p];
+		pill.onclick = () => {
+			provEl.querySelectorAll(".radio-pill").forEach((x) => x.classList.remove("selected"));
+			pill.classList.add("selected");
+			settings.translateProvider = p;
+			renderProviderSettings();
+		};
+		provEl.appendChild(pill);
+	}
+	renderProviderSettings();
+
+	renderTranslationLanguagesInput(el("translate-targets"), settings.translateTargetLanguages, (langs) => {
+		settings.translateTargetLanguages = langs;
+	});
+
+	renderNumberControl(el("translate-batch"), "Dialogs per request", settings.translateBatchSize, { min: 1, max: 1000, step: 1 }, (v) => {
+		settings.translateBatchSize = v;
+	});
+
+	renderNumberControl(
+		el("translate-timeout"),
+		"Request timeout (s)",
+		Math.round((settings.translateTimeoutMs ?? 180_000) / 1000),
+		{ min: 10, max: 3600, step: 10 },
+		(v) => (settings.translateTimeoutMs = v * 1000),
+	);
+
+	renderNumberControl(el("translate-concurrency"), "Parallel requests", settings.translateConcurrency ?? 1, { min: 1, max: 16, step: 1 }, (v) => {
+		settings.translateConcurrency = v;
+	});
+
+	renderLabeledToggle(el("translate-signs"), settings.translateSignsSongs, "Also translate signs & songs", (v) => {
+		settings.translateSignsSongs = v;
+	});
+
+	const testBtn = el("translate-test") as HTMLButtonElement;
+	const testResult = el("translate-test-result");
+	testBtn.addEventListener("click", async () => {
+		testBtn.disabled = true;
+		testResult.textContent = "Testing…";
+		testResult.className = "test-result";
+		const provider = settings.translateProvider ?? "ollama";
+		const model = provider === "ollama" ? settings.translateModel : (settings.translateDeepseekModel ?? DEEPSEEK_MODELS[0]);
+		const r = await testTranslateConnection({
+			provider,
+			url: settings.translateOllamaUrl,
+			model,
+			apiKey: settings.translateApiKey,
+			target: settings.translateTargetLanguages[0],
+		});
+		testBtn.disabled = false;
+		if (r.ok) {
+			testResult.textContent = `✓ OK - sample (${r.target}): "${r.sample}"`;
+			testResult.classList.add("ok");
+		} else {
+			testResult.textContent = `✗ ${r.error}`;
+			testResult.classList.add("error");
+		}
+	});
 }

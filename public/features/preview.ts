@@ -102,9 +102,8 @@ export function renderPreviewSummary(samples: PreviewSample[]): void {
 	const minProjected = Math.min(...projections);
 	const maxProjected = Math.max(...projections);
 
-	const totalEncodedBytes = samples.reduce((a, s) => a + (s.encodedSizeBytes || 0), 0);
 	const totalSampledSec = samples.reduce((a, s) => a + (s.windowSeconds || 0), 0);
-	const avgBitrateKbps = totalSampledSec > 0 ? (totalEncodedBytes * 8) / 1000 / totalSampledSec : 0;
+	const avgBitrateKbps = count > 0 ? samples.reduce((a, s) => a + (s.encodedBitrateKbps || 0), 0) / count : 0;
 
 	el.style.display = "";
 	el.innerHTML = `
