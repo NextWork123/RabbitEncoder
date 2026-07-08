@@ -301,6 +301,7 @@ export function renderSubTrack(track: SubtitlePreviewTrack, opts: { highlight?: 
 	if (track.isHearingImpaired) badges.push('<span class="sub-badge sub-badge-hi">HI</span>');
 	if (track.isCommentary) badges.push('<span class="sub-badge sub-badge-commentary">Commentary</span>');
 	if (track.isOriginal) badges.push('<span class="sub-badge sub-badge-original">Original</span>');
+	if (track.isTranslated) badges.push('<span class="sub-badge sub-badge-translated">Translated</span>');
 	badges.push(`<span class="sub-badge sub-badge-type">${escapeHtml(track.trackType)}</span>`);
 
 	const cls = ["sub-track"];
@@ -310,7 +311,7 @@ export function renderSubTrack(track: SubtitlePreviewTrack, opts: { highlight?: 
 	return `
     <div class="${cls.join(" ")}">
       <div class="sub-track-top">
-        <span class="sub-track-id">#${track.index}</span>
+        <span class="sub-track-id">${track.isTranslated ? "NEW" : "#" + track.index}</span>
         <span class="sub-track-flag">${track.flag}</span>
         <span class="sub-track-name" title="${escapeHtml(track.trackName)}">${escapeHtml(track.trackName)}</span>
         <span class="sub-track-lang">${escapeHtml(track.language)}</span>

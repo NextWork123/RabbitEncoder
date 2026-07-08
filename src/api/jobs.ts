@@ -6,6 +6,7 @@ import { cancelJob, getAllJobs, getJob, moveJob, removeJob, reorderJobs, retryJo
 import { probeFile } from "../pipeline/probe";
 import { previewAudio, previewSubtitles } from "../tracks/tracks";
 import { decodeSettingsCode, SettingsCodeError } from "../settings/settings-code";
+import { resolveTranslateStrategy } from "../translate/translate-provider";
 
 export function registerJobRoutes(app: Web, config: AppConfig): void {
 	app.get("/api/jobs", (c) => {
@@ -94,6 +95,18 @@ export function registerJobRoutes(app: Web, config: AppConfig): void {
 				honorificsMinCount: job.settings.honorificsMinCount,
 				honorificsRatio: job.settings.honorificsRatio,
 				assumeMislabeled: job.settings.assumeMislabeledTracks,
+
+				languagePriority: job.settings.subtitleLanguagePriority,
+				translate: {
+					enabled: !!job.settings.translateSubtitles,
+					targetLanguages: job.settings.translateTargetLanguages || [],
+					strategy: resolveTranslateStrategy(
+						job.settings.translateProvider ?? "ollama",
+						job.settings.translateProvider === "deepseek" ? job.settings.translateDeepseekModel || "deepseek-v4-flash" : job.settings.translateModel,
+					),
+					convertSrtToAss: job.settings.convertSrtToAss,
+					organization: config.organization,
+				},
 			});
 
 			try {

@@ -383,6 +383,7 @@ export interface SubtitlePreviewTrack {
 	isCommentary: boolean;
 	isOriginal: boolean;
 	isText: boolean;
+	isTranslated: boolean;
 }
 
 export interface SubtitlePreviewResult {

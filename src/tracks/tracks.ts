@@ -20,6 +20,7 @@ import { readFileSync, unlinkSync, existsSync, statSync } from "fs";
 import { classifyAssLines } from "../subtitles/ass-classifier";
 import { LANG_ALIASES } from "../core/naming";
 import { getOpusBitrateForLayout, normalizeLayout } from "../pipeline/probe";
+import { planTargetLanguages, type KeptSubDescriptor } from "../translate/subtitle-translate";
 
 const BARE_SCORE_THRESHOLD = 3;
 const MIN_LINES_FOR_LANG_DETECTION = 5;
@@ -2037,6 +2038,17 @@ export async function previewSubtitles(
 		honorificsMinCount?: number;
 		honorificsRatio?: number;
 		assumeMislabeled?: boolean;
+
+		languagePriority?: string[];
+
+		// Subtitle translation planning
+		translate?: {
+			enabled: boolean;
+			targetLanguages: string[];
+			strategy?: "translategemma" | "generic";
+			convertSrtToAss?: boolean;
+			organization?: string;
+		};
 	} = {},
 ): Promise<SubtitlePreviewResult> {
 	const source: SubtitlePreviewTrack[] = sourceStreams.map((s) => {
@@ -2055,6 +2067,7 @@ export async function previewSubtitles(
 			isCommentary: false,
 			isOriginal: s.isOriginal || false,
 			isText: isTextSubtitleCodec(s.codec),
+			isTranslated: false,
 		};
 	});
 
@@ -2108,7 +2121,7 @@ export async function previewSubtitles(
 	const defaultAssigned = new Set<string>();
 	const forcedAssigned = new Set<string>();
 
-	const output: SubtitlePreviewTrack[] = finalStreams.map((s) => {
+	let output: SubtitlePreviewTrack[] = finalStreams.map((s) => {
 		const trackType = detectSubtitleTrackType(s);
 		const lang = s.language || "und";
 		const langGroup = normalizeLanguageGroup(lang);
@@ -2130,8 +2143,65 @@ export async function previewSubtitles(
 			...flags,
 			isOriginal: s.isOriginal || false,
 			isText: isTextSubtitleCodec(s.codec),
+			isTranslated: false,
 		};
 	});
+
+	const t = options.translate;
+	if (t?.enabled && (t.targetLanguages?.length ?? 0) > 0) {
+		const descriptors: KeptSubDescriptor[] = finalStreams.map((s) => {
+			const trackType = detectSubtitleTrackType(s);
+			return { index: s.index, codec: s.codec, language: trackType === "honorifics" ? "en-JP" : s.language || "und", trackType };
+		});
+
+		const plan = planTargetLanguages(descriptors, t.targetLanguages, t.strategy ?? "translategemma");
+
+		if (plan.productions.length > 0) {
+			const SYNTH_BASE = 1_000_000;
+
+			const synthStreams: SubtitleStreamInfo[] = plan.productions.map((prod, i) => {
+				const base = finalStreams.find((s) => s.index === prod.sourceIndex)!;
+				const isAss = ["ass", "ssa"].includes(prod.sourceCodec.toLowerCase());
+				return {
+					...base,
+					index: SYNTH_BASE + i,
+					codec: isAss || t.convertSrtToAss ? "ass" : "subrip",
+					language: prod.targetTag,
+					title: buildSubtitleTrackName(prod.trackType, undefined, t.organization),
+				};
+			});
+
+			const synthTracks: SubtitlePreviewTrack[] = plan.productions.map((prod, i) => ({
+				index: SYNTH_BASE + i,
+				codec: synthStreams[i]!.codec,
+				language: prod.targetTag,
+				flag: languageToFlag(prod.targetTag),
+				title: "",
+				trackName: buildSubtitleTrackName(prod.trackType, undefined, t.organization),
+				trackType: prod.trackType,
+				// Mirrors computeTranslatedFlagArgs: default for its (new) language, nothing else.
+				isDefault: true,
+				isForced: false,
+				isHearingImpaired: false,
+				isCommentary: false,
+				isOriginal: false,
+				isText: true,
+				isTranslated: true,
+			}));
+
+			const combined = sortSubtitleStreams([...finalStreams, ...synthStreams], {
+				sourcePriority: options.sourcePriority,
+				fansubTiebreak: options.fansubTiebreak,
+				formatPriority: options.formatPriority,
+				languagePriority: options.languagePriority,
+			});
+
+			const byIndex = new Map<number, SubtitlePreviewTrack>();
+			for (const tk of output) byIndex.set(tk.index, tk);
+			for (const tk of synthTracks) byIndex.set(tk.index, tk);
+			output = combined.map((s) => byIndex.get(s.index)).filter((x): x is SubtitlePreviewTrack => !!x);
+		}
+	}
 
 	return { source, output };
 }
