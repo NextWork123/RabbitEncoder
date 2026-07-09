@@ -5,7 +5,6 @@ import {
 	AUDIO_ENCODE_OPTIONS,
 	CROP_OPTIONS,
 	DEBAND_LEVELS,
-	DEEPSEEK_MODELS,
 	DEFAULT_AUTO_THRESHOLDS,
 	DEFAULT_GRADFUN_PARAMS,
 	DEFAULT_NLMEANS_PARAMS,
@@ -18,10 +17,10 @@ import {
 	SUBTITLE_FORMAT_PRIORITY_OPTIONS,
 	SUBTITLE_PROCESSING_OPTIONS,
 	SUBTITLE_SOURCE_PRIORITY_OPTIONS,
-	TRANSLATE_MODEL_OPTIONS,
 	TRANSLATE_PROVIDERS,
 	TRANSLATE_PROVIDER_LABELS,
-	TRANSLATE_STRATEGIES,
+	TRANSLATE_PROVIDER_MODEL_PLACEHOLDERS,
+	TRANSLATE_PROVIDER_URL_PLACEHOLDERS,
 	VIDEO_ENCODE_OPTIONS,
 } from "../config/options";
 import {
@@ -330,7 +329,7 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 	const providerSettings = el("translate-provider-settings");
 	const renderProviderSettings = () => {
 		providerSettings.innerHTML = "";
-		const provider = settings.translateProvider ?? "ollama";
+		const provider = settings.translateProvider ?? "openai";
 		const group = (cls = "toggle-group") => {
 			const d = document.createElement("div");
 			d.className = cls;
@@ -338,32 +337,26 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 			return d;
 		};
 
-		if (provider === "ollama") {
-			renderTextControl(group(), "Ollama URL", settings.translateOllamaUrl, "http://localhost:11434", (v) => {
-				settings.translateOllamaUrl = v.trim();
-			});
-			renderTextControl(group(), "Model", settings.translateModel, "translategemma:12b", (v) => {
-				settings.translateModel = v.trim();
-			});
-			const hint = document.createElement("div");
-			hint.className = "lang-filter-hint";
-			hint.textContent = "Any Ollama model tag. TranslateGemma models use the dedicated translation prompt; other models use the generic format automatically.";
-			providerSettings.appendChild(hint);
+		renderTextControl(group(), "API base URL", settings.translateBaseUrl, TRANSLATE_PROVIDER_URL_PLACEHOLDERS[provider], (v) => {
+			settings.translateBaseUrl = v.trim();
+		});
+		renderTextControl(group(), "Model", settings.translateModel, TRANSLATE_PROVIDER_MODEL_PLACEHOLDERS[provider], (v) => {
+			settings.translateModel = v.trim();
+		});
+		renderPasswordControl(group(), "API key (optional for local servers)", settings.translateApiKey ?? "", "sk-...", (v) => {
+			settings.translateApiKey = v.trim();
+		});
+		renderNumberControl(group(), "Max output tokens", settings.translateMaxTokens ?? 8192, { min: 1024, max: 32768, step: 512 }, (v) => {
+			settings.translateMaxTokens = v;
+		});
 
-			renderNumberControl(group(), "Context window (num_ctx)", settings.translateNumCtx ?? 8192, { min: 2048, max: 131072, step: 1024 }, (v) => {
-				settings.translateNumCtx = v;
-			});
-		} else {
-			renderSelectControl(group(), "Model", DEEPSEEK_MODELS, settings.translateDeepseekModel ?? DEEPSEEK_MODELS[0], (v) => {
-				settings.translateDeepseekModel = v;
-			});
-			renderPasswordControl(group(), "API key", settings.translateApiKey ?? "", "sk-...", (v) => {
-				settings.translateApiKey = v.trim();
-			});
-			renderNumberControl(group(), "Max output tokens", settings.translateMaxTokens ?? 8192, { min: 1024, max: 32768, step: 512 }, (v) => {
-				settings.translateMaxTokens = v;
-			});
-		}
+		const hint = document.createElement("div");
+		hint.className = "lang-filter-hint";
+		hint.textContent =
+			provider === "openai"
+				? "Any OpenAI-compatible endpoint: OpenAI, DeepSeek, OpenRouter, Groq, or a local server like Ollama (http://localhost:11434/v1) / LM Studio."
+				: "Anthropic Messages API (api.anthropic.com) or any proxy speaking the same format.";
+		providerSettings.appendChild(hint);
 	};
 
 	// Provider pills with human labels (same pattern as the encoder picker).
@@ -371,7 +364,7 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 	provEl.innerHTML = "";
 	for (const p of TRANSLATE_PROVIDERS) {
 		const pill = document.createElement("div");
-		pill.className = `radio-pill${p === (settings.translateProvider ?? "ollama") ? " selected" : ""}`;
+		pill.className = `radio-pill${p === (settings.translateProvider ?? "openai") ? " selected" : ""}`;
 		pill.textContent = TRANSLATE_PROVIDER_LABELS[p];
 		pill.onclick = () => {
 			provEl.querySelectorAll(".radio-pill").forEach((x) => x.classList.remove("selected"));
@@ -413,12 +406,10 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 		testBtn.disabled = true;
 		testResult.textContent = "Testing…";
 		testResult.className = "test-result";
-		const provider = settings.translateProvider ?? "ollama";
-		const model = provider === "ollama" ? settings.translateModel : (settings.translateDeepseekModel ?? DEEPSEEK_MODELS[0]);
 		const r = await testTranslateConnection({
-			provider,
-			url: settings.translateOllamaUrl,
-			model,
+			provider: settings.translateProvider ?? "openai",
+			baseUrl: settings.translateBaseUrl,
+			model: settings.translateModel,
 			apiKey: settings.translateApiKey,
 			target: settings.translateTargetLanguages[0],
 		});

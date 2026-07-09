@@ -13,7 +13,7 @@ import {
 const EN = { name: "English", code: "en" };
 const SL = { name: "Slovenian", code: "sl" };
 
-const baseOpts: GenericOptions = { url: "http://x:11434", model: "qwen2.5:14b", source: EN, target: SL };
+const baseOpts: GenericOptions = { provider: "openai", baseUrl: "http://x:11434", model: "qwen2.5:14b", source: EN, target: SL };
 
 describe("buildGenericInstruction", () => {
 	it("names the target language and the JSON contract", () => {

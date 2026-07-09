@@ -395,8 +395,8 @@ export async function fetchVsDefaultEntry(presetId: string): Promise<VsFilterEnt
 }
 
 export async function testTranslateConnection(opts: {
-	provider: "ollama" | "deepseek";
-	url?: string;
+	provider: "openai" | "anthropic";
+	baseUrl?: string;
 	model: string;
 	apiKey?: string;
 	target?: string;

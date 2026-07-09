@@ -6,11 +6,9 @@ import type { JobSettings, SubtitleStreamInfo, SubtitleStyle } from "../core/typ
 import { detectSubtitleTrackType, buildSubtitleTrackName, isTextSubtitleCodec } from "../tracks/tracks";
 import { dialogueStyleNames } from "../subtitles/ass-classifier";
 import { styleSrtAss, restyleAssDialogueFont } from "../subtitles/ass-style";
-import { checkOllama } from "./ollama";
-import { planTargetLanguages, translateSubtitleContent, type KeptSubDescriptor } from "./subtitle-translate";
+import { planTargetLanguages, translateSubtitleContent, type KeptSubDescriptor, type TranslateContentOptions } from "./subtitle-translate";
 import { createSemaphore } from "../core/concurrency";
-import { resolveTranslateStrategy } from "./translate-provider";
-import { checkDeepseek } from "./deepseek";
+import { checkProvider, type LlmChatOptions } from "./llm-client";
 import type { GenericOptions } from "./generic";
 
 /**
@@ -173,7 +171,7 @@ async function styleSource(
  * translated track per missing target language. Returns finished tracks for the
  * caller to append at mux time.
  *
- * Throws if translation is enabled but Ollama is unreachable or the model is
+ * Throws if translation is enabled but llm is unreachable or the model is
  * missing (the user explicitly asked to translate; shipping without it silently
  * would be worse).
  */
@@ -183,12 +181,11 @@ export async function runTranslateStep(params: RunTranslateStepParams): Promise<
 	const targets = settings.translateTargetLanguages ?? [];
 	if (!settings.translateSubtitles || targets.length === 0) return [];
 
-	const provider = settings.translateProvider ?? "ollama";
-	const model = provider === "deepseek" ? settings.translateDeepseekModel || "deepseek-v4-flash" : settings.translateModel;
-	const strategy = resolveTranslateStrategy(provider, model);
+	const provider = settings.translateProvider ?? "openai";
+	const model = settings.translateModel;
 
 	const descriptors = buildKeptDescriptors(subtitleStreams);
-	const plan = planTargetLanguages(descriptors, targets, strategy);
+	const plan = planTargetLanguages(descriptors, targets);
 	for (const note of plan.skipped) Logger.info(`[translate] Skipped ${note}`);
 	if (plan.productions.length === 0) {
 		Logger.info("[translate] Nothing to translate (all target languages already present or unsupported)");
@@ -196,10 +193,7 @@ export async function runTranslateStep(params: RunTranslateStepParams): Promise<
 	}
 
 	// Preflight: fail fast with a clear message rather than shipping untranslated.
-	const health =
-		provider === "deepseek"
-			? await checkDeepseek(settings.translateApiKey ?? "", model, signal)
-			: await checkOllama(settings.translateOllamaUrl, model, signal);
+	const health = await checkProvider({ provider, baseUrl: settings.translateBaseUrl, apiKey: settings.translateApiKey || undefined, model }, signal);
 	if (!health.ok) {
 		throw new Error(`Subtitle translation is enabled but ${health.detail}`);
 	}
@@ -232,10 +226,9 @@ export async function runTranslateStep(params: RunTranslateStepParams): Promise<
 	const out: TranslatedTrack[] = new Array(plan.productions.length);
 	const langCount = plan.productions.length;
 
-	// ONE budget for every in-flight Ollama request - across all target languages
+	// ONE budget for every in-flight llm request - across all target languages
 	// AND all chunks within each language. Languages and chunks fan out freely;
 	// this cap keeps total requests <= what the server can serve in parallel.
-	// Keep it <= the Ollama server's OLLAMA_NUM_PARALLEL.
 	const sem = createSemaphore(Math.max(1, settings.translateConcurrency ?? 1));
 
 	// Aggregate progress across concurrently-running languages.
@@ -253,26 +246,22 @@ export async function runTranslateStep(params: RunTranslateStepParams): Promise<
 
 	await Promise.all(
 		plan.productions.map(async (prod, li) => {
-			const ollama: GenericOptions = {
-				provider,
-				url: settings.translateOllamaUrl,
-				apiKey: settings.translateApiKey,
-				model,
-				source: prod.source,
-				target: prod.target,
-				numCtx: settings.translateNumCtx,
-				maxTokens: settings.translateMaxTokens,
-				timeoutMs: settings.translateTimeoutMs,
-				signal,
-			};
-
 			const translated = await translateSubtitleContent(styledSource, {
 				format,
 				batchSize: settings.translateBatchSize,
 				translateSignsSongs: settings.translateSignsSongs,
-				strategy,
 				isDialogueStyle: (style) => dialogueStyles.has(style),
-				ollama,
+				llm: {
+					source: prod.source,
+					target: prod.target,
+					provider,
+					baseUrl: settings.translateBaseUrl,
+					apiKey: settings.translateApiKey || undefined,
+					model,
+					timeoutMs: settings.translateTimeoutMs,
+					maxTokens: settings.translateMaxTokens,
+					signal,
+				},
 				sem,
 				onProgress: (done, total) => {
 					perLangDone[li] = done;

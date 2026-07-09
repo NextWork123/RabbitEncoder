@@ -196,36 +196,31 @@ export interface JobSettings {
 	removeUnusedFonts: boolean;
 	/** Selected font group (folder label under the user fonts dir). */
 	fontGroup: string;
-	// Subtitle translation (Ollama / TranslateGemma)
-	/** Master switch: translate missing target languages via Ollama. */
+	// Subtitle translation
+	/** Master switch: translate missing target languages via an LLM API. */
 	translateSubtitles: boolean;
-	/** Translation backend. Default "ollama". */
-	translateProvider: "ollama" | "deepseek";
-	/** Ollama base URL, e.g. "http://localhost:11434". */
-	translateOllamaUrl: string;
-	/** Ollama model tag, free text, e.g. "translategemma:12b" or "qwen2.5:14b". */
+	/** API wire format. "openai" = any OpenAI-compatible endpoint (incl. local servers). Default "openai". */
+	translateProvider: "openai" | "anthropic";
+	/** API base URL, e.g. "http://localhost:11434/v1", "https://api.openai.com/v1", "https://api.anthropic.com". */
+	translateBaseUrl: string;
+	/** Model id, free text, e.g. "gpt-4o-mini", "qwen2.5:14b", "claude-sonnet-4-6". Must be an instruct/chat model. */
 	translateModel: string;
-	/** DeepSeek model id (cloud provider). */
-	translateDeepseekModel: string;
-	/** API key for cloud providers. Empty for Ollama. */
+	/** API key. Empty for local servers that don't require one. */
 	translateApiKey: string;
-	/** Languages to ensure exist (["eng","deu","fra","slv"]). */
+	/** Languages to ensure exist (ISO-639-2 or -1, e.g. ["eng","deu","fra","slv"]). */
 	translateTargetLanguages: string[];
-	/** Dialogs sent to the model per request. */
+	/** Dialogs sent to the model per request. Lower = better context, slower. */
 	translateBatchSize: number;
 	/** Also translate sign/song lines (keeps signs consistent in the target track). */
 	translateSignsSongs: boolean;
-	/** Ollama context window (num_ctx). TranslateGemma supports up to 131072. */
-	translateNumCtx: number;
 	/** Per-request timeout, ms. */
 	translateTimeoutMs: number;
 	/** Max output tokens per request (cloud providers). Default 8192. */
 	translateMaxTokens?: number;
-	/** Max concurrent in-flight Ollama requests (all languages + chunks). Keep <= server OLLAMA_NUM_PARALLEL. Default 1. */
+	/** Max concurrent in-flight llm requests. Default 1. */
 	translateConcurrency?: number;
-	/** May translation overlap the video encode? "auto" overlaps only when Ollama is NOT on a loopback address. Default "auto". */
+	/** May translation overlap the video encode? "auto" overlaps only when llm is NOT on a loopback address. Default "auto". */
 	translateDuringEncode?: "auto" | "always" | "never";
-	translateStrategy: "translategemma" | "generic";
 	/**
 	 * Ordered list of VapourSynth filter passes to apply during the prepare
 	 * stage, before the FFmpeg -vf chain. Each entry references a preset by

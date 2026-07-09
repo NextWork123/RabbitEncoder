@@ -2154,7 +2154,7 @@ export async function previewSubtitles(
 			return { index: s.index, codec: s.codec, language: trackType === "honorifics" ? "en-JP" : s.language || "und", trackType };
 		});
 
-		const plan = planTargetLanguages(descriptors, t.targetLanguages, t.strategy ?? "translategemma");
+		const plan = planTargetLanguages(descriptors, t.targetLanguages);
 
 		if (plan.productions.length > 0) {
 			const SYNTH_BASE = 1_000_000;

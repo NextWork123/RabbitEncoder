@@ -1,22 +1,6 @@
-import { deepseekChat } from "./deepseek";
+import { chatComplete, type LlmChatOptions } from "./llm-client";
 import { Logger } from "../core/logger";
 import type { TranslateLang } from "./translate-languages";
-
-/**
- * Generic instruct-model translator for Ollama (Qwen, Llama, Mistral, Gemma-it,
- * etc.). Unlike TranslateGemma — a translation-only model that emits just the
- * translation — general chat models follow rich instructions and use context,
- * but they also tend to add commentary and can merge/split/reorder lines.
- *
- * To make batched translation robust we use structured JSON keyed by stable
- * IDs: we send `[{id, name?, text}]` and expect `[{id, text}]` back, then remap
- * by id. Because alignment is by id (not position), the model reordering the
- * array can't corrupt cue alignment. Any id the model drops is recovered with a
- * per-line fallback, so a batch can never silently lose or misalign a cue.
- *
- * The ASS "Name" (actor) field rides along as `name` so the model knows which
- * character is speaking and can keep tone and forms of address consistent.
- */
 
 export interface TranslateItem {
 	/**
@@ -29,38 +13,15 @@ export interface TranslateItem {
 	name?: string;
 }
 
-export interface GenericOptions {
-	/** Transport. Default "ollama". */
-	provider?: "ollama" | "deepseek";
-	/** Ollama base URL, e.g. "http://localhost:11434". Ignored for cloud providers. */
-	url: string;
-	/** API key for cloud providers. Ignored for Ollama. */
-	apiKey?: string;
-	/** Model tag ("qwen2.5:14b") or cloud model id ("deepseek-v4-flash"). */
-	model: string;
+export interface GenericOptions extends LlmChatOptions {
 	source: TranslateLang;
 	target: TranslateLang;
-	/** Ollama num_ctx. Batches of JSON need headroom; default 8192. */
-	numCtx?: number;
-	/** Sampling temperature. A touch above deterministic for natural dialogue. */
-	temperature?: number;
-	/** Per-request timeout in ms. */
-	timeoutMs?: number;
-	/** Max output tokens per request. Cloud providers only; ignored by Ollama. */
-	maxTokens?: number;
-	/** External cancellation (job abort). */
-	signal?: AbortSignal;
 	/**
 	 * Optional override for the instruction block that precedes the JSON payload.
-	 * `{target}` / `{source}` placeholders are substituted. When omitted, the
-	 * built-in subtitle-translation instruction is used.
+	 * `{target}` / `{source}` placeholders are substituted.
 	 */
 	instruction?: string;
 }
-
-const DEFAULT_TIMEOUT_MS = 180_000;
-const DEFAULT_NUM_CTX = 8192;
-const DEFAULT_TEMPERATURE = 0.1;
 
 /** Below this many missing entries, per-line recovery is cheaper than another batch. */
 const MIN_BATCH_RECOVERY = 3;
@@ -280,55 +241,9 @@ export function parseGenericResponse(content: string, count: number): (string | 
 	return out;
 }
 
-interface OllamaChatResponse {
-	message?: { content?: string };
-	error?: string;
-}
-
-/** One /api/chat round-trip. Throws on HTTP, network, timeout or abort. */
+/** One chat round-trip. Throws on HTTP, network, timeout or abort. */
 async function chat(prompt: string, opts: GenericOptions): Promise<string> {
-	if (opts.provider === "deepseek") {
-		return deepseekChat(prompt, {
-			apiKey: opts.apiKey ?? "",
-			model: opts.model,
-			temperature: opts.temperature,
-			maxTokens: opts.maxTokens,
-			timeoutMs: opts.timeoutMs,
-			signal: opts.signal,
-		});
-	}
-
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(new Error("Ollama request timed out")), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-	const onExternalAbort = () => controller.abort(opts.signal?.reason ?? new Error("aborted"));
-	if (opts.signal) {
-		if (opts.signal.aborted) onExternalAbort();
-		else opts.signal.addEventListener("abort", onExternalAbort, { once: true });
-	}
-	try {
-		const base = opts.url.replace(/\/+$/, "");
-		const res = await fetch(`${base}/api/chat`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			signal: controller.signal,
-			body: JSON.stringify({
-				model: opts.model,
-				stream: false,
-				messages: [{ role: "user", content: prompt }],
-				options: {
-					temperature: opts.temperature ?? DEFAULT_TEMPERATURE,
-					num_ctx: opts.numCtx ?? DEFAULT_NUM_CTX,
-				},
-			}),
-		});
-		if (!res.ok) throw new Error(`Ollama /api/chat returned HTTP ${res.status}`);
-		const data = (await res.json()) as OllamaChatResponse;
-		if (data.error) throw new Error(`Ollama error: ${data.error}`);
-		return data.message?.content ?? "";
-	} finally {
-		clearTimeout(timeout);
-		opts.signal?.removeEventListener("abort", onExternalAbort);
-	}
+	return chatComplete(prompt, opts);
 }
 
 /**
@@ -370,56 +285,19 @@ export async function translateBatchGeneric(items: TranslateItem[], opts: Generi
 }
 
 /**
- * Preflight for a generic model: reachability, model presence, and a real
- * JSON round-trip so the Test button fails fast instead of the encode failing
- * hours in. Reuses Ollama's /api/tags listing.
- */
-export async function checkGenericModel(
-	url: string,
-	model: string,
-	source: TranslateLang,
-	target: TranslateLang,
-	signal?: AbortSignal,
-): Promise<{ ok: boolean; detail: string; sample?: string }> {
-	const base = url.replace(/\/+$/, "");
-	try {
-		const res = await fetch(`${base}/api/tags`, { signal });
-		if (!res.ok) return { ok: false, detail: `Ollama at ${base} returned HTTP ${res.status}` };
-		const data = (await res.json()) as { models?: Array<{ name?: string; model?: string }> };
-		const names = (data.models ?? []).map((m) => m.name ?? m.model ?? "");
-		const wanted = model.includes(":") ? model : `${model}:latest`;
-		const present = names.some((n) => n === model || n === wanted || n.split(":")[0] === model.split(":")[0]);
-		if (!present) return { ok: false, detail: `Model "${model}" not found in Ollama. Pull it with: ollama pull ${model}` };
-	} catch (err) {
-		return { ok: false, detail: `Cannot reach Ollama at ${url}: ${(err as Error).message}` };
-	}
-
-	// Prove it actually translates and returns something usable.
-	try {
-		const sample = await translateOneGeneric("The goal of all life is death.", {
-			url,
-			model,
-			source,
-			target,
-			timeoutMs: 30_000,
-			signal,
-		});
-		return { ok: true, detail: "", sample };
-	} catch (err) {
-		return { ok: false, detail: `Model reachable but translation failed: ${(err as Error).message}` };
-	}
-}
-
-/**
- * Real JSON round-trip against any provider: translates two sample lines via
- * the normal generic batch path so the Test button exercises exactly what a
- * job will run.
+ * Single-shot connection test: ONE chat request through the exact prompt
+ * format a job uses, with no retries and no batch recovery. A job survives a
+ * malformed reply by re-batching; a test button should just report it.
  */
 export async function checkGenericChat(opts: GenericOptions): Promise<{ ok: boolean; detail: string; sample?: string }> {
+	const items: TranslateItem[] = [{ text: "The goal of all life is death." }];
+	const prompt = buildGenericPrompt(items, opts);
 	try {
-		const out = await translateBatchGeneric([{ text: "The goal of all life is death." }, { text: "See you tomorrow." }], opts);
-		const sample = out[0]?.trim();
-		if (!sample) return { ok: false, detail: "Model returned an empty translation" };
+		const content = await chat(prompt, { ...opts, attempts: 1 });
+		const sample = parseGenericResponse(content, 1)[0]?.trim();
+		if (!sample) {
+			return { ok: false, detail: `Model replied, but not in the expected JSON format: "${content.trim().slice(0, 200)}"` };
+		}
 		return { ok: true, detail: "", sample };
 	} catch (err) {
 		return { ok: false, detail: (err as Error).message };

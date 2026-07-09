@@ -618,8 +618,7 @@ export async function encodeJob(
 			karaoke: job.settings.detectKaraokeAudio,
 		};
 
-		const translateProvider = job.settings.translateProvider ?? "ollama";
-		const translateIsLocal = translateProvider === "ollama" && /(?:localhost|127\.0\.0\.1|\[?::1\]?)(?::|\/|$)/i.test(job.settings.translateOllamaUrl);
+		const translateIsLocal = /(?:localhost|127\.0\.0\.1|\[?::1\]?)(?::|\/|$)/i.test(job.settings.translateBaseUrl ?? "");
 		const overlapPolicy = job.settings.translateDuringEncode ?? "auto";
 		const overlapTranslate = overlapPolicy === "always" || (overlapPolicy === "auto" && !translateIsLocal);
 
@@ -1346,7 +1345,7 @@ export async function encodeJob(
 				const subsThenTranslate = doSubtitleAnalysis().then(doTranslate);
 				await Promise.all([encodeVideo(), doAudio(), subsThenTranslate]);
 			} else {
-				// Local Ollama: still overlap audio + subtitle analysis (both cheap and
+				// Local llm: still overlap audio + subtitle analysis (both cheap and
 				// source-only), but keep the heavy translation off the encode.
 				await Promise.all([encodeVideo(), doAudio(), doSubtitleAnalysis()]);
 				await doTranslate();

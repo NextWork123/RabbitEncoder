@@ -1,7 +1,6 @@
 import { Logger } from "../core/logger";
 import { parseAssEvents, splitAssText, joinAssText, buildTranslatedAss, type AssEventLine } from "../subtitles/ass-edit";
 import { parseSrt, buildSrt } from "../subtitles/srt-edit";
-import { translateBatch } from "./ollama";
 import { resolveTranslateLang, normalizeTag, type TranslateLang } from "../translate/translate-languages";
 import { translateBatchGeneric, type GenericOptions, type TranslateItem } from "./generic";
 import { createSemaphore, type Semaphore } from "../core/concurrency";
@@ -79,18 +78,17 @@ export function planChunks(startsMs: number[], endsMs: number[], batchSize: numb
 export interface TranslateContentOptions {
 	format: "ass" | "srt";
 	batchSize: number;
-	/** Shared Ollama-request budget. If omitted, chunks run sequentially (limit 1). */
+	/** Shared llm-request budget. If omitted, chunks run sequentially (limit 1). */
 	sem?: Semaphore;
 	/** When false, only dialogue-classified ASS lines are translated. */
 	translateSignsSongs: boolean;
-	strategy: "translategemma" | "generic";
 	/**
 	 * ASS-only: predicate telling whether a style name is dialogue. Required when
 	 * `translateSignsSongs` is false; ignored for SRT. Supply via ass-classifier's
 	 * `dialogueStyleNames` in production.
 	 */
 	isDialogueStyle?: (style: string) => boolean;
-	ollama: GenericOptions;
+	llm: GenericOptions;
 	/** Reports cumulative translated-line progress. */
 	onProgress?: (done: number, total: number) => void;
 }
@@ -136,15 +134,10 @@ async function translateUnits(units: Unit[], opts: TranslateContentOptions): Pro
 		chunks.map(async ([lo, hi]) => {
 			const slice = units.slice(lo, hi);
 			const translated = await sem.run(() =>
-				opts.strategy === "generic"
-					? translateBatchGeneric(
-							slice.map<TranslateItem>((u) => ({ text: u.visible, name: u.name })),
-							opts.ollama,
-						)
-					: translateBatch(
-							slice.map((u) => u.visible),
-							opts.ollama,
-						),
+				translateBatchGeneric(
+					slice.map<TranslateItem>((u) => ({ text: u.visible, name: u.name })),
+					opts.llm,
+				),
 			);
 			for (let k = 0; k < slice.length; k++) {
 				out.set(slice[k]!.key, translated[k]!);
@@ -517,11 +510,7 @@ function langKey(tag: string | undefined, resolve: (t: string | undefined) => Tr
  *  - The produced track mirrors the source role (honorifics source -> honorifics
  *    output; otherwise full).
  */
-export function planTargetLanguages(
-	tracks: KeptSubDescriptor[],
-	targetTags: string[],
-	strategy: "translategemma" | "generic" = "translategemma",
-): TranslationPlan {
+export function planTargetLanguages(tracks: KeptSubDescriptor[], targetTags: string[]): TranslationPlan {
 	const skipped: string[] = [];
 	const productions: TranslationProduction[] = [];
 
@@ -561,7 +550,7 @@ export function planTargetLanguages(
 		const target = resolve(tag);
 
 		if (!target) {
-			skipped.push(`${tag}: not a language the ${strategy === "generic" ? "resolver recognizes" : "model supports"}`);
+			skipped.push(`${tag}: not a language the resolver recognizes`);
 			continue;
 		}
 

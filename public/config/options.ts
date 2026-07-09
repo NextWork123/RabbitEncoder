@@ -86,17 +86,23 @@ export const PIPELINE_PRESET_HELP: Record<PipelinePreset, string> = {
 	custom: "Configure each pipeline stage individually below.",
 };
 
-export const TRANSLATE_PROVIDERS = ["ollama", "deepseek"] as const;
+export const TRANSLATE_PROVIDERS = ["openai", "anthropic"] as const;
 export type TranslateProviderOption = (typeof TRANSLATE_PROVIDERS)[number];
 
 export const TRANSLATE_PROVIDER_LABELS: Record<TranslateProviderOption, string> = {
-	ollama: "Ollama (local)",
-	deepseek: "DeepSeek (cloud)",
+	openai: "OpenAI API format",
+	anthropic: "Anthropic API format",
 };
-export const DEEPSEEK_MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"] as const;
 
-export const TRANSLATE_STRATEGIES = ["translategemma", "generic"];
-export const TRANSLATE_MODEL_OPTIONS = ["translategemma:4b", "translategemma:12b", "translategemma:27b"];
+export const TRANSLATE_PROVIDER_URL_PLACEHOLDERS: Record<TranslateProviderOption, string> = {
+	openai: "http://localhost:11434/v1",
+	anthropic: "https://api.anthropic.com",
+};
+
+export const TRANSLATE_PROVIDER_MODEL_PLACEHOLDERS: Record<TranslateProviderOption, string> = {
+	openai: "gemma3:12b",
+	anthropic: "claude-sonnet-4-6",
+};
 
 export const DEFAULT_STYLE_APPEARANCE: StyleAppearance = {
 	fontSize: 80,

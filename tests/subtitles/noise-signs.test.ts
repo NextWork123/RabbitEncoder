@@ -11,18 +11,45 @@ afterEach(() => {
 	globalThis.fetch = realFetch;
 });
 
+/** Pull the id-keyed JSON payload array out of a generic batch prompt. */
+function extractPayload(prompt: string): Array<{ id: string; text: string }> | null {
+	const end = prompt.lastIndexOf("]");
+	if (end < 0) return null;
+	for (let start = prompt.indexOf("["); start >= 0 && start < end; start = prompt.indexOf("[", start + 1)) {
+		try {
+			const parsed = JSON.parse(prompt.slice(start, end + 1));
+			if (Array.isArray(parsed)) return parsed;
+		} catch {
+			// keep scanning: the instruction block may contain stray brackets
+		}
+	}
+	return null;
+}
+
 /**
- * Mock the Ollama chat endpoint: "translates" by uppercasing each line and
- * records every line the model was asked to translate into `sent`.
+ * Mock an OpenAI-compatible chat endpoint: "translates" by uppercasing each
+ * payload row and records every text the model was asked to translate into
+ * `sent`. Handles both the batch prompt (id-keyed JSON) and the per-line
+ * recovery prompt, and answers in the OpenAI response shape.
  */
 function mockTranslate(sent: string[]) {
 	globalThis.fetch = (async (_url: string, init: any) => {
 		const prompt: string = JSON.parse(init.body).messages[0].content;
-		const block = prompt.split("Slovenian:\n\n\n")[1]!;
-		const lines = block.split("\n");
-		sent.push(...lines);
-		const content = lines.map((l) => l.toUpperCase()).join("\n");
-		return new Response(JSON.stringify({ message: { content } }), { status: 200 });
+
+		let content: string;
+		const rows = extractPayload(prompt);
+		if (rows) {
+			// Generic batch: JSON in, JSON out, aligned by id.
+			sent.push(...rows.map((r) => r.text));
+			content = JSON.stringify(rows.map((r) => ({ id: r.id, text: r.text.toUpperCase() })));
+		} else {
+			// Per-line recovery prompt: the text is the last line of the prompt.
+			const line = prompt.trimEnd().split("\n").pop() ?? "";
+			sent.push(line);
+			content = line.toUpperCase();
+		}
+
+		return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
 	}) as unknown as typeof fetch;
 }
 
@@ -31,9 +58,15 @@ function opts(over: Partial<TranslateContentOptions> = {}): TranslateContentOpti
 		format: "ass",
 		batchSize: 100,
 		translateSignsSongs: true,
-		strategy: "translategemma",
 		isDialogueStyle: (s) => s === "Default",
-		ollama: { url: "http://localhost:11434", model: "translategemma:12b", source: EN, target: SL } as any,
+		llm: {
+			provider: "openai",
+			baseUrl: "http://localhost:11434/v1",
+			model: "qwen2.5:14b",
+			source: EN,
+			target: SL,
+			timeoutMs: 5_000,
+		},
 		...over,
 	};
 }
