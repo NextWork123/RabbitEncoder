@@ -185,6 +185,8 @@ export interface JobSettings {
 	dedupeAcrossFormat: boolean;
 	/** Rewrite subtitle track names to the clean format. When false, keep originals. */
 	renameSubtitleTracks: boolean;
+	/** Compress subtitle tracks with zlib in the final mux. Default off. */
+	compressSubtitles: boolean;
 	/** Ordered language priority for subtitles. "*" = the rest, alphabetically. */
 	subtitleLanguagePriority: string[];
 	/** Drop SDH subtitle tracks. */

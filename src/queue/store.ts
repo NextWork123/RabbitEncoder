@@ -251,6 +251,7 @@ const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	dropPictureSubtitles: bool,
 	dedupeAcrossFormat: bool,
 	renameSubtitleTracks: bool,
+	compressSubtitles: bool,
 	removeSDHSubtitles: bool,
 	removeCommentarySubtitles: bool,
 	removeForcedSignsSongs: bool,

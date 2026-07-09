@@ -88,6 +88,7 @@ const BASELINE: JobSettings = {
 	dropPictureSubtitles: false,
 	dedupeAcrossFormat: true,
 	renameSubtitleTracks: true,
+	compressSubtitles: false,
 	removeSDHSubtitles: false,
 	removeCommentarySubtitles: false,
 	removeForcedSignsSongs: false,
@@ -345,6 +346,7 @@ export function encodeSettingsCode(s: JobSettings): string {
 	if (s.dropPictureSubtitles !== BASELINE.dropPictureSubtitles) sm.put("dp", s.dropPictureSubtitles);
 	if (s.dedupeAcrossFormat !== BASELINE.dedupeAcrossFormat) sm.put("df", s.dedupeAcrossFormat);
 	if (s.renameSubtitleTracks !== BASELINE.renameSubtitleTracks) sm.put("rn", s.renameSubtitleTracks);
+	if (s.compressSubtitles !== BASELINE.compressSubtitles) sm.put("cz", s.compressSubtitles);
 	if (s.removeSDHSubtitles !== BASELINE.removeSDHSubtitles) sm.put("rs", s.removeSDHSubtitles);
 	if (s.removeCommentarySubtitles !== BASELINE.removeCommentarySubtitles) sm.put("rc", s.removeCommentarySubtitles);
 	if (s.removeForcedSignsSongs !== BASELINE.removeForcedSignsSongs) sm.put("rf", s.removeForcedSignsSongs);
@@ -593,6 +595,7 @@ function applySubtitleManip(out: JobSettings, kv: Record<string, string>): void 
 	if (kv.dp !== undefined) out.dropPictureSubtitles = kv.dp === "1";
 	if (kv.df !== undefined) out.dedupeAcrossFormat = kv.df === "1";
 	if (kv.rn !== undefined) out.renameSubtitleTracks = kv.rn === "1";
+	if (kv.cz !== undefined) out.compressSubtitles = kv.cz === "1";
 	if (kv.rs !== undefined) out.removeSDHSubtitles = kv.rs === "1";
 	if (kv.rc !== undefined) out.removeCommentarySubtitles = kv.rc === "1";
 	if (kv.rf !== undefined) out.removeForcedSignsSongs = kv.rf === "1";

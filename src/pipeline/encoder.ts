@@ -1857,6 +1857,7 @@ export async function encodeJob(
 					mkvArgs.push("--language", `0:${sanitizeLanguageTag(e.language, `sub ${e.language}`)}`);
 					mkvArgs.push("--track-name", `0:${e.trackName}`);
 					mkvArgs.push(...e.flagArgs);
+					if (job.settings.compressSubtitles) mkvArgs.push("--compression", "0:zlib");
 					mkvArgs.push(e.file);
 				}
 			} else {

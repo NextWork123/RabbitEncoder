@@ -177,6 +177,7 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 		"Dedupe across formats (one per language + type)",
 		(v) => (settings.dedupeAcrossFormat = v),
 	);
+	renderLabeledToggle(el("compress-subtitles"), settings.compressSubtitles ?? false, "Compress subtitles", (v) => (settings.compressSubtitles = v));
 	renderLabeledToggle(
 		el("rename-subtitle-tracks"),
 		settings.renameSubtitleTracks ?? true,
