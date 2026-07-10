@@ -89,6 +89,7 @@ const BASELINE: JobSettings = {
 	dedupeAcrossFormat: true,
 	renameSubtitleTracks: true,
 	compressSubtitles: false,
+	compressSubtitlesMinSavings: 10,
 	removeSDHSubtitles: false,
 	removeCommentarySubtitles: false,
 	removeForcedSignsSongs: false,
@@ -347,6 +348,7 @@ export function encodeSettingsCode(s: JobSettings): string {
 	if (s.dedupeAcrossFormat !== BASELINE.dedupeAcrossFormat) sm.put("df", s.dedupeAcrossFormat);
 	if (s.renameSubtitleTracks !== BASELINE.renameSubtitleTracks) sm.put("rn", s.renameSubtitleTracks);
 	if (s.compressSubtitles !== BASELINE.compressSubtitles) sm.put("cz", s.compressSubtitles);
+	if (s.compressSubtitlesMinSavings !== BASELINE.compressSubtitlesMinSavings) sm.put("zm", s.compressSubtitlesMinSavings);
 	if (s.removeSDHSubtitles !== BASELINE.removeSDHSubtitles) sm.put("rs", s.removeSDHSubtitles);
 	if (s.removeCommentarySubtitles !== BASELINE.removeCommentarySubtitles) sm.put("rc", s.removeCommentarySubtitles);
 	if (s.removeForcedSignsSongs !== BASELINE.removeForcedSignsSongs) sm.put("rf", s.removeForcedSignsSongs);

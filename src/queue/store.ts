@@ -252,6 +252,7 @@ const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	dedupeAcrossFormat: bool,
 	renameSubtitleTracks: bool,
 	compressSubtitles: bool,
+	compressSubtitlesMinSavings: numIn(0, 100),
 	removeSDHSubtitles: bool,
 	removeCommentarySubtitles: bool,
 	removeForcedSignsSongs: bool,

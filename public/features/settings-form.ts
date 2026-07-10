@@ -178,6 +178,14 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 		(v) => (settings.dedupeAcrossFormat = v),
 	);
 	renderLabeledToggle(el("compress-subtitles"), settings.compressSubtitles ?? false, "Compress subtitles", (v) => (settings.compressSubtitles = v));
+	renderNumberControl(
+		el("compress-min-savings"),
+		"Min. savings to compress (%)",
+		settings.compressSubtitlesMinSavings ?? 10,
+		{ min: 0, max: 100, step: 1 },
+		(v) => (settings.compressSubtitlesMinSavings = v),
+	);
+
 	renderLabeledToggle(
 		el("rename-subtitle-tracks"),
 		settings.renameSubtitleTracks ?? true,

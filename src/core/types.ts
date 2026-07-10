@@ -187,6 +187,8 @@ export interface JobSettings {
 	renameSubtitleTracks: boolean;
 	/** Compress subtitle tracks with zlib in the final mux. Default off. */
 	compressSubtitles: boolean;
+	/** Only compress a track if zlib shrinks it by at least this percent (0 = "never larger"). */
+	compressSubtitlesMinSavings: number;
 	/** Ordered language priority for subtitles. "*" = the rest, alphabetically. */
 	subtitleLanguagePriority: string[];
 	/** Drop SDH subtitle tracks. */

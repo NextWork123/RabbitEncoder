@@ -65,6 +65,7 @@ const DEFAULT_JOB_SETTINGS: JobSettings = {
 	dedupeAcrossFormat: true,
 	renameSubtitleTracks: true,
 	compressSubtitles: false,
+	compressSubtitlesMinSavings: 10,
 	removeSDHSubtitles: false,
 	removeCommentarySubtitles: false,
 	removeForcedSignsSongs: false,

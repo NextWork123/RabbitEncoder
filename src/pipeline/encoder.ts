@@ -49,7 +49,8 @@ const S_ZONES = 5;
 const S_FINAL = 6;
 const S_AUDIO = 7;
 const S_TRANSLATE = 8;
-const S_MUX = 9;
+const S_SUBS = 9;
+const S_MUX = 10;
 
 function makeSteps(): JobStep[] {
 	return [
@@ -62,6 +63,7 @@ function makeSteps(): JobStep[] {
 		{ label: "Final Encode", status: "pending", progress: 0 },
 		{ label: "Audio", status: "pending", progress: 0 },
 		{ label: "Translate", status: "pending", progress: 0 },
+		{ label: "Subtitles", status: "pending", progress: 0 },
 		{ label: "Mux & Finish", status: "pending", progress: 0 },
 	];
 }
@@ -294,6 +296,47 @@ async function materializeAssForInspection(
 
 	resetOutput();
 	return { ok: false, empty: false, detail: errors.map((e) => e.slice(-300)).join(" | ") };
+}
+
+/**
+ * Trial-mux `file` with and without zlib and report whether compression
+ * shrinks the muxed track by at least `minSavingsPct` percent. Matroska zlib
+ * is applied per block, so short subtitle events often *grow* — measuring
+ * real mkvmerge output is the only exact way to know. Any probe failure
+ * returns false (leave the track uncompressed).
+ */
+async function zlibWorthIt(file: string, tempDir: string, minSavingsPct: number, signal?: AbortSignal): Promise<boolean> {
+	const tag = basename(file).replace(/[^\w.-]/g, "_");
+	const outNone = join(tempDir, `zprobe_none_${tag}.mkv`);
+	const outZlib = join(tempDir, `zprobe_zlib_${tag}.mkv`);
+	try {
+		const rn = await run(["mkvmerge", "-o", outNone, "--compression", "0:none", file], { signal });
+		if (rn.code > 1) return false; // mkvmerge exit 1 = warnings only
+		const rz = await run(["mkvmerge", "-o", outZlib, "--compression", "0:zlib", file], { signal });
+		if (rz.code > 1) return false;
+		const noneSize = statSync(outNone).size;
+		const zlibSize = statSync(outZlib).size;
+		if (noneSize <= 0) return false;
+		const savings = ((noneSize - zlibSize) / noneSize) * 100;
+		Logger.info(`[subtitle] zlib probe ${tag}: ${noneSize} -> ${zlibSize} B (${savings.toFixed(1)}% savings, threshold ${minSavingsPct}%)`);
+		return savings >= minSavingsPct;
+	} catch (err) {
+		// Cancellation is not a failed compression experiment. Propagate it so a
+		// sibling stage failure immediately tears down subtitle preparation.
+		if (signal?.aborted) {
+			const reason = (signal as AbortSignal & { reason?: unknown }).reason;
+			if (reason instanceof Error) throw reason;
+			throw new CancelledError();
+		}
+		Logger.warn(`[subtitle] zlib probe failed for ${tag}; leaving uncompressed: ${err}`);
+		return false;
+	} finally {
+		for (const f of [outNone, outZlib]) {
+			try {
+				unlinkSync(f);
+			} catch {}
+		}
+	}
 }
 
 export async function encodeJob(
@@ -635,6 +678,80 @@ export async function encodeJob(
 		const encodedAudioFiles: string[] = [];
 		let subtitleStreams: SubtitleStreamInfo[] = [];
 		let translatedTracks: TranslatedTrack[] = [];
+
+		interface PlannedSubtitle {
+			stream: SubtitleStreamInfo;
+			subFile: string;
+			effectiveLang: string;
+			trackName: string;
+			trackType: string;
+			flagArgs: string[];
+		}
+
+		// Subtitle preparation is completed during the parallel encode phase.
+		// Mux only consumes these final files and their precomputed decisions.
+		const plannedSubs: PlannedSubtitle[] = [];
+		const zlibDecisions = new Map<string, boolean>();
+
+		// Font state is populated by subtitle preparation and consumed by mux.
+		const sourceExt = extname(job.inputPath).toLowerCase();
+		const occupiedFontNames = new Set<string>();
+		// Fonts still referenced by untouched source subtitle content after the
+		// provisional restyle. Only this set may keep source font attachments.
+		const sourceAttachmentUsedFonts = new Set<string>();
+		let effectiveRemoveUnusedFonts = job.settings.removeUnusedFonts;
+		const resolvedFaces = new Map<string, ResolvedFace>();
+		const instanceCache = new Map<string, ResolvedFace>();
+
+		function cleanAttachmentExtension(fileName: string): string {
+			const extension = extname(fileName).toLowerCase();
+			if (extension === ".otf") return ".otf";
+			if (extension === ".ttc" || extension === ".otc") return extension;
+			return ".ttf";
+		}
+
+		const applyAxes = async (face: ResolvedFace | null, appearance: StyleAppearance): Promise<ResolvedFace | null> => {
+			if (!face) return null;
+			const axes = face.axes ?? [];
+			const { suffix: axisKey, coords } = axisSuffix(axes, appearance.fontAxes ?? {});
+			const cacheKey = `${face.path}|${axisKey || "default"}|${appearance.bold ? "bold" : "regular"}`;
+			const cached = instanceCache.get(cacheKey);
+			if (cached) return cached;
+
+			const family = chooseAvailableFontFamily(face.family, occupiedFontNames, appearance.bold);
+			const familyChanged = family !== face.family;
+			const needsMaterializedCopy = axisKey.length > 0 || familyChanged;
+			const sourceFontExt = cleanAttachmentExtension(face.fileName);
+			const materializedExt = sourceFontExt === ".otf" ? ".otf" : ".ttf";
+
+			let resolved: ResolvedFace;
+			if (needsMaterializedCopy) {
+				const materializeKey = `${cacheKey}|${family}`;
+				const out = join(tempDir, `inst_${Buffer.from(materializeKey).toString("base64url").slice(0, 40)}${materializedExt}`);
+				const inst = await instanceFont(face.path, coords, family, appearance.bold, out, stageSignal);
+				if (inst) {
+					resolved = {
+						...face,
+						family: inst.family,
+						path: inst.path,
+						names: inst.names,
+						fileName: fontAttachmentFileName(family, materializedExt),
+						mime: fontRegistry.mime(inst.path),
+					};
+				} else {
+					Logger.warn(`[fonts] Could not materialize ${face.fileName} as "${family}"; using the original face`);
+					resolved = { ...face, fileName: fontAttachmentFileName(face.family, sourceFontExt) };
+				}
+			} else {
+				resolved = { ...face, fileName: fontAttachmentFileName(family, sourceFontExt) };
+			}
+
+			for (const name of resolved.names.length > 0 ? resolved.names : instancedFontNames(resolved.family, false)) {
+				occupiedFontNames.add(name);
+			}
+			instanceCache.set(cacheKey, resolved);
+			return resolved;
+		};
 
 		const encodeVideo = async (): Promise<void> => {
 			if (skipVideoEncode) {
@@ -1258,8 +1375,14 @@ export async function encodeJob(
 		};
 
 		const doSubtitleAnalysis = async (): Promise<void> => {
-			if (!skipSubtitleProcessing) {
+			if (skipSubtitleProcessing) return;
+
+			checkCancelled();
+			setStep(S_SUBS, { status: "active", progress: 0, detail: "Analyzing subtitle tracks" });
+
+			try {
 				if (opts.precomputed) {
+					// Preview: reuse the whole-source subtitle selection.
 					subtitleStreams = opts.precomputed.subtitleStreams;
 				} else {
 					const allSubtitleStreams = probe.subtitleStreams || [];
@@ -1290,8 +1413,14 @@ export async function encodeJob(
 						formatPriority: job.settings.subtitleFormatPriority,
 						languagePriority: job.settings.subtitleLanguagePriority,
 					});
+
 					const allowedSubLangs = job.settings.subtitleLanguages || [];
 					const langFilteredSubs = filterStreamsByLanguage(sortedSubtitleStreams, allowedSubLangs, "subtitle");
+					const skippedSubLang = sortedSubtitleStreams.length - langFilteredSubs.length;
+					if (skippedSubLang > 0) {
+						Logger.info(`[subtitle] Filtered ${skippedSubLang} track(s) not in [${allowedSubLangs.join(", ")}]`);
+					}
+
 					const typeFilteredSubs = filterSubtitleTypes(langFilteredSubs, {
 						removeSDH: job.settings.removeSDHSubtitles,
 						removeCommentary: job.settings.removeCommentarySubtitles,
@@ -1300,10 +1429,27 @@ export async function encodeJob(
 						removeHonorifics: job.settings.removeHonorificsSubtitles,
 						dropPicture: job.settings.dropPictureSubtitles,
 					});
+					const droppedByTypeSubs = langFilteredSubs.length - typeFilteredSubs.length;
+					if (droppedByTypeSubs > 0) {
+						Logger.info(`[subtitle] Dropped ${droppedByTypeSubs} track(s) by type/format filters`);
+					}
+
 					subtitleStreams = job.settings.dedupeSubtitles
 						? deduplicateSubtitleStreams(typeFilteredSubs, { acrossFormat: job.settings.dedupeAcrossFormat })
 						: typeFilteredSubs;
+
+					if (job.settings.dedupeSubtitles && typeFilteredSubs.length !== subtitleStreams.length) {
+						Logger.info(`[subtitle] Deduplicated ${typeFilteredSubs.length - subtitleStreams.length} redundant track(s)`);
+					}
 				}
+
+				setStep(S_SUBS, {
+					progress: 10,
+					detail: subtitleStreams.length ? `Selected ${subtitleStreams.length} subtitle track(s)` : "No subtitle streams",
+				});
+			} catch (err) {
+				setStep(S_SUBS, { status: "error", progress: 100 });
+				throw err;
 			}
 		};
 
@@ -1339,16 +1485,345 @@ export async function encodeJob(
 			}
 		};
 
+		const updateSubtitlePrepSummary = (): void => {
+			if (skipSubtitleProcessing) return;
+
+			const readyFiles = [...plannedSubs.map((planned) => planned.subFile), ...translatedTracks.map((track) => track.file)].filter((file) => existsSync(file));
+			const compressedCount = readyFiles.reduce((count, file) => count + (zlibDecisions.get(file) ? 1 : 0), 0);
+
+			setStep(S_SUBS, {
+				status: "done",
+				progress: 100,
+				detail: job.settings.compressSubtitles ? `${compressedCount} of ${readyFiles.length} track(s) compressed` : `${readyFiles.length} track(s) ready`,
+			});
+		};
+
+		const doSubtitlePrep = async (): Promise<void> => {
+			checkCancelled();
+			setStep(S_SUBS, { status: "active", progress: Math.max(steps[S_SUBS]!.progress, 10), detail: "Planning subtitle tracks" });
+
+			if (skipSubtitleProcessing) {
+				setStep(S_SUBS, { status: "done", progress: 100, detail: "Skipped — subtitles copied from source" });
+				return;
+			}
+			if (subtitleStreams.length === 0) {
+				Logger.info("[subtitle] No subtitle streams found");
+				setStep(S_SUBS, { status: "done", progress: 100, detail: "No subtitle streams" });
+				return;
+			}
+
+			try {
+				const subSortedTypes = subtitleStreams.map((stream) => `${stream.language || "und"}:${detectSubtitleTrackType(stream)}`);
+				Logger.info(`[subtitle] Track order: ${subSortedTypes.join(", ")}`);
+
+				const subDefaultAssigned = new Set<string>();
+				const subForcedAssigned = new Set<string>();
+
+				for (const stream of subtitleStreams) {
+					const trackType = detectSubtitleTrackType(stream);
+					const lang = stream.language || "und";
+					const langGroup = normalizeLanguageGroup(lang);
+					const trackName = job.settings.renameSubtitleTracks
+						? buildSubtitleTrackName(trackType, stream.title)
+						: stream.title || buildSubtitleTrackName(trackType, stream.title);
+
+					let effectiveLang = lang;
+					if (trackType === "honorifics") {
+						effectiveLang = "en-JP";
+					}
+
+					const flagArgs: string[] = [];
+
+					switch (trackType) {
+						case "full": {
+							const isDefault = !subDefaultAssigned.has(langGroup);
+							if (isDefault) subDefaultAssigned.add(langGroup);
+							flagArgs.push("--default-track-flag", `0:${isDefault ? "1" : "0"}`);
+							flagArgs.push("--forced-display-flag", "0:0");
+							flagArgs.push("--hearing-impaired-flag", "0:0");
+							flagArgs.push("--commentary-flag", "0:0");
+							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
+							break;
+						}
+						case "forced": {
+							if (subForcedAssigned.has(langGroup)) {
+								Logger.warn(`[subtitle] Duplicate forced track for ${lang}, skipping index ${stream.index}`);
+								continue;
+							}
+							subForcedAssigned.add(langGroup);
+							flagArgs.push("--default-track-flag", "0:0");
+							flagArgs.push("--forced-display-flag", "0:1");
+							flagArgs.push("--hearing-impaired-flag", "0:0");
+							flagArgs.push("--commentary-flag", "0:0");
+							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
+							break;
+						}
+						case "honorifics": {
+							flagArgs.push("--default-track-flag", "0:1");
+							flagArgs.push("--forced-display-flag", "0:0");
+							flagArgs.push("--hearing-impaired-flag", "0:0");
+							flagArgs.push("--commentary-flag", "0:0");
+							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
+							break;
+						}
+						case "sdh": {
+							flagArgs.push("--default-track-flag", "0:0");
+							flagArgs.push("--forced-display-flag", "0:0");
+							flagArgs.push("--hearing-impaired-flag", "0:1");
+							flagArgs.push("--commentary-flag", "0:0");
+							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
+							break;
+						}
+						case "commentary": {
+							flagArgs.push("--default-track-flag", "0:0");
+							flagArgs.push("--forced-display-flag", "0:0");
+							flagArgs.push("--hearing-impaired-flag", "0:0");
+							flagArgs.push("--commentary-flag", "0:1");
+							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
+							break;
+						}
+					}
+
+					plannedSubs.push({
+						stream,
+						subFile: join(tempDir, `sub_${stream.index}.mkv`),
+						effectiveLang,
+						trackName,
+						trackType,
+						flagArgs,
+					});
+				}
+
+				setStep(S_SUBS, { progress: 15, detail: `Planned ${plannedSubs.length} subtitle track(s)` });
+
+				if (plannedSubs.length > 0) {
+					checkCancelled();
+					setStep(S_SUBS, { progress: 20, detail: `Extracting ${plannedSubs.length} subtitle track(s)` });
+
+					const extractArgs: string[] = ["ffmpeg", "-y", "-i", job.inputPath];
+					for (const planned of plannedSubs) {
+						extractArgs.push("-map", `0:${planned.stream.index}`, "-c:s", "copy", "-vn", "-an", "-map_chapters", "-1", "-map_metadata", "-1", planned.subFile);
+					}
+
+					const extractRes = await run(extractArgs, { signal: stageSignal });
+					checkCancelled();
+
+					if (extractRes.code !== 0) {
+						// One bad track fails the whole batch. Fall back to per-track
+						// extraction so every other valid track can still be kept.
+						Logger.warn(`[subtitle] Single-pass extraction failed, falling back to per-track: ${extractRes.stderr || extractRes.stdout}`);
+						for (let i = 0; i < plannedSubs.length; i++) {
+							checkCancelled();
+							const planned = plannedSubs[i]!;
+							const res = await run(
+								[
+									"ffmpeg",
+									"-y",
+									"-i",
+									job.inputPath,
+									"-map",
+									`0:${planned.stream.index}`,
+									"-c:s",
+									"copy",
+									"-vn",
+									"-an",
+									"-map_chapters",
+									"-1",
+									"-map_metadata",
+									"-1",
+									planned.subFile,
+								],
+								{ signal: stageSignal },
+							);
+							if (res.code !== 0) {
+								Logger.warn(`[subtitle] Failed to extract track ${planned.stream.index}, skipping: ${res.stderr || res.stdout}`);
+							}
+							setStep(S_SUBS, {
+								progress: 20 + Math.round(((i + 1) / plannedSubs.length) * 40),
+								detail: `Extracting subtitles (${i + 1}/${plannedSubs.length})`,
+							});
+						}
+					}
+
+					setStep(S_SUBS, { progress: 60, detail: `Extracted ${plannedSubs.length} subtitle track(s)` });
+				}
+
+				// Subtitle styling - SRT->ASS conversion and/or ASS dialogue-font restyle.
+				if (job.settings.convertSrtToAss || job.settings.restyleAssFont || job.settings.removeUnusedFonts) {
+					setStep(S_SUBS, { progress: 65, detail: "Preparing subtitle styles and fonts" });
+
+					const targets = new Set(job.settings.assRestyleTargets);
+					const probeFamily = "__RabbitEncoderInjectedFontProbe_4F3A8B__";
+					const probeFamilyNormalized = normalizeFontName(probeFamily);
+
+					interface PreparedAss {
+						rawPath: string;
+						rawText: string;
+						kind: "converted-srt" | "ass";
+						restyle: boolean;
+					}
+
+					const preparedAss = new Map<number, PreparedAss>();
+
+					// Pass 1: materialize every subtitle we may need to inspect as ASS.
+					// No injected family is chosen yet.
+					for (const planned of plannedSubs) {
+						if (!existsSync(planned.subFile)) continue;
+						const codec = planned.stream.codec.toLowerCase();
+						const isSrt = codec === "subrip" || codec === "srt";
+						const isAss = codec === "ass" || codec === "ssa";
+
+						if (job.settings.convertSrtToAss && isSrt) {
+							const rawPath = join(tempDir, `sub_${planned.stream.index}.conv.ass`);
+							const result = await run(["ffmpeg", "-y", "-i", planned.subFile, "-map", "0:s:0", "-c:s", "ass", rawPath], {
+								signal: stageSignal,
+							});
+							if (result.code === 0 && existsSync(rawPath)) {
+								preparedAss.set(planned.stream.index, {
+									rawPath,
+									rawText: readFileSync(rawPath, "utf-8"),
+									kind: "converted-srt",
+									restyle: true,
+								});
+							} else {
+								Logger.warn(`[subtitle] SRT→ASS conversion failed for track ${planned.stream.index}; keeping original`);
+							}
+						} else if (isAss) {
+							const rawPath = join(tempDir, `sub_${planned.stream.index}.raw.ass`);
+							const materialized = await materializeAssForInspection(job.inputPath, planned.stream.index, planned.subFile, rawPath, stageSignal);
+							if (materialized.ok) {
+								preparedAss.set(planned.stream.index, {
+									rawPath,
+									rawText: readFileSync(rawPath, "utf-8"),
+									kind: "ass",
+									restyle: job.settings.restyleAssFont && targets.has(planned.trackType),
+								});
+							} else if (materialized.empty) {
+								Logger.debug(`[fonts] ASS track ${planned.stream.index} has no subtitle packets; ` + "it contributes no used fonts");
+							} else {
+								effectiveRemoveUnusedFonts = false;
+								Logger.warn(
+									`[fonts] Could not inspect ASS track ${planned.stream.index}; ` +
+										`preserving all source font attachments for safety (${materialized.detail})`,
+								);
+							}
+						}
+					}
+
+					// Pass 2: determine which *source* font families remain referenced after
+					// the intended restyle. A private placeholder stands in for Rabbit's
+					// injected face, so a restyled dialogue reference is not mistaken for a
+					// reason to retain a same-named source attachment. Untouched signs,
+					// songs, inline \fn overrides, and non-targeted styles remain visible.
+					sourceAttachmentUsedFonts.clear();
+					for (const prepared of preparedAss.values()) {
+						let probeText = prepared.rawText;
+						if (prepared.kind === "converted-srt") {
+							probeText = styleSrtAss(prepared.rawText, { ...DEFAULT_STYLE_APPEARANCE, fontName: probeFamily });
+						} else if (prepared.restyle) {
+							probeText = restyleAssDialogueFont(prepared.rawText, { ...DEFAULT_STYLE_APPEARANCE, fontName: probeFamily }, true);
+						}
+						for (const font of extractUsedFonts(probeText)) {
+							if (font !== probeFamilyNormalized) sourceAttachmentUsedFonts.add(font);
+						}
+					}
+
+					// Only source fonts which will survive the unused-font pass reserve a
+					// family identity. Therefore an unused Noto Sans does not force
+					// "Noto Sans 2", while a Noto Sans still used by signs does.
+					if (sourceExt === ".mkv" || sourceExt === ".mks") {
+						const sourceNames = await scanMkvAttachmentFontNames(job.inputPath, tempDir, sourceAttachmentUsedFonts, effectiveRemoveUnusedFonts, stageSignal);
+						if (sourceNames) {
+							for (const name of sourceNames) occupiedFontNames.add(name);
+						} else {
+							effectiveRemoveUnusedFonts = false;
+							Logger.warn("[fonts] Source font collision scan failed; preserving source attachments and using best-effort numbering");
+						}
+					}
+
+					// Pass 3: perform the real transform using the final collision-free
+					// family selected from the retained source-font inventory.
+					for (const planned of plannedSubs) {
+						const prepared = preparedAss.get(planned.stream.index);
+						if (!prepared) continue;
+
+						if (prepared.kind === "converted-srt") {
+							const { face: baseFace, appearance } = fontRegistry.resolveFaceAndStyle(job.settings.fontGroup, planned.effectiveLang, prepared.rawText);
+							const face = await applyAxes(baseFace, appearance);
+							const family = face?.family ?? job.settings.fontGroup;
+							const outAss = join(tempDir, `sub_${planned.stream.index}.styled.ass`);
+							writeFileSync(outAss, styleSrtAss(prepared.rawText, { ...appearance, fontName: family }), "utf-8");
+							planned.subFile = outAss;
+							if (face) resolvedFaces.set(face.path, face);
+							if (!face) Logger.warn(`[fonts] No face for group "${job.settings.fontGroup}" (track ${planned.stream.index})`);
+						} else if (prepared.restyle) {
+							const { face: baseFace, appearance } = fontRegistry.resolveFaceAndStyle(job.settings.fontGroup, planned.effectiveLang, prepared.rawText);
+							const face = await applyAxes(baseFace, appearance);
+							const family = face?.family ?? job.settings.fontGroup;
+							const outAss = join(tempDir, `sub_${planned.stream.index}.styled.ass`);
+							writeFileSync(outAss, restyleAssDialogueFont(prepared.rawText, { ...appearance, fontName: family }, true), "utf-8");
+							planned.subFile = outAss;
+							if (face) resolvedFaces.set(face.path, face);
+						}
+					}
+				}
+
+				setStep(S_SUBS, { progress: 85, detail: "Subtitle tracks prepared" });
+
+				if (job.settings.compressSubtitles) {
+					const minSavings = job.settings.compressSubtitlesMinSavings ?? 10;
+					const readyPlannedSubs = plannedSubs.filter((planned) => existsSync(planned.subFile));
+
+					for (let i = 0; i < readyPlannedSubs.length; i++) {
+						checkCancelled();
+						const planned = readyPlannedSubs[i]!;
+						setStep(S_SUBS, {
+							progress: 85 + Math.round((i / Math.max(1, readyPlannedSubs.length)) * 15),
+							detail: `Probing subtitle compression (${i + 1}/${readyPlannedSubs.length})`,
+						});
+						zlibDecisions.set(planned.subFile, await zlibWorthIt(planned.subFile, tempDir, minSavings, stageSignal));
+					}
+				}
+
+				updateSubtitlePrepSummary();
+			} catch (err) {
+				setStep(S_SUBS, { status: "error", progress: 100 });
+				throw err;
+			}
+		};
+
+		// Translated files do not exist until doTranslate completes, so their
+		// compression probes form a tiny trailing step after both parallel jobs.
+		const probeTranslatedCompression = async (): Promise<void> => {
+			if (skipSubtitleProcessing) return;
+
+			if (job.settings.compressSubtitles && translatedTracks.length > 0) {
+				const minSavings = job.settings.compressSubtitlesMinSavings ?? 10;
+				for (const track of translatedTracks) {
+					checkCancelled();
+					if (!existsSync(track.file)) continue;
+					zlibDecisions.set(track.file, await zlibWorthIt(track.file, tempDir, minSavings, stageSignal));
+				}
+			}
+
+			updateSubtitlePrepSummary();
+		};
+
 		try {
 			if (overlapTranslate) {
-				// Audio + subtitle analysis + translation all overlap the encode.
-				const subsThenTranslate = doSubtitleAnalysis().then(doTranslate);
-				await Promise.all([encodeVideo(), doAudio(), subsThenTranslate]);
+				// Source subtitle preparation and translation both depend only
+				// on analysis, so they can run together alongside video/audio.
+				const subsPipeline = doSubtitleAnalysis().then(async () => {
+					await Promise.all([doTranslate(), doSubtitlePrep()]);
+					await probeTranslatedCompression();
+				});
+				await Promise.all([encodeVideo(), doAudio(), subsPipeline]);
 			} else {
-				// Local llm: still overlap audio + subtitle analysis (both cheap and
-				// source-only), but keep the heavy translation off the encode.
-				await Promise.all([encodeVideo(), doAudio(), doSubtitleAnalysis()]);
+				// Keep a local LLM off the video encode, while still overlapping
+				// source-only subtitle preparation with video and audio.
+				await Promise.all([encodeVideo(), doAudio(), doSubtitleAnalysis().then(doSubtitlePrep)]);
 				await doTranslate();
+				await probeTranslatedCompression();
 			}
 		} catch (err) {
 			stageAbort.abort(err);
@@ -1452,392 +1927,26 @@ export async function encodeJob(
 			}
 		}
 
-		const sourceExt = extname(job.inputPath).toLowerCase();
-		const occupiedFontNames = new Set<string>();
-		// Fonts still referenced by untouched source subtitle content after the
-		// provisional restyle. Only this set may keep source font attachments.
-		const sourceAttachmentUsedFonts = new Set<string>();
-		let effectiveRemoveUnusedFonts = job.settings.removeUnusedFonts;
-		const resolvedFaces = new Map<string, ResolvedFace>();
-		const instanceCache = new Map<string, ResolvedFace>();
-
-		function cleanAttachmentExtension(fileName: string): string {
-			const extension = extname(fileName).toLowerCase();
-			if (extension === ".otf") return ".otf";
-			if (extension === ".ttc" || extension === ".otc") return extension;
-			return ".ttf";
-		}
-
-		const applyAxes = async (face: ResolvedFace | null, appearance: StyleAppearance): Promise<ResolvedFace | null> => {
-			if (!face) return null;
-			const axes = face.axes ?? [];
-			const { suffix: axisKey, coords } = axisSuffix(axes, appearance.fontAxes ?? {});
-			const cacheKey = `${face.path}|${axisKey || "default"}|${appearance.bold ? "bold" : "regular"}`;
-			const cached = instanceCache.get(cacheKey);
-			if (cached) return cached;
-
-			const family = chooseAvailableFontFamily(face.family, occupiedFontNames, appearance.bold);
-			const familyChanged = family !== face.family;
-			const needsMaterializedCopy = axisKey.length > 0 || familyChanged;
-			const sourceFontExt = cleanAttachmentExtension(face.fileName);
-			const materializedExt = sourceFontExt === ".otf" ? ".otf" : ".ttf";
-
-			let resolved: ResolvedFace;
-			if (needsMaterializedCopy) {
-				const materializeKey = `${cacheKey}|${family}`;
-				const out = join(tempDir, `inst_${Buffer.from(materializeKey).toString("base64url").slice(0, 40)}${materializedExt}`);
-				const inst = await instanceFont(face.path, coords, family, appearance.bold, out, signal);
-				if (inst) {
-					resolved = {
-						...face,
-						family: inst.family,
-						path: inst.path,
-						names: inst.names,
-						fileName: fontAttachmentFileName(family, materializedExt),
-						mime: fontRegistry.mime(inst.path),
-					};
-				} else {
-					Logger.warn(`[fonts] Could not materialize ${face.fileName} as "${family}"; using the original face`);
-					resolved = { ...face, fileName: fontAttachmentFileName(face.family, sourceFontExt) };
-				}
-			} else {
-				resolved = { ...face, fileName: fontAttachmentFileName(family, sourceFontExt) };
-			}
-
-			for (const name of resolved.names.length > 0 ? resolved.names : instancedFontNames(resolved.family, false)) {
-				occupiedFontNames.add(name);
-			}
-			instanceCache.set(cacheKey, resolved);
-			return resolved;
-		};
-
 		if (!skipSubtitleProcessing) {
-			// Subtitle tracks
-			if (opts.precomputed) {
-				// Preview: reuse the whole-source subtitle selection
-				subtitleStreams = opts.precomputed.subtitleStreams;
-			} else {
-				const allSubtitleStreams = probe.subtitleStreams || [];
-
-				await analyzeSubtitleStreams(
-					allSubtitleStreams,
-					job.inputPath,
-					tempDir,
-					{
-						langDetect: job.settings.subtitleLangDetect,
-						langDetectConfidence: job.settings.subtitleLangDetectConfidence,
-						detectSignsSongs: job.settings.detectSignsSongs,
-						detectSDH: job.settings.detectSDH,
-						detectHonorifics: job.settings.detectHonorifics,
-						signsSongsStyleRatio: job.settings.signsSongsStyleRatio,
-						signsSongsLineRatio: job.settings.signsSongsLineRatio,
-						sdhRatioThreshold: job.settings.sdhRatioThreshold,
-						sdhMinLines: job.settings.sdhMinLines,
-						honorificsMinCount: job.settings.honorificsMinCount,
-						honorificsRatio: job.settings.honorificsRatio,
-						assumeMislabeled: job.settings.assumeMislabeledTracks,
-					},
-					signal,
-				);
-
-				const sortedSubtitleStreams = sortSubtitleStreams(allSubtitleStreams, {
-					sourcePriority: job.settings.subtitleSourcePriority,
-					fansubTiebreak: job.settings.subtitleFansubTiebreak,
-					formatPriority: job.settings.subtitleFormatPriority,
-					languagePriority: job.settings.subtitleLanguagePriority,
-				});
-
-				const allowedSubLangs = job.settings.subtitleLanguages || [];
-				const langFilteredSubs = filterStreamsByLanguage(sortedSubtitleStreams, allowedSubLangs, "subtitle");
-				const skippedSubLang = sortedSubtitleStreams.length - langFilteredSubs.length;
-				if (skippedSubLang > 0) {
-					Logger.info(`[subtitle] Filtered ${skippedSubLang} track(s) not in [${allowedSubLangs.join(", ")}]`);
-				}
-
-				const typeFilteredSubs = filterSubtitleTypes(langFilteredSubs, {
-					removeSDH: job.settings.removeSDHSubtitles,
-					removeCommentary: job.settings.removeCommentarySubtitles,
-					removeForcedSignsSongs: job.settings.removeForcedSignsSongs,
-					removeStoryboard: job.settings.removeStoryboardSubtitles,
-					removeHonorifics: job.settings.removeHonorificsSubtitles,
-					dropPicture: job.settings.dropPictureSubtitles,
-				});
-				const droppedByTypeSubs = langFilteredSubs.length - typeFilteredSubs.length;
-				if (droppedByTypeSubs > 0) {
-					Logger.info(`[subtitle] Dropped ${droppedByTypeSubs} track(s) by type/format filters`);
-				}
-
-				subtitleStreams = job.settings.dedupeSubtitles
-					? deduplicateSubtitleStreams(typeFilteredSubs, { acrossFormat: job.settings.dedupeAcrossFormat })
-					: typeFilteredSubs;
-
-				if (job.settings.dedupeSubtitles && typeFilteredSubs.length !== subtitleStreams.length) {
-					Logger.info(`[subtitle] Deduplicated ${typeFilteredSubs.length - subtitleStreams.length} redundant track(s)`);
-				}
-			}
-
 			if (subtitleStreams.length > 0) {
-				const subSortedTypes = subtitleStreams.map((s) => `${s.language || "und"}:${detectSubtitleTrackType(s)}`);
-				Logger.info(`[subtitle] Track order: ${subSortedTypes.join(", ")}`);
-
-				const subDefaultAssigned = new Set<string>();
-				const subForcedAssigned = new Set<string>();
-
-				interface PlannedSubtitle {
-					stream: (typeof subtitleStreams)[number];
-					subFile: string;
-					effectiveLang: string;
-					trackName: string;
-					trackType: string;
-					flagArgs: string[];
-				}
-
-				const plannedSubs: PlannedSubtitle[] = [];
-
-				for (const stream of subtitleStreams) {
-					const trackType = detectSubtitleTrackType(stream);
-					const lang = stream.language || "und";
-					const langGroup = normalizeLanguageGroup(lang);
-					const trackName = job.settings.renameSubtitleTracks
-						? buildSubtitleTrackName(trackType, stream.title)
-						: stream.title || buildSubtitleTrackName(trackType, stream.title);
-
-					let effectiveLang = lang;
-					if (trackType === "honorifics") {
-						effectiveLang = "en-JP";
-					}
-
-					const flagArgs: string[] = [];
-
-					switch (trackType) {
-						case "full": {
-							const isDefault = !subDefaultAssigned.has(langGroup);
-							if (isDefault) subDefaultAssigned.add(langGroup);
-							flagArgs.push("--default-track-flag", `0:${isDefault ? "1" : "0"}`);
-							flagArgs.push("--forced-display-flag", "0:0");
-							flagArgs.push("--hearing-impaired-flag", "0:0");
-							flagArgs.push("--commentary-flag", "0:0");
-							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
-							break;
-						}
-						case "forced": {
-							if (subForcedAssigned.has(langGroup)) {
-								Logger.warn(`[subtitle] Duplicate forced track for ${lang}, skipping index ${stream.index}`);
-								continue;
-							}
-							subForcedAssigned.add(langGroup);
-							flagArgs.push("--default-track-flag", "0:0");
-							flagArgs.push("--forced-display-flag", "0:1");
-							flagArgs.push("--hearing-impaired-flag", "0:0");
-							flagArgs.push("--commentary-flag", "0:0");
-							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
-							break;
-						}
-						case "honorifics": {
-							flagArgs.push("--default-track-flag", "0:1");
-							flagArgs.push("--forced-display-flag", "0:0");
-							flagArgs.push("--hearing-impaired-flag", "0:0");
-							flagArgs.push("--commentary-flag", "0:0");
-							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
-							break;
-						}
-						case "sdh": {
-							flagArgs.push("--default-track-flag", "0:0");
-							flagArgs.push("--forced-display-flag", "0:0");
-							flagArgs.push("--hearing-impaired-flag", "0:1");
-							flagArgs.push("--commentary-flag", "0:0");
-							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
-							break;
-						}
-						case "commentary": {
-							flagArgs.push("--default-track-flag", "0:0");
-							flagArgs.push("--forced-display-flag", "0:0");
-							flagArgs.push("--hearing-impaired-flag", "0:0");
-							flagArgs.push("--commentary-flag", "0:1");
-							flagArgs.push("--original-flag", `0:${stream.isOriginal ? "1" : "0"}`);
-							break;
-						}
-					}
-
-					plannedSubs.push({
-						stream,
-						subFile: join(tempDir, `sub_${stream.index}.mkv`),
-						effectiveLang,
-						trackName,
-						trackType,
-						flagArgs,
-					});
-				}
-
-				if (plannedSubs.length > 0) {
-					checkCancelled();
-					setStep(S_MUX, { progress: 5, detail: `Extracting ${plannedSubs.length} subtitle track(s)` });
-
-					const extractArgs: string[] = ["ffmpeg", "-y", "-i", job.inputPath];
-					for (const planned of plannedSubs) {
-						extractArgs.push("-map", `0:${planned.stream.index}`, "-c:s", "copy", "-vn", "-an", "-map_chapters", "-1", "-map_metadata", "-1", planned.subFile);
-					}
-
-					const extractRes = await run(extractArgs, { signal });
-
-					if (extractRes.code !== 0) {
-						// One bad track fails the whole batch (fall back to per-track extraction so the rest still go through).
-						Logger.warn(`[subtitle] Single-pass extraction failed, falling back to per-track: ${extractRes.stderr || extractRes.stdout}`);
-						for (const planned of plannedSubs) {
-							checkCancelled();
-							const res = await run(
-								[
-									"ffmpeg",
-									"-y",
-									"-i",
-									job.inputPath,
-									"-map",
-									`0:${planned.stream.index}`,
-									"-c:s",
-									"copy",
-									"-vn",
-									"-an",
-									"-map_chapters",
-									"-1",
-									"-map_metadata",
-									"-1",
-									planned.subFile,
-								],
-								{ signal },
-							);
-							if (res.code !== 0) {
-								Logger.warn(`[subtitle] Failed to extract track ${planned.stream.index}, skipping: ${res.stderr || res.stdout}`);
-							}
-						}
-					}
-
-					setStep(S_MUX, { progress: 45, detail: `Extracted ${plannedSubs.length} subtitle track(s)` });
-				}
-
-				// Subtitle styling - SRT->ASS conversion and/or ASS dialogue-font restyle.
-				if (job.settings.convertSrtToAss || job.settings.restyleAssFont || job.settings.removeUnusedFonts) {
-					const targets = new Set(job.settings.assRestyleTargets);
-					const probeFamily = "__RabbitEncoderInjectedFontProbe_4F3A8B__";
-					const probeFamilyNormalized = normalizeFontName(probeFamily);
-
-					interface PreparedAss {
-						rawPath: string;
-						rawText: string;
-						kind: "converted-srt" | "ass";
-						restyle: boolean;
-					}
-
-					const preparedAss = new Map<number, PreparedAss>();
-
-					// Pass 1: materialize every subtitle we may need to inspect as ASS.
-					// No injected family is chosen yet.
-					for (const planned of plannedSubs) {
-						if (!existsSync(planned.subFile)) continue;
-						const codec = planned.stream.codec.toLowerCase();
-						const isSrt = codec === "subrip" || codec === "srt";
-						const isAss = codec === "ass" || codec === "ssa";
-
-						if (job.settings.convertSrtToAss && isSrt) {
-							const rawPath = join(tempDir, `sub_${planned.stream.index}.conv.ass`);
-							const r = await run(["ffmpeg", "-y", "-i", planned.subFile, "-map", "0:s:0", "-c:s", "ass", rawPath], { signal });
-							if (r.code === 0 && existsSync(rawPath)) {
-								preparedAss.set(planned.stream.index, {
-									rawPath,
-									rawText: readFileSync(rawPath, "utf-8"),
-									kind: "converted-srt",
-									restyle: true,
-								});
-							} else {
-								Logger.warn(`[subtitle] SRT→ASS conversion failed for track ${planned.stream.index}; keeping original`);
-							}
-						} else if (isAss) {
-							const rawPath = join(tempDir, `sub_${planned.stream.index}.raw.ass`);
-							const materialized = await materializeAssForInspection(job.inputPath, planned.stream.index, planned.subFile, rawPath, signal);
-							if (materialized.ok) {
-								preparedAss.set(planned.stream.index, {
-									rawPath,
-									rawText: readFileSync(rawPath, "utf-8"),
-									kind: "ass",
-									restyle: job.settings.restyleAssFont && targets.has(planned.trackType),
-								});
-							} else if (materialized.empty) {
-								Logger.debug(`[fonts] ASS track ${planned.stream.index} has no subtitle packets; ` + "it contributes no used fonts");
-							} else {
-								effectiveRemoveUnusedFonts = false;
-								Logger.warn(
-									`[fonts] Could not inspect ASS track ${planned.stream.index}; ` +
-										`preserving all source font attachments for safety (${materialized.detail})`,
-								);
-							}
-						}
-					}
-
-					// Pass 2: determine which *source* font families remain referenced after
-					// the intended restyle. A private placeholder stands in for Rabbit's
-					// injected face, so a restyled dialogue reference is not mistaken for a
-					// reason to retain a same-named source attachment. Untouched signs,
-					// songs, inline \fn overrides, and non-targeted styles remain visible.
-					sourceAttachmentUsedFonts.clear();
-					for (const prepared of preparedAss.values()) {
-						let probeText = prepared.rawText;
-						if (prepared.kind === "converted-srt") {
-							probeText = styleSrtAss(prepared.rawText, { ...DEFAULT_STYLE_APPEARANCE, fontName: probeFamily });
-						} else if (prepared.restyle) {
-							probeText = restyleAssDialogueFont(prepared.rawText, { ...DEFAULT_STYLE_APPEARANCE, fontName: probeFamily }, true);
-						}
-						for (const font of extractUsedFonts(probeText)) {
-							if (font !== probeFamilyNormalized) sourceAttachmentUsedFonts.add(font);
-						}
-					}
-
-					// Only source fonts which will survive the unused-font pass reserve a
-					// family identity. Therefore an unused Noto Sans does not force
-					// "Noto Sans 2", while a Noto Sans still used by signs does.
-					if (sourceExt === ".mkv" || sourceExt === ".mks") {
-						const sourceNames = await scanMkvAttachmentFontNames(job.inputPath, tempDir, sourceAttachmentUsedFonts, effectiveRemoveUnusedFonts, signal);
-						if (sourceNames) {
-							for (const name of sourceNames) occupiedFontNames.add(name);
-						} else {
-							effectiveRemoveUnusedFonts = false;
-							Logger.warn("[fonts] Source font collision scan failed; preserving source attachments and using best-effort numbering");
-						}
-					}
-
-					// Pass 3: perform the real transform using the final collision-free
-					// family selected from the retained source-font inventory.
-					for (const planned of plannedSubs) {
-						const prepared = preparedAss.get(planned.stream.index);
-						if (!prepared) continue;
-
-						if (prepared.kind === "converted-srt") {
-							const { face: baseFace, appearance } = fontRegistry.resolveFaceAndStyle(job.settings.fontGroup, planned.effectiveLang, prepared.rawText);
-							const face = await applyAxes(baseFace, appearance);
-							const family = face?.family ?? job.settings.fontGroup;
-							const outAss = join(tempDir, `sub_${planned.stream.index}.styled.ass`);
-							writeFileSync(outAss, styleSrtAss(prepared.rawText, { ...appearance, fontName: family }), "utf-8");
-							planned.subFile = outAss;
-							if (face) resolvedFaces.set(face.path, face);
-							if (!face) Logger.warn(`[fonts] No face for group "${job.settings.fontGroup}" (track ${planned.stream.index})`);
-						} else if (prepared.restyle) {
-							const { face: baseFace, appearance } = fontRegistry.resolveFaceAndStyle(job.settings.fontGroup, planned.effectiveLang, prepared.rawText);
-							const face = await applyAxes(baseFace, appearance);
-							const family = face?.family ?? job.settings.fontGroup;
-							const outAss = join(tempDir, `sub_${planned.stream.index}.styled.ass`);
-							writeFileSync(outAss, restyleAssDialogueFont(prepared.rawText, { ...appearance, fontName: family }, true), "utf-8");
-							planned.subFile = outAss;
-							if (face) resolvedFaces.set(face.path, face);
-						}
-					}
-				}
-
 				const orderedSubs = orderOutputSubtitles(
-					plannedSubs.map((p) => ({
-						stream: p.stream,
-						emit: { language: p.effectiveLang, trackName: p.trackName, flagArgs: p.flagArgs, file: p.subFile },
+					plannedSubs.map((planned) => ({
+						stream: planned.stream,
+						emit: {
+							language: planned.effectiveLang,
+							trackName: planned.trackName,
+							flagArgs: planned.flagArgs,
+							file: planned.subFile,
+						},
 					})),
-					translatedTracks.map((t) => ({
-						sourceIndex: t.sourceIndex,
-						emit: { language: t.language, trackName: t.trackName, flagArgs: t.flagArgs, file: t.file },
+					translatedTracks.map((track) => ({
+						sourceIndex: track.sourceIndex,
+						emit: {
+							language: track.language,
+							trackName: track.trackName,
+							flagArgs: track.flagArgs,
+							file: track.file,
+						},
 					})),
 					subtitleStreams,
 					(streams) =>
@@ -1849,16 +1958,23 @@ export async function encodeJob(
 						}),
 				);
 
-				for (const e of orderedSubs) {
-					if (!existsSync(e.file)) {
-						Logger.warn(`[subtitle] Output file missing, skipping: ${e.file}`);
+				for (const outputSubtitle of orderedSubs) {
+					if (!existsSync(outputSubtitle.file)) {
+						Logger.warn(`[subtitle] Output file missing, skipping: ${outputSubtitle.file}`);
 						continue;
 					}
-					mkvArgs.push("--language", `0:${sanitizeLanguageTag(e.language, `sub ${e.language}`)}`);
-					mkvArgs.push("--track-name", `0:${e.trackName}`);
-					mkvArgs.push(...e.flagArgs);
-					if (job.settings.compressSubtitles) mkvArgs.push("--compression", "0:zlib");
-					mkvArgs.push(e.file);
+
+					mkvArgs.push("--language", `0:${sanitizeLanguageTag(outputSubtitle.language, `sub ${outputSubtitle.language}`)}`);
+					mkvArgs.push("--track-name", `0:${outputSubtitle.trackName}`);
+					mkvArgs.push(...outputSubtitle.flagArgs);
+
+					if (job.settings.compressSubtitles) {
+						// Be explicit in both directions so mkvmerge defaults cannot
+						// override the threshold decision made during preparation.
+						mkvArgs.push("--compression", zlibDecisions.get(outputSubtitle.file) ? "0:zlib" : "0:none");
+					}
+
+					mkvArgs.push(outputSubtitle.file);
 				}
 			} else {
 				Logger.info("[subtitle] No subtitle streams found");
