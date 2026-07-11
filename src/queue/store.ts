@@ -461,7 +461,8 @@ export function scanLibraryPath(targetPath: string): { added: number; skipped: n
 		return { added: 0, skipped: 0, alreadyEncoded: 0 };
 	}
 
-	if (isAlreadyEncoded(filename, appConfig.organization)) {
+	const translateOnly = appConfig.defaults.subtitleProcessing === "translate";
+	if (!translateOnly && isAlreadyEncoded(filename, appConfig.organization)) {
 		return { added: 0, skipped: 0, alreadyEncoded: 1 };
 	}
 

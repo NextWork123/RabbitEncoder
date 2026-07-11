@@ -1,5 +1,5 @@
 import type { LibraryEntry, LibraryNode } from "../ui/models";
-import { authFetch, fetchJobs } from "../api/client";
+import { authFetch, fetchConfig, fetchJobs } from "../api/client";
 import { API } from "../config/api-base";
 import { escapeHtml } from "./job-render";
 import {
@@ -13,6 +13,17 @@ import {
 import { update } from "./polling";
 import { buttonById, byId, inputById } from "../shared/dom";
 import { appState } from "../state";
+
+/**
+ * In translate-only mode, already-encoded files are the primary target
+ * (backfilling subtitle languages into previous output), so they stay
+ * selectable. In every other mode they are shown but excluded, matching the
+ * server-side skip in scanLibraryPath/scanLibraryFolder — the gate on both
+ * sides is the DEFAULT pipeline mode, since queued jobs start from defaults.
+ */
+function encodedSelectable(): boolean {
+	return appState.defaults?.subtitleProcessing === "translate";
+}
 
 export async function fetchLibraryDirs() {
 	const res = await authFetch(`${API}/api/library`);
@@ -143,11 +154,12 @@ export async function toggleNodeExpand(path: string): Promise<void> {
 
 export function getCheckedPaths(): string[] {
 	const paths: string[] = [];
+	const includeEncoded = encodedSelectable();
 	function collect(path: string): void {
 		const node = appState.libraryNodes.get(path);
 		if (!node) return;
 		if (node.type === "file") {
-			if (node.checked && !node.encoded) paths.push(node.path);
+			if (node.checked && (includeEncoded || !node.encoded)) paths.push(node.path);
 			return;
 		}
 		const state = getNodeCheckState(path);
@@ -168,16 +180,17 @@ export function getCheckedPaths(): string[] {
 
 export function countSelectedToEncode(): number {
 	let total = 0;
+	const includeEncoded = encodedSelectable();
 	function count(path: string): void {
 		const node = appState.libraryNodes.get(path);
 		if (!node) return;
 		if (node.type === "file") {
-			if (node.checked && !node.encoded) total++;
+			if (node.checked && (includeEncoded || !node.encoded)) total++;
 			return;
 		}
 		const state = getNodeCheckState(path);
 		if (state.checked) {
-			total += (node.videoCount || 0) - (node.encodedCount || 0);
+			total += includeEncoded ? node.videoCount || 0 : (node.videoCount || 0) - (node.encodedCount || 0);
 			return;
 		}
 		if (state.indeterminate && node.children) {
@@ -219,11 +232,12 @@ export function renderTreeNode(node: LibraryNode): string {
 export function renderTreeFolder(node: LibraryNode, checked: boolean, indeterminate: boolean, indent: number): string {
 	const chevronClass = node.expanded ? "expanded" : "";
 	const encodedClass = node.videoCount > 0 && node.videoCount === node.encodedCount ? " is-encoded" : "";
-	const pending = (node.videoCount || 0) - (node.encodedCount || 0);
+	const pending = encodedSelectable() ? node.videoCount || 0 : (node.videoCount || 0) - (node.encodedCount || 0);
+	const actionWord = encodedSelectable() ? "to translate" : "to encode";
 
 	let metaParts = [];
-	if (node.videoCount > 0 && pending === 0) metaParts.push(`<span class="library-encoded-badge">encoded</span>`);
-	if (pending > 0) metaParts.push(`${pending} to encode`);
+	if (node.videoCount > 0 && node.videoCount === node.encodedCount) metaParts.push(`<span class="library-encoded-badge">encoded</span>`);
+	if (pending > 0) metaParts.push(`${pending} ${actionWord}`);
 	if (node.videoCount > 0) metaParts.push(`${node.videoCount} video${node.videoCount !== 1 ? "s" : ""}`);
 
 	let childrenHtml = "";
@@ -260,7 +274,7 @@ export function renderTreeFolder(node: LibraryNode, checked: boolean, indetermin
 }
 
 export function renderTreeFile(node: LibraryNode, indent: number): string {
-	const encodedClass = node.encoded ? " is-encoded" : "";
+	const encodedClass = node.encoded && !encodedSelectable() ? " is-encoded" : "";
 	const cbHtml = node.queued ? `<span class="tree-checkbox is-queued" title="Already in the queue"></span>` : renderCheckbox(node.path, node.checked, false);
 	let metaParts = [];
 	if (node.queued) metaParts.push(`<span class="library-queued-badge">queued</span>`);
@@ -295,11 +309,12 @@ export function updateLibraryFooter() {
 	const note = byId("library-note");
 	const encodeBtn = buttonById("library-encode-btn");
 	const count = countSelectedToEncode();
+	const action = encodedSelectable() ? "translation" : "encoding";
 	if (count > 0) {
-		note.textContent = `${count} file${count !== 1 ? "s" : ""} selected for encoding`;
+		note.textContent = `${count} file${count !== 1 ? "s" : ""} selected for ${action}`;
 		encodeBtn.disabled = false;
 	} else {
-		note.textContent = "Select folders or files to encode";
+		note.textContent = `Select folders or files to ${encodedSelectable() ? "translate" : "encode"}`;
 		encodeBtn.disabled = true;
 	}
 }
@@ -314,6 +329,12 @@ export async function openLibrary() {
 	modal.style.display = "";
 
 	try {
+		if (!appState.defaults) {
+			try {
+				appState.defaults = await fetchConfig();
+			} catch {}
+		}
+
 		appState.libraryDirs = await fetchLibraryDirs();
 		if (appState.libraryDirs.length === 0) {
 			content.innerHTML = `<div class="library-empty">No library directories configured.<br>Set <code>LIBRARY_DIRS</code> in your docker-compose.yml</div>`;
