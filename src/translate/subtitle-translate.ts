@@ -499,18 +499,24 @@ function langKey(tag: string | undefined, resolve: (t: string | undefined) => Tr
 	return normalizeTag(tag).split(/[-_]/)[0] || "und";
 }
 
+export interface PlanTargetOptions {
+	/** Force this stream index as the translation source instead of auto-selecting. */
+	forceSourceIndex?: number;
+}
+
 /**
  * Decide which target languages to produce and from which source track.
  *
  * Rules:
- *  - Source = the first text-based `full` or `honorifics` track.
+ *  - Source = `forceSourceIndex` when given (any text-based track), otherwise
+ *    the first text-based `full` or `honorifics` track.
  *  - A target language is skipped if a `full` or `honorifics` track already
  *    exists for it (either counts), or if it equals the source language.
  *  - Untranslatable languages (outside the model's set) are skipped with a note.
- *  - The produced track mirrors the source role (honorifics source -> honorifics
- *    output; otherwise full).
+ *  - The produced track mirrors the source role: honorifics source →
+ *    honorifics output; any other source type → full output.
  */
-export function planTargetLanguages(tracks: KeptSubDescriptor[], targetTags: string[]): TranslationPlan {
+export function planTargetLanguages(tracks: KeptSubDescriptor[], targetTags: string[], options: PlanTargetOptions = {}): TranslationPlan {
 	const skipped: string[] = [];
 	const productions: TranslationProduction[] = [];
 
@@ -518,15 +524,26 @@ export function planTargetLanguages(tracks: KeptSubDescriptor[], targetTags: str
 
 	// Languages already covered by a dialogue-bearing full/honorifics track.
 	const existing = new Set<string>();
-
 	for (const track of tracks) {
 		if (track.trackType === "full" || track.trackType === "honorifics") {
 			existing.add(langKey(track.language, resolve));
 		}
 	}
 
-	// Select the first eligible dialogue-bearing text track.
-	const source = tracks.find((track) => (track.trackType === "full" || track.trackType === "honorifics") && TEXT_CODECS.has(track.codec.toLowerCase()));
+	// Source selection: explicit override first (safety-net fallback to auto),
+	// then the first eligible dialogue-bearing text track.
+	let source: KeptSubDescriptor | undefined;
+	if (options.forceSourceIndex != null) {
+		const forced = tracks.find((t) => t.index === options.forceSourceIndex);
+		if (!forced) {
+			skipped.push(`forced source track ${options.forceSourceIndex} not found — falling back to auto selection`);
+		} else if (!TEXT_CODECS.has(forced.codec.toLowerCase())) {
+			skipped.push(`forced source track ${options.forceSourceIndex} is not text-based (${forced.codec}) — falling back to auto selection`);
+		} else {
+			source = forced;
+		}
+	}
+	source ??= tracks.find((track) => (track.trackType === "full" || track.trackType === "honorifics") && TEXT_CODECS.has(track.codec.toLowerCase()));
 
 	if (!source) {
 		skipped.push("no text-based full or honorifics subtitle track available to translate from");
@@ -539,6 +556,9 @@ export function planTargetLanguages(tracks: KeptSubDescriptor[], targetTags: str
 		skipped.push(`source track language "${source.language}" could not be resolved to a translatable language`);
 		return { productions, skipped };
 	}
+
+	// A forced SDH/forced/commentary source still produces a regular full track.
+	const outputType: "full" | "honorifics" = source.trackType === "honorifics" ? "honorifics" : "full";
 
 	const sourceKey = langKey(source.language, resolve);
 	const seen = new Set<string>();
@@ -572,7 +592,7 @@ export function planTargetLanguages(tracks: KeptSubDescriptor[], targetTags: str
 			source: sourceLang,
 			targetTag: normalizeTag(tag),
 			target,
-			trackType: source.trackType as "full" | "honorifics",
+			trackType: outputType,
 		});
 	}
 

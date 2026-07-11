@@ -254,6 +254,23 @@ export async function deleteFontFace(label: string, file: string): Promise<{ ok:
 	return res.ok ? { ok: true } : { ok: false, error: data?.error };
 }
 
+export interface JobSubtitleTrack {
+	index: number;
+	codec: string;
+	language: string;
+	flag: string;
+	title: string;
+	trackType: string;
+	isText: boolean;
+}
+
+export async function fetchJobSubtitleTracks(jobId: string): Promise<JobSubtitleTrack[]> {
+	const res = await authFetch(`${API}/api/jobs/${jobId}/subtitle-tracks`);
+	const data = await res.json();
+	if (data.error) throw new Error(data.error);
+	return data.tracks || [];
+}
+
 export async function fetchQueueState(): Promise<{ paused: boolean }> {
 	const res = await authFetch(`${API}/api/queue`);
 	return res.json();

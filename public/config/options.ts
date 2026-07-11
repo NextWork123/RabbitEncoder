@@ -72,7 +72,7 @@ export const CHANNELS: readonly { key: keyof AudioChannelBitrates; label: string
 	{ key: "7.1.4", label: "7.1.4 Atmos" },
 ];
 
-export const PIPELINE_PRESETS: readonly PipelinePreset[] = ["full", "prepare", "custom"];
+export const PIPELINE_PRESETS: readonly PipelinePreset[] = ["full", "prepare", "translate", "custom"];
 export const VIDEO_ENCODE_OPTIONS: readonly VideoEncodeMode[] = ["av1", "off"];
 export const AUDIO_ENCODE_OPTIONS: readonly AudioEncodeMode[] = ["opus", "copy"];
 export const SUBTITLE_PROCESSING_OPTIONS: readonly SubtitleProcessingMode[] = ["full", "copy"];
@@ -83,6 +83,8 @@ export const SUBTITLE_FORMAT_PRIORITY_OPTIONS = ["text-first", "picture-first"] 
 export const PIPELINE_PRESET_HELP: Record<PipelinePreset, string> = {
 	full: "Denoise, AV1, Opus, full subtitle pipeline.",
 	prepare: "Run denoise & VS only; pass audio/subs/video through (FFV1). For GPU-only servers.",
+	translate:
+		"Only add missing subtitle languages via AI translation. Video, audio, existing subtitles, chapters and fonts are copied 1:1; the output keeps its original filename.",
 	custom: "Configure each pipeline stage individually below.",
 };
 

@@ -1,7 +1,7 @@
 import type { Job, JobSettings } from "../types";
 
 export type AdvancedTarget = "default" | "job";
-export type PipelinePreset = "full" | "prepare" | "custom";
+export type PipelinePreset = "full" | "prepare" | "translate" | "custom";
 export type MoveDirection = "up" | "down";
 export type PreviewArtifactKind = "source" | "encode" | "clip" | "source-clip" | `vs:${number}` | `pf:${string}`;
 export type FetchOptions = RequestInit & { headers?: HeadersInit };

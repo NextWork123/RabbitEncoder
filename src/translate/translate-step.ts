@@ -54,6 +54,8 @@ export interface RunTranslateStepParams {
 	subtitleStyle: SubtitleStyle;
 	/** Release-group tag to stamp on translated track names (config.organization). */
 	organization: string;
+	/** Force a specific source stream index (translate-only pipeline). Auto-select when omitted. */
+	forceSourceIndex?: number;
 	signal?: AbortSignal;
 	onProgress?: (p: TranslateProgress) => void;
 }
@@ -176,7 +178,7 @@ async function styleSource(
  * would be worse).
  */
 export async function runTranslateStep(params: RunTranslateStepParams): Promise<TranslatedTrack[]> {
-	const { subtitleStreams, inputPath, tempDir, settings, subtitleStyle, organization, signal, onProgress } = params;
+	const { subtitleStreams, inputPath, tempDir, settings, subtitleStyle, organization, forceSourceIndex, signal, onProgress } = params;
 
 	const targets = settings.translateTargetLanguages ?? [];
 	if (!settings.translateSubtitles || targets.length === 0) return [];
@@ -185,7 +187,7 @@ export async function runTranslateStep(params: RunTranslateStepParams): Promise<
 	const model = settings.translateModel;
 
 	const descriptors = buildKeptDescriptors(subtitleStreams);
-	const plan = planTargetLanguages(descriptors, targets);
+	const plan = planTargetLanguages(descriptors, targets, { forceSourceIndex });
 	for (const note of plan.skipped) Logger.info(`[translate] Skipped ${note}`);
 	if (plan.productions.length === 0) {
 		Logger.info("[translate] Nothing to translate (all target languages already present or unsupported)");

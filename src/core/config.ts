@@ -95,6 +95,7 @@ const DEFAULT_JOB_SETTINGS: JobSettings = {
 	translateTimeoutMs: 300_000,
 	translateMaxTokens: 8192,
 	translateConcurrency: 1,
+	translateSourceTrack: "auto",
 	vsFilters: [],
 };
 

@@ -41,7 +41,6 @@ import {
 	renderPasswordControl,
 	renderRadioPills,
 	renderRemoveCommentaryAudioToggle,
-	renderSelectControl,
 	renderSkipBoostingToggle,
 	renderSubtitleConfidenceControl,
 	renderSubtitleLangDetectControl,
@@ -51,7 +50,8 @@ import {
 	wireEncoderControls,
 } from "./settings-controls";
 import { byId } from "../shared/dom";
-import { testTranslateConnection } from "../api/client";
+import { fetchJobSubtitleTracks, testTranslateConnection } from "../api/client";
+import { appState } from "../state";
 
 export type SettingsFormPrefix = "default" | "job";
 
@@ -59,6 +59,7 @@ export function inferPreset(settings: JobSettings): PipelinePreset {
 	const v = settings.videoEncode ?? "av1";
 	const a = settings.audioEncode ?? "opus";
 	const s = settings.subtitleProcessing ?? "full";
+	if (s === "translate") return "translate";
 	if (v === "av1" && a === "opus" && s === "full") return "full";
 	if (v === "off" && a === "copy" && s === "copy") return "prepare";
 	return "custom";
@@ -73,6 +74,10 @@ export function applyPresetToSettings(settings: JobSettings, preset: PipelinePre
 		settings.videoEncode = "off";
 		settings.audioEncode = "copy";
 		settings.subtitleProcessing = "copy";
+	} else if (preset === "translate") {
+		settings.videoEncode = "off";
+		settings.audioEncode = "copy";
+		settings.subtitleProcessing = "translate";
 	}
 }
 
@@ -95,6 +100,73 @@ export function cloneSettingsForEditing(base: JobSettings, audioBitratesFallback
 		assRestyleTargets: Array.isArray(base.assRestyleTargets) ? [...base.assRestyleTargets] : ["full", "honorifics", "forced", "sdh", "commentary"],
 		vsFilters: Array.isArray(base.vsFilters) ? JSON.parse(JSON.stringify(base.vsFilters)) : [],
 	};
+}
+
+/**
+ * Source-track picker for the translate-only preset. Job settings fetch the
+ * real track list from the server; the defaults modal has no file to probe,
+ * so it only offers Auto with a hint. Image-based tracks are listed but
+ * disabled (they cannot be translated). A previously-saved index that no
+ * longer exists is surfaced as a stale entry so the user sees why the backend
+ * will fall back to Auto.
+ */
+async function renderTranslateSourceControl(prefix: SettingsFormPrefix, settings: JobSettings): Promise<void> {
+	const group = byId(`${prefix}-translate-source-group`);
+	const container = byId(`${prefix}-translate-source`);
+	if (!group || !container) return;
+
+	const visible = (settings.subtitleProcessing ?? "full") === "translate";
+	group.style.display = visible ? "" : "none";
+	if (!visible) return;
+
+	container.innerHTML = "";
+
+	const select = document.createElement("select");
+	select.className = "select-input";
+
+	const autoOpt = document.createElement("option");
+	autoOpt.value = "auto";
+	autoOpt.textContent = "Auto — first full text-based track";
+	autoOpt.selected = settings.translateSourceTrack == null || settings.translateSourceTrack === "auto";
+	select.appendChild(autoOpt);
+
+	const hint = document.createElement("div");
+	hint.className = "lang-filter-hint";
+
+	if (prefix === "job" && appState.currentEditJobId) {
+		hint.textContent = "Loading tracks…";
+		try {
+			const tracks = await fetchJobSubtitleTracks(appState.currentEditJobId);
+			for (const t of tracks) {
+				const o = document.createElement("option");
+				o.value = String(t.index);
+				const label = t.title || t.trackType;
+				o.textContent = `${t.flag} ${t.language} — ${label} (${t.codec.toUpperCase()})${t.isText ? "" : " — image-based"}`;
+				o.disabled = !t.isText;
+				if (settings.translateSourceTrack === t.index) o.selected = true;
+				select.appendChild(o);
+			}
+			if (typeof settings.translateSourceTrack === "number" && !tracks.some((t) => t.index === settings.translateSourceTrack)) {
+				const o = document.createElement("option");
+				o.value = String(settings.translateSourceTrack);
+				o.textContent = `Track ${settings.translateSourceTrack} (no longer present — will fall back to Auto)`;
+				o.selected = true;
+				select.appendChild(o);
+			}
+			hint.textContent = "Languages shown are the container's labels; the analysis pass may relabel mislabeled tracks at run time.";
+		} catch (err) {
+			hint.textContent = `Could not load track list (${(err as Error).message}) — Auto will be used.`;
+		}
+	} else {
+		hint.textContent = "Defaults always start on Auto; pick a specific track in each job's settings.";
+	}
+
+	select.onchange = () => {
+		settings.translateSourceTrack = select.value === "auto" ? "auto" : parseInt(select.value, 10);
+	};
+
+	container.appendChild(select);
+	container.appendChild(hint);
 }
 
 /**
@@ -122,10 +194,12 @@ export function renderSettingsForm(prefix: SettingsFormPrefix, settings: JobSett
 		applyPresetToSettings(settings, v);
 		el("pipeline-custom").style.display = v === "custom" ? "" : "none";
 		el("pipeline-mode-help").textContent = PIPELINE_PRESET_HELP[v] ?? "";
+		void renderTranslateSourceControl(prefix, settings);
 	});
 
 	el("pipeline-custom").style.display = presetValue === "custom" ? "" : "none";
 	el("pipeline-mode-help").textContent = PIPELINE_PRESET_HELP[presetValue] ?? "";
+	void renderTranslateSourceControl(prefix, settings);
 
 	renderRadioPills(el("video-encode"), VIDEO_ENCODE_OPTIONS, settings.videoEncode ?? "av1", (v) => (settings.videoEncode = v));
 	renderRadioPills(el("audio-encode"), AUDIO_ENCODE_OPTIONS, settings.audioEncode ?? "opus", (v) => (settings.audioEncode = v));

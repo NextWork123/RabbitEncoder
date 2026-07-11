@@ -251,6 +251,7 @@ The format is versioned with an `RE<n>` prefix, so older codes continue to work 
 | `POST`   | `/api/jobs/reorder`                         | Set the entire queue order from a JSON `{ ids: [...] }` body                   |
 | `GET`    | `/api/jobs/:id/audio-preview`               | Preview audio reorder/filter/dedup for a job                                   |
 | `GET`    | `/api/jobs/:id/subtitle-preview`            | Preview subtitle reorder/rename for a job                                      |
+| `GET`    | `/api/jobs/:id/subtitle-tracks`             | List source subtitle tracks (for the translate-only source picker)             |
 | `GET`    | `/api/jobs/:id/mediainfo`                   | Run `mediainfo` on the source file and return the report                       |
 | `GET`    | `/api/jobs/:id/preview`                     | Get preview-encode state for a job (`idle`, running, or completed samples)     |
 | `POST`   | `/api/jobs/:id/preview`                     | Start a preview encode; optional body configures sample count and duration     |

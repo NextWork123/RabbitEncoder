@@ -4,7 +4,7 @@ import type { Web } from "@rabbit-company/web";
 import type { AppConfig, JobSettings } from "../core/types";
 import { cancelJob, getAllJobs, getJob, moveJob, removeJob, reorderJobs, retryJob, updateJobSettings } from "../queue/store";
 import { probeFile } from "../pipeline/probe";
-import { previewAudio, previewSubtitles } from "../tracks/tracks";
+import { detectSubtitleTrackType, isTextSubtitleCodec, languageToFlag, previewAudio, previewSubtitles } from "../tracks/tracks";
 import { decodeSettingsCode, SettingsCodeError } from "../settings/settings-code";
 
 export function registerJobRoutes(app: Web, config: AppConfig): void {
@@ -112,6 +112,32 @@ export function registerJobRoutes(app: Web, config: AppConfig): void {
 		} catch (err: any) {
 			return c.json({ error: `Preview failed: ${err.message || err}` }, 500);
 		}
+	});
+
+	app.get("/api/jobs/:id/subtitle-tracks", async (c) => {
+		const job = getJob(c.params.id!);
+		if (!job) return c.json({ error: "Job not found" }, 404);
+
+		if (!existsSync(job.inputPath)) {
+			return c.json({ error: "Source file no longer accessible" }, 400);
+		}
+
+		let probe = job.probe;
+		if (!probe) {
+			probe = await probeFile(job.inputPath);
+		}
+
+		const tracks = (probe!.subtitleStreams || []).map((s) => ({
+			index: s.index,
+			codec: s.codec,
+			language: s.language || "und",
+			flag: languageToFlag(s.language || "und"),
+			title: s.title || "",
+			trackType: detectSubtitleTrackType(s),
+			isText: isTextSubtitleCodec(s.codec),
+		}));
+
+		return c.json({ tracks });
 	});
 
 	app.get("/api/jobs/:id/audio-preview", async (c) => {

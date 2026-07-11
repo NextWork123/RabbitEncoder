@@ -127,6 +127,7 @@ const BASELINE: JobSettings = {
 	translateMaxTokens: 8192,
 	translateTimeoutMs: 120000,
 	translateConcurrency: 1,
+	translateSourceTrack: "auto",
 	vsFilters: [],
 };
 

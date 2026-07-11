@@ -6,7 +6,7 @@ export type DebandLevel = "off" | "light" | "medium" | "heavy";
 
 export type VideoEncodeMode = "av1" | "off";
 export type AudioEncodeMode = "opus" | "copy";
-export type SubtitleProcessingMode = "full" | "copy";
+export type SubtitleProcessingMode = "full" | "copy" | "translate";
 
 export type CropMode = "off" | "auto";
 
@@ -225,6 +225,8 @@ export interface JobSettings {
 	translateConcurrency?: number;
 	/** May translation overlap the video encode? "auto" overlaps only when llm is NOT on a loopback address. Default "auto". */
 	translateDuringEncode?: "auto" | "always" | "never";
+	/** Translate-only pipeline: source subtitle stream index, or "auto" = first full text track. */
+	translateSourceTrack: number | "auto";
 	/**
 	 * Ordered list of VapourSynth filter passes to apply during the prepare
 	 * stage, before the FFmpeg -vf chain. Each entry references a preset by

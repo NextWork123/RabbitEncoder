@@ -26,6 +26,7 @@ import {
 import { normalizeVsFilterChain } from "../video/vs-filters";
 import { getDefaultJobSettings } from "../core/config";
 import { isValidEncoder } from "../core/encoders";
+import { runTranslateOnlyJob } from "../pipeline/translate-only";
 
 const jobs = new Map<string, Job>();
 let paused = false;
@@ -43,7 +44,7 @@ let activePreviewAbort: AbortController | null = null;
 
 const VALID_VIDEO_ENCODE: VideoEncodeMode[] = ["av1", "off"];
 const VALID_AUDIO_ENCODE: AudioEncodeMode[] = ["opus", "copy"];
-const VALID_SUBTITLE_PROCESSING: SubtitleProcessingMode[] = ["full", "copy"];
+const VALID_SUBTITLE_PROCESSING: SubtitleProcessingMode[] = ["full", "copy", "translate"];
 const VALID_DENOISE_BACKENDS: DenoiseBackend[] = ["cpu", "auto", "vulkan", "opencl"];
 
 export function initStore(config: AppConfig) {
@@ -194,7 +195,7 @@ const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	finalSpeed: enumOf(["slower", "slow", "medium", "fast", "faster"]),
 	videoEncode: enumOf(["av1", "off"]),
 	audioEncode: enumOf(["opus", "copy"]),
-	subtitleProcessing: enumOf(["full", "copy"]),
+	subtitleProcessing: enumOf(VALID_SUBTITLE_PROCESSING),
 
 	crop: enumOf(["off", "auto"]),
 	cropLimit: numIn(0, 1),
@@ -283,6 +284,7 @@ const SETTINGS_SANITIZERS: { [K in keyof JobSettings]?: Sanitizer } = {
 	translateMaxTokens: intIn(512, 131072),
 	translateTimeoutMs: intIn(1000, 3600000),
 	translateConcurrency: intIn(1, 16),
+	translateSourceTrack: (v) => (v === "auto" ? "auto" : typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined),
 };
 
 function sanitizeSettingsInto(target: JobSettings, partial: Partial<JobSettings>): void {
@@ -404,7 +406,7 @@ export function scanLibraryFolder(folderPath: string): { added: number; skipped:
 				const ext = extname(entry.name).toLowerCase();
 				if (!MEDIA_EXTENSIONS.has(ext)) continue;
 
-				if (isAlreadyEncoded(entry.name, appConfig.organization)) {
+				if (appConfig.defaults.subtitleProcessing !== "translate" && isAlreadyEncoded(entry.name, appConfig.organization)) {
 					alreadyEncoded++;
 					continue;
 				}
@@ -580,7 +582,11 @@ async function processQueue() {
 	};
 
 	try {
-		await encodeJob(next, appConfig, updateFn, controller.signal);
+		if (next.settings.subtitleProcessing === "translate") {
+			await runTranslateOnlyJob(next, appConfig, updateFn, controller.signal);
+		} else {
+			await encodeJob(next, appConfig, updateFn, controller.signal);
+		}
 	} catch (err: any) {
 		if (err instanceof CancelledError) {
 			if (paused) {

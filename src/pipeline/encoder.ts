@@ -37,6 +37,7 @@ import { getEncoder } from "../core/encoders";
 import { axisSuffix, chooseAvailableFontFamily, fontAttachmentFileName, instancedFontNames, instanceFont } from "../fonts/font-instance";
 import { DEFAULT_STYLE_APPEARANCE, type StyleAppearance } from "../subtitles/subtitle-style";
 import { runTranslateStep, orderOutputSubtitles, type TranslatedTrack } from "../translate/translate-step";
+import { cleanupAssociatedFiles, resolveUniqueOutputPath } from "./output";
 
 export { CancelledError } from "../core/process";
 
@@ -68,34 +69,6 @@ function makeSteps(): JobStep[] {
 	];
 }
 
-/**
- * Remove .nfo, .srt, .jpg and .png files associated with a video file.
- */
-function cleanupAssociatedFiles(videoPath: string): void {
-	const dir = dirname(videoPath);
-	const stem = parsePath(videoPath).name;
-
-	try {
-		const entries = readdirSync(dir);
-		for (const entry of entries) {
-			const entryStem = parsePath(entry).name;
-			const entryExt = extname(entry).toLowerCase();
-
-			const isAssociated = entryStem.startsWith(stem);
-
-			if (isAssociated && [".nfo", ".srt", ".jpg", ".png"].includes(entryExt)) {
-				const fullPath = join(dir, entry);
-				try {
-					unlinkSync(fullPath);
-					Logger.info(`[library] Removed associated file: ${entry}`);
-				} catch (err: any) {
-					Logger.warn(`[library] Failed to remove ${entry}:`, { "error.message": err?.message });
-				}
-			}
-		}
-	} catch {}
-}
-
 const stripAnsiAndControls = (s: string) =>
 	s
 		// CSI sequences: ESC [ ... command
@@ -113,30 +86,6 @@ function fmtFramesWithFps(current: number, total: number, startedAt: number | un
 	const fpsStr = fps ? ` (${fps} fps)` : "";
 	const estStr = estVideoSize && estTotalSize ? ` — Video: ~${estVideoSize} · Total: ~${estTotalSize}` : "";
 	return `${base}${fpsStr}${estStr}`;
-}
-
-/**
- * Resolve a non-colliding absolute output path.
- *
- * If `dir/filename` already exists (and is not `ignorePath` - the source we are
- * about to replace in place), a numeric suffix is appended before the
- * extension: `name.mkv`, `name (2).mkv`, ... - until a free path
- * is found. This guarantees two distinct source files can never be written to
- * the same output, so an encode can never silently overwrite an earlier one
- * even if the computed names happen to be identical.
- */
-function resolveUniqueOutputPath(dir: string, filename: string, ignorePath?: string): string {
-	const ext = extname(filename);
-	const stem = filename.slice(0, filename.length - ext.length);
-	const ignore = ignorePath ? resolve(ignorePath) : null;
-
-	let candidate = join(dir, filename);
-	let n = 2;
-	while (existsSync(candidate) && resolve(candidate) !== ignore) {
-		candidate = join(dir, `${stem} (${n})${ext}`);
-		n++;
-	}
-	return candidate;
 }
 
 /** Burn mode for the first subtitle of a file: libass for text, overlay for bitmap. */
