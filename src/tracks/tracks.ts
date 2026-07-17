@@ -22,10 +22,16 @@ import { LANG_ALIASES } from "../core/naming";
 import { getOpusBitrateForLayout, normalizeLayout } from "../pipeline/probe";
 import { planTargetLanguages, type KeptSubDescriptor } from "../translate/subtitle-translate";
 
+export const DEFAULT_IGNORE_KEYWORD = "RabbitIgnore";
+
 const BARE_SCORE_THRESHOLD = 3;
 const MIN_LINES_FOR_LANG_DETECTION = 5;
 
 type WithLanguage = { language?: string };
+interface WithTitle {
+	index: number;
+	title?: string;
+}
 
 export interface SubtitleAnalysisOptions {
 	langDetect?: SubtitleLangDetectMode;
@@ -40,6 +46,32 @@ export interface SubtitleAnalysisOptions {
 	honorificsMinCount?: number;
 	honorificsRatio?: number;
 	assumeMislabeled?: boolean;
+}
+
+function escapeRegex(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Drop tracks whose title contains the ignore keyword (case-insensitive
+ * substring, so "[RabbitIgnore]", "RabbitIgnore: staff mix" etc. all match).
+ *
+ * Unlike the language filter this has NO keep-all fallback: it's an explicit
+ * per-track instruction from whoever tagged the source, so dropping every
+ * track is a legitimate outcome.
+ */
+export function filterIgnoredTracks<T extends WithTitle>(streams: T[], keyword: string | undefined, logTag: string): T[] {
+	const kw = (keyword ?? DEFAULT_IGNORE_KEYWORD).trim();
+	if (!kw) return streams;
+
+	const re = new RegExp(escapeRegex(kw), "i");
+	return streams.filter((s) => {
+		if (s.title && re.test(s.title)) {
+			Logger.info(`[${logTag}] Track ${s.index} dropped — title contains "${kw}": ${JSON.stringify(s.title)}`);
+			return false;
+		}
+		return true;
+	});
 }
 
 export function normalizeLanguageCode(input: string | undefined): string {
@@ -2071,7 +2103,7 @@ export async function previewSubtitles(
 		};
 	});
 
-	const cloned: SubtitleStreamInfo[] = sourceStreams.map((s) => ({
+	const cloned: SubtitleStreamInfo[] = filterIgnoredTracks(sourceStreams, DEFAULT_IGNORE_KEYWORD, "subtitle").map((s) => ({
 		index: s.index,
 		codec: s.codec,
 		language: s.language,
@@ -2241,7 +2273,8 @@ export function previewAudio(
 		isOriginal: s.isOriginal || false,
 	}));
 
-	const langFiltered = filterStreamsByLanguage(sourceStreams, options.languages || [], "audio");
+	const ignoredTracks = filterIgnoredTracks(sourceStreams, DEFAULT_IGNORE_KEYWORD, "audio");
+	const langFiltered = filterStreamsByLanguage(ignoredTracks, options.languages || [], "audio");
 	const typeFiltered = filterAudioTypes(
 		langFiltered,
 		{

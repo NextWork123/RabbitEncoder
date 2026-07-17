@@ -8,6 +8,8 @@ import {
 	filterAudioTypes,
 	sortAudioStreams,
 	deduplicateAudioStreams,
+	filterIgnoredTracks,
+	DEFAULT_IGNORE_KEYWORD,
 } from "../tracks/tracks";
 import { Logger } from "../core/logger";
 
@@ -19,7 +21,7 @@ export async function analyzeSourceTracks(
 	signal: AbortSignal,
 ): Promise<SourceTrackPlan> {
 	// Audio
-	const allAudioStreams = probe.audioStreams || [];
+	const allAudioStreams = filterIgnoredTracks(probe.audioStreams || [], DEFAULT_IGNORE_KEYWORD, "audio");
 
 	const audioDetect = {
 		commentary: settings.detectCommentaryAudio,
@@ -65,7 +67,7 @@ export async function analyzeSourceTracks(
 	}
 
 	// Subtitles
-	const allSubtitleStreams = probe.subtitleStreams || [];
+	const allSubtitleStreams = filterIgnoredTracks(probe.subtitleStreams || [], DEFAULT_IGNORE_KEYWORD, "subtitle");
 
 	await analyzeSubtitleStreams(
 		allSubtitleStreams,

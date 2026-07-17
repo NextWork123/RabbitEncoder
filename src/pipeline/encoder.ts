@@ -20,6 +20,8 @@ import {
 	filterAudioTypes,
 	buildAudioTrackName,
 	isTextSubtitleCodec,
+	DEFAULT_IGNORE_KEYWORD,
+	filterIgnoredTracks,
 } from "../tracks/tracks";
 import { styleSrtAss, restyleAssDialogueFont } from "../subtitles/ass-style";
 import { extractUsedFonts, normalizeFontName } from "../subtitles/ass-classifier";
@@ -459,6 +461,7 @@ export async function encodeJob(
 			cropLimit: job.settings.cropLimit,
 			downscale: job.settings.downscale,
 			sourceHeight: probe.height,
+			sourceWidth: probe.width,
 			denoise: job.settings.denoise,
 			denoiseBackend: job.settings.denoiseBackend,
 			deband: job.settings.deband,
@@ -1123,7 +1126,7 @@ export async function encodeJob(
 			setStep(S_AUDIO, { status: "active", progress: 0 });
 			updateJob({ status: "encoding_audio" });
 
-			const allAudioStreams = probe.audioStreams || [];
+			const allAudioStreams = filterIgnoredTracks(probe.audioStreams || [], DEFAULT_IGNORE_KEYWORD, "audio");
 
 			if (opts.precomputed) {
 				// Preview: reuse the whole-source audio selection so every clip keeps identical ordering/naming.
@@ -1334,7 +1337,7 @@ export async function encodeJob(
 					// Preview: reuse the whole-source subtitle selection.
 					subtitleStreams = opts.precomputed.subtitleStreams;
 				} else {
-					const allSubtitleStreams = probe.subtitleStreams || [];
+					const allSubtitleStreams = filterIgnoredTracks(probe.subtitleStreams || [], DEFAULT_IGNORE_KEYWORD, "subtitle");
 					await analyzeSubtitleStreams(
 						allSubtitleStreams,
 						job.inputPath,

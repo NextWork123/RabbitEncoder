@@ -329,34 +329,38 @@ interface CropRect {
 	h: number;
 }
 
+export interface FrameSize {
+	width: number;
+	height: number;
+}
+
+export function isFullFrameCrop(rect: CropRect, frame?: FrameSize): boolean {
+	if (!frame || !frame.width || !frame.height) return false;
+	return rect.x === 0 && rect.y === 0 && rect.w >= frame.width && rect.h >= frame.height;
+}
+
 /**
  * Detect non‑black crop rectangle using ffmpeg's cropdetect filter.
  * Returns null if no significant crop is found (or detection fails).
  */
-export async function detectCrop(inputPath: string, limit: number, signal?: AbortSignal): Promise<CropRect | null> {
+export async function detectCrop(inputPath: string, limit: number, signal?: AbortSignal, frame?: FrameSize): Promise<CropRect | null> {
 	const args = ["ffmpeg", "-hide_banner", "-i", inputPath, "-vf", `cropdetect=round=2:skip=0:reset=0:limit=${limit}`, "-t", "30", "-f", "null", "-"];
 
 	const { code, stderr } = await run(args, { signal });
 	if (code !== 0) return null;
 
-	// Parse stderr for lines like: [Parsed_cropdetect_0 @ ...] crop=1920:1080:0:0
 	const cropRe = /crop=(\d+):(\d+):(\d+):(\d+)/;
 	let lastCrop: CropRect | null = null;
 	for (const line of stderr.split("\n")) {
 		const m = line.match(cropRe);
-		if (m) {
-			const w = parseInt(m[1]!, 10);
-			const h = parseInt(m[2]!, 10);
-			const x = parseInt(m[3]!, 10);
-			const y = parseInt(m[4]!, 10);
-			// Only accept if crop is not the whole frame
-			if (w > 0 && h > 0 && !(x === 0 && y === 0 && w === 1920 && h === 1080)) {
-				lastCrop = { x, y, w, h };
-			}
-		}
+		if (!m) continue;
+		const rect = { w: +m[1]!, h: +m[2]!, x: +m[3]!, y: +m[4]! };
+		if (rect.w <= 0 || rect.h <= 0) continue;
+		if (isFullFrameCrop(rect, frame)) continue; // nothing to cut
+		lastCrop = rect;
 	}
 
-	return lastCrop || null;
+	return lastCrop;
 }
 
 export function buildCropFilter(rect: CropRect): string {
@@ -388,6 +392,7 @@ export interface PrepareFilterInput {
 	crop: CropMode;
 	cropLimit: number;
 	sourceHeight: number;
+	sourceWidth: number;
 	denoise: DenoiseLevel;
 	denoiseBackend: DenoiseBackend;
 	deband: DebandLevel;
@@ -404,6 +409,7 @@ export async function buildPrepareFilterConfig(input: PrepareFilterInput): Promi
 		crop,
 		cropLimit,
 		sourceHeight,
+		sourceWidth,
 		denoise,
 		denoiseBackend,
 		deband,
@@ -419,10 +425,16 @@ export async function buildPrepareFilterConfig(input: PrepareFilterInput): Promi
 	let cropRect: CropRect | null = null;
 
 	if (crop === "auto") {
-		cropRect = await detectCrop(input.inputPath, cropLimit, undefined);
+		const frame = { width: input.sourceWidth, height: input.sourceHeight };
+		cropRect = await detectCrop(input.inputPath, cropLimit, undefined, frame);
+
+		if (cropRect && isFullFrameCrop(cropRect, frame)) cropRect = null;
+
 		if (cropRect) {
 			cropFilter = buildCropFilter(cropRect);
 			cropLabel = `Cropping to ${cropRect.w}x${cropRect.h}`;
+		} else {
+			Logger.info(`[crop] No bars detected at ${input.sourceWidth}x${input.sourceHeight} — skipping crop step`);
 		}
 	}
 

@@ -130,7 +130,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	libtwolame0 \
 	libva2 \
 	libvdpau1 \
-	libvidstab1.1 \
+	libvidstab1.2 \
 	libvmaf3 \
 	libvo-amrwbenc0 \
 	libvorbis0a \
