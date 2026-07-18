@@ -40,6 +40,7 @@ import { axisSuffix, chooseAvailableFontFamily, fontAttachmentFileName, instance
 import { DEFAULT_STYLE_APPEARANCE, type StyleAppearance } from "../subtitles/subtitle-style";
 import { runTranslateStep, orderOutputSubtitles, type TranslatedTrack } from "../translate/translate-step";
 import { cleanupAssociatedFiles, resolveUniqueOutputPath } from "./output";
+import { computeDisplayDimensions, isPlausibleDar, resolveSourceSar } from "../video/aspect";
 
 export { CancelledError } from "../core/process";
 
@@ -288,6 +289,21 @@ async function zlibWorthIt(file: string, tempDir: string, minSavingsPct: number,
 			} catch {}
 		}
 	}
+}
+
+/**
+ * Ground-truth dimensions of the encoded video. Must be measured, not derived:
+ * crop, downscale, and VapourSynth passes can all change the frame, and only
+ * the finished file knows the result.
+ */
+async function probeVideoDimensions(path: string, signal?: AbortSignal): Promise<{ width: number; height: number } | null> {
+	const res = await run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "json", path], { signal });
+	if (res.code !== 0) return null;
+	try {
+		const s = JSON.parse(res.stdout)?.streams?.[0];
+		if (s?.width > 0 && s?.height > 0) return { width: s.width, height: s.height };
+	} catch {}
+	return null;
 }
 
 export async function encodeJob(
@@ -1788,12 +1804,15 @@ export async function encodeJob(
 		setStep(S_MUX, { status: "active", progress: 0, detail: "Merging MKV" });
 		updateJob({ status: "muxing" });
 
+		const shouldDownscale = job.settings.downscale && probe.height > 1080;
+		const encodedDims = (await probeVideoDimensions(videoMkv!, signal)) || {
+			width: shouldDownscale ? Math.round((probe.width * 1080) / probe.height / 2) * 2 : probe.width,
+			height: shouldDownscale ? 1080 : probe.height,
+		};
+
 		const firstSortedLayout = audioStreams.length > 0 ? normalizeLayout(audioStreams[0]!.channelLayout) : probe.audioLayout;
 		const audioLabel = getAudioReplacementLabel(firstSortedLayout);
-		const shouldDownscale = job.settings.downscale && probe.height > 1080;
-		const outputHeight = shouldDownscale ? 1080 : probe.height;
-		const outputWidth = shouldDownscale ? Math.round((probe.width * 1080) / probe.height / 2) * 2 : probe.width;
-		const resTag = getResolutionTag(outputWidth, outputHeight);
+		const resTag = getResolutionTag(encodedDims.width, encodedDims.height);
 		const videoCodecTag = skipVideoEncode ? "FFV1" : "AV1";
 		const audioCodecTag = skipAudioEncode ? "Source" : audioLabel;
 		const outputFilename = `${baseTitle} [${sourceTag}-${resTag}][${audioCodecTag}][${videoCodecTag}]-${config.organization}.mkv`;
@@ -1842,10 +1861,20 @@ export async function encodeJob(
 		mkvArgs.push("--track-name", `0:${config.organization}`);
 		mkvArgs.push("--original-flag", `0:${probe.videoOriginalFlag ? "1" : "0"}`);
 
-		if (probe.displayAspectRatio && probe.displayAspectRatio !== "0:1" && probe.displayAspectRatio !== "N/A") {
-			const dar = probe.displayAspectRatio.replace(":", "/");
-			mkvArgs.push("--aspect-ratio", `0:${dar}`);
-			Logger.info(`[mux] Preserving display aspect ratio: ${probe.displayAspectRatio}`);
+		if (!encodedDims) {
+			Logger.warn("[mux] Could not probe encoded dimensions — leaving display dimensions unset (players will assume square pixels)");
+		} else {
+			const sar = resolveSourceSar(probe);
+			const disp = computeDisplayDimensions(encodedDims.width, encodedDims.height, sar);
+			if (!isPlausibleDar(disp.width, disp.height)) {
+				Logger.warn(`[mux] Implausible DAR from source SAR ${sar.num}:${sar.den} — falling back to square pixels`);
+				mkvArgs.push("--display-dimensions", `0:${encodedDims.width}x${encodedDims.height}`);
+			} else {
+				mkvArgs.push("--display-dimensions", `0:${disp.width}x${disp.height}`);
+				Logger.info(
+					`[mux] Display dimensions ${disp.width}x${disp.height} ` + `(coded ${encodedDims.width}x${encodedDims.height}, source SAR ${sar.num}:${sar.den})`,
+				);
+			}
 		}
 
 		mkvArgs.push(videoMkv!);

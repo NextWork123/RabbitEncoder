@@ -59,6 +59,7 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 	const isFrameRateMismatch = Math.abs(videoStreamFps - videoDisplayFps) > 0.5;
 
 	const displayAspectRatio = best.display_aspect_ratio || "";
+	const sampleAspectRatio = best.sample_aspect_ratio || "";
 	const videoLanguage = best.tags?.language || "und";
 	const videoOriginalFlag = best.disposition?.original === 1;
 
@@ -137,6 +138,7 @@ export async function probeFile(inputPath: string): Promise<ProbeResult> {
 		height: best.height,
 		videoCodec: best.codec_name || "",
 		displayAspectRatio,
+		sampleAspectRatio,
 		duration,
 		audioLayout,
 		audioChannels,

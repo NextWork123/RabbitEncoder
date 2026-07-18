@@ -291,6 +291,7 @@ export interface ProbeResult {
 	height: number;
 	videoCodec: string;
 	displayAspectRatio: string;
+	sampleAspectRatio: string;
 	duration: number;
 	audioLayout: string;
 	audioChannels: number;
