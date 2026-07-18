@@ -123,13 +123,6 @@ export interface DebandConfig {
 	filter: string;
 }
 
-interface CropRect {
-	x: number;
-	y: number;
-	w: number;
-	h: number;
-}
-
 export interface PrepareFilterStep {
 	/** Discrete kind — used for artifact filenames and frontend routing. */
 	kind: "crop" | "downscale" | "deband" | "denoise";
@@ -334,33 +327,141 @@ export interface FrameSize {
 	height: number;
 }
 
+/** Crops that shave ≤ this many px off an edge are treated as "nothing there". */
+const FULL_FRAME_TOLERANCE_PX = 4;
+
+/** If the detected crop keeps less than this fraction of the frame area, it's junk. */
+const MIN_KEPT_AREA_RATIO = 0.5;
+
 export function isFullFrameCrop(rect: CropRect, frame?: FrameSize): boolean {
 	if (!frame || !frame.width || !frame.height) return false;
-	return rect.x === 0 && rect.y === 0 && rect.w >= frame.width && rect.h >= frame.height;
+	return (
+		rect.x <= FULL_FRAME_TOLERANCE_PX &&
+		rect.y <= FULL_FRAME_TOLERANCE_PX &&
+		rect.x + rect.w >= frame.width - FULL_FRAME_TOLERANCE_PX &&
+		rect.y + rect.h >= frame.height - FULL_FRAME_TOLERANCE_PX
+	);
+}
+
+function unionRects(a: CropRect, b: CropRect): CropRect {
+	const x1 = Math.min(a.x, b.x);
+	const y1 = Math.min(a.y, b.y);
+	const x2 = Math.max(a.x + a.w, b.x + b.w);
+	const y2 = Math.max(a.y + a.h, b.y + b.h);
+	return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+}
+
+interface CropWindow {
+	start: number;
+	duration: number;
 }
 
 /**
- * Detect non‑black crop rectangle using ffmpeg's cropdetect filter.
- * Returns null if no significant crop is found (or detection fails).
+ * Pick detection windows spread across the file, avoiding the head (intros,
+ * studio logos, title cards on black) and the tail (credits, fade-outs).
  */
-export async function detectCrop(inputPath: string, limit: number, signal?: AbortSignal, frame?: FrameSize): Promise<CropRect | null> {
-	const args = ["ffmpeg", "-hide_banner", "-i", inputPath, "-vf", `cropdetect=round=2:skip=0:reset=0:limit=${limit}`, "-t", "30", "-f", "null", "-"];
+function planCropWindows(totalDuration?: number): CropWindow[] {
+	// Duration unknown: probe a few fixed offsets; windows past EOF simply
+	// produce no frames and are ignored.
+	if (!totalDuration || !Number.isFinite(totalDuration) || totalDuration <= 0) {
+		return [
+			{ start: 60, duration: 20 },
+			{ start: 300, duration: 20 },
+			{ start: 900, duration: 20 },
+		];
+	}
+
+	// Very short file: sample the middle half in one window.
+	if (totalDuration < 120) {
+		const start = totalDuration * 0.25;
+		return [{ start, duration: Math.max(5, totalDuration * 0.5) }];
+	}
+
+	const winDur = Math.min(30, Math.max(10, totalDuration * 0.05));
+	return [0.2, 0.5, 0.8].map((p) => {
+		const start = Math.max(30, Math.min(totalDuration * p, totalDuration - winDur - 5));
+		return { start, duration: winDur };
+	});
+}
+
+/**
+ * Run cropdetect over one window and return its FINAL accumulated bounding
+ * box. With reset=0 the box only grows, so the last reported rect is the
+ * verdict for the window — including full-frame ("no bars") results, which
+ * MUST NOT be filtered out here: discarding them and keeping an earlier,
+ * smaller rect is how title cards end up as the crop.
+ */
+async function detectCropWindow(inputPath: string, limit: number, win: CropWindow, signal?: AbortSignal): Promise<CropRect | null> {
+	const args = [
+		"ffmpeg",
+		"-hide_banner",
+		"-ss",
+		win.start.toFixed(2),
+		"-i",
+		inputPath,
+		"-vf",
+		`cropdetect=round=2:skip=0:reset=0:limit=${limit}`,
+		"-t",
+		win.duration.toFixed(2),
+		"-f",
+		"null",
+		"-",
+	];
 
 	const { code, stderr } = await run(args, { signal });
 	if (code !== 0) return null;
 
-	const cropRe = /crop=(\d+):(\d+):(\d+):(\d+)/;
-	let lastCrop: CropRect | null = null;
+	const cropRe = /crop=(-?\d+):(-?\d+):(-?\d+):(-?\d+)/;
+	let last: CropRect | null = null;
 	for (const line of stderr.split("\n")) {
 		const m = line.match(cropRe);
 		if (!m) continue;
 		const rect = { w: +m[1]!, h: +m[2]!, x: +m[3]!, y: +m[4]! };
+		// Negative/zero dims = nothing but black seen so far (fades, leaders).
 		if (rect.w <= 0 || rect.h <= 0) continue;
-		if (isFullFrameCrop(rect, frame)) continue; // nothing to cut
-		lastCrop = rect;
+		last = rect; // keep the final value, full-frame included
+	}
+	return last;
+}
+
+/**
+ * Detect non-black crop rectangle using ffmpeg's cropdetect filter.
+ * Samples several windows across the file and unions the results.
+ * Returns null if no significant crop is found (or detection fails).
+ */
+export async function detectCrop(inputPath: string, limit: number, signal?: AbortSignal, frame?: FrameSize, totalDuration?: number): Promise<CropRect | null> {
+	const windows = planCropWindows(totalDuration);
+
+	let union: CropRect | null = null;
+	for (const win of windows) {
+		if (signal?.aborted) break;
+		const rect = await detectCropWindow(inputPath, limit, win, signal);
+		if (!rect) continue;
+
+		union = union ? unionRects(union, rect) : rect;
+
+		if (isFullFrameCrop(union, frame)) {
+			Logger.info(`[crop] Window at ${win.start.toFixed(0)}s reached full frame — no bars, skipping crop`);
+			return null;
+		}
 	}
 
-	return lastCrop;
+	if (!union) return null;
+	if (isFullFrameCrop(union, frame)) return null;
+
+	if (frame && frame.width && frame.height) {
+		const keptRatio = (union.w * union.h) / (frame.width * frame.height);
+		if (keptRatio < MIN_KEPT_AREA_RATIO) {
+			Logger.warn(
+				`[crop] Detected crop ${union.w}x${union.h}+${union.x}+${union.y} keeps only ` +
+					`${Math.round(keptRatio * 100)}% of ${frame.width}x${frame.height} — ` +
+					`likely dark scenes or a title card, skipping crop`,
+			);
+			return null;
+		}
+	}
+
+	return union;
 }
 
 export function buildCropFilter(rect: CropRect): string {
