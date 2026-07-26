@@ -22,6 +22,7 @@ import {
 	isTextSubtitleCodec,
 	DEFAULT_IGNORE_KEYWORD,
 	filterIgnoredTracks,
+	computeSubtitleDefaultIndexByLang,
 } from "../tracks/tracks";
 import { styleSrtAss, restyleAssDialogueFont } from "../subtitles/ass-style";
 import { extractUsedFonts, normalizeFontName } from "../subtitles/ass-classifier";
@@ -1484,8 +1485,8 @@ export async function encodeJob(
 				const subSortedTypes = subtitleStreams.map((stream) => `${stream.language || "und"}:${detectSubtitleTrackType(stream)}`);
 				Logger.info(`[subtitle] Track order: ${subSortedTypes.join(", ")}`);
 
-				const subDefaultAssigned = new Set<string>();
 				const subForcedAssigned = new Set<string>();
+				const subDefaultIndexByLang = computeSubtitleDefaultIndexByLang(subtitleStreams);
 
 				for (const stream of subtitleStreams) {
 					const trackType = detectSubtitleTrackType(stream);
@@ -1501,11 +1502,10 @@ export async function encodeJob(
 					}
 
 					const flagArgs: string[] = [];
+					const isDefault = subDefaultIndexByLang.get(langGroup) === stream.index;
 
 					switch (trackType) {
 						case "full": {
-							const isDefault = !subDefaultAssigned.has(langGroup);
-							if (isDefault) subDefaultAssigned.add(langGroup);
 							flagArgs.push("--default-track-flag", `0:${isDefault ? "1" : "0"}`);
 							flagArgs.push("--forced-display-flag", "0:0");
 							flagArgs.push("--hearing-impaired-flag", "0:0");
@@ -1535,7 +1535,7 @@ export async function encodeJob(
 							break;
 						}
 						case "sdh": {
-							flagArgs.push("--default-track-flag", "0:0");
+							flagArgs.push("--default-track-flag", `0:${isDefault ? "1" : "0"}`);
 							flagArgs.push("--forced-display-flag", "0:0");
 							flagArgs.push("--hearing-impaired-flag", "0:1");
 							flagArgs.push("--commentary-flag", "0:0");

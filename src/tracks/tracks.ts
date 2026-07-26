@@ -300,7 +300,7 @@ export function filterOutCommentaryAudio(streams: AudioStreamInfo[]): AudioStrea
 	return filterAudioTypes(streams, { removeCommentary: true });
 }
 
-export type SubtitleTrackType = "full" | "forced" | "sdh" | "commentary" | "honorifics" | "storyboard";
+export type SubtitleTrackType = "full" | "sdh" | "forced" | "commentary" | "honorifics" | "storyboard";
 
 const SUB_FORCED_PATTERN = /\b(signs?[\s/&]*songs?|songs?[\s/&]*signs?|forced|typesett?ing|TS\b|OP\/?ED|karaoke|kara)\b/i;
 const SUB_SDH_PATTERN = /\b(sdh|cc|closed\s*captions?|hearing\s*impaired|descriptive)\b/i;
@@ -1002,8 +1002,8 @@ export function buildSubtitleTrackName(trackType: SubtitleTrackType, sourceTitle
 	const labels: Record<SubtitleTrackType, string> = {
 		full: isDubtitle ? "Full Dubtitles" : "Full Subtitles",
 		honorifics: isDubtitle ? "Full Dubtitles (Honorifics)" : "Full Subtitles (Honorifics)",
-		forced: "Signs & Songs",
 		sdh: "SDH",
+		forced: "Signs & Songs",
 		commentary: "Commentary",
 		storyboard: "Storyboards",
 	};
@@ -1103,9 +1103,9 @@ export function sortSubtitleStreams(streams: SubtitleStreamInfo[], options: Subt
 				return 0;
 			case "honorifics":
 				return 1;
-			case "forced":
-				return 2;
 			case "sdh":
+				return 2;
+			case "forced":
 				return 3;
 			case "commentary":
 				return 4;
@@ -2001,21 +2001,44 @@ export function languageToFlag(lang: string | undefined): string {
 	return String.fromCodePoint(...[...country].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
 }
 
+// Which subtitle types are eligible to carry the Default flag, and in what
+// preference order within a language group. Lower = preferred. Types absent
+// here (forced, commentary, storyboard) never become Default.
+export const SUB_DEFAULT_PRIORITY: Record<string, number> = { full: 0, sdh: 1 };
+
+/** The one stream index that carries the Default flag per language group. */
+export function computeSubtitleDefaultIndexByLang(streams: SubtitleStreamInfo[]): Map<string, number> {
+	const bestPrio = new Map<string, number>();
+	const winner = new Map<string, number>();
+	for (const stream of streams) {
+		const prio = SUB_DEFAULT_PRIORITY[detectSubtitleTrackType(stream)];
+		if (prio === undefined) continue; // forced/commentary/storyboard: skip
+		const langGroup = normalizeLanguageGroup(stream.language || "und");
+		const cur = bestPrio.get(langGroup);
+		if (cur === undefined || prio < cur) {
+			bestPrio.set(langGroup, prio);
+			winner.set(langGroup, stream.index);
+		}
+	}
+	return winner;
+}
+
 /**
  * Compute MKV flags for a subtitle track exactly as the encoder would.
  */
 function computeOutputFlags(
 	trackType: SubtitleTrackType,
 	langGroup: string,
-	defaultAssigned: Set<string>,
+	streamIndex: number,
+	defaultIndexByLang: Map<string, number>,
 	forcedAssigned: Set<string>,
-): { isDefault: boolean; isForced: boolean; isHearingImpaired: boolean; isCommentary: boolean } {
+) {
+	const isDefault = defaultIndexByLang.get(langGroup) === streamIndex;
 	switch (trackType) {
-		case "full": {
-			const isDefault = !defaultAssigned.has(langGroup);
-			if (isDefault) defaultAssigned.add(langGroup);
+		case "full":
 			return { isDefault, isForced: false, isHearingImpaired: false, isCommentary: false };
-		}
+		case "sdh":
+			return { isDefault, isForced: false, isHearingImpaired: true, isCommentary: false };
 		case "honorifics":
 			return { isDefault: true, isForced: false, isHearingImpaired: false, isCommentary: false };
 		case "forced": {
@@ -2023,8 +2046,6 @@ function computeOutputFlags(
 			if (!alreadyForced) forcedAssigned.add(langGroup);
 			return { isDefault: false, isForced: !alreadyForced, isHearingImpaired: false, isCommentary: false };
 		}
-		case "sdh":
-			return { isDefault: false, isForced: false, isHearingImpaired: true, isCommentary: false };
 		case "commentary":
 			return { isDefault: false, isForced: false, isHearingImpaired: false, isCommentary: true };
 		default:
@@ -2150,7 +2171,7 @@ export async function previewSubtitles(
 
 	const renameTracks = options.renameTracks ?? true;
 
-	const defaultAssigned = new Set<string>();
+	const defaultIndexByLang = computeSubtitleDefaultIndexByLang(finalStreams);
 	const forcedAssigned = new Set<string>();
 
 	let output: SubtitlePreviewTrack[] = finalStreams.map((s) => {
@@ -2162,7 +2183,7 @@ export async function previewSubtitles(
 		let effectiveLang = lang;
 		if (trackType === "honorifics") effectiveLang = "en-JP";
 
-		const flags = computeOutputFlags(trackType, langGroup, defaultAssigned, forcedAssigned);
+		const flags = computeOutputFlags(trackType, langGroup, s.index, defaultIndexByLang, forcedAssigned);
 
 		return {
 			index: s.index,
