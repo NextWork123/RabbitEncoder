@@ -229,7 +229,13 @@ async function cutSourceClip(inputPath: string, startSec: number, windowSec: num
 			"-t",
 			windowSec.toFixed(3),
 			"-map",
-			"0",
+			"0:V:0", // primary real video
+			"-map",
+			"0:a?", // audio
+			"-map",
+			"0:s?", // subtitles
+			"-map",
+			"0:t?", // font attachments
 			"-map_chapters",
 			"-1",
 			"-c",
