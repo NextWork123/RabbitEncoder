@@ -221,7 +221,7 @@ export function detectSourceTag(filename: string): string {
  * Pattern: `]-GroupName` at the end of the stem.
  */
 export function detectReleaseGroup(filename: string): string | null {
-	const match = filename.match(/\]-([A-Za-z0-9._-]+)$/);
+	const match = filename.match(/\]-([A-Za-z0-9._&-]+)$/);
 	return match?.[1] ?? null;
 }
 
@@ -258,7 +258,7 @@ export function extractBaseTitle(stem: string): string {
 	let s = stem.trim();
 
 	// Trailing release group: `]-Group` -> `]`
-	s = s.replace(/(\])-[A-Za-z0-9._-]+$/, "$1");
+	s = s.replace(/(\])-[A-Za-z0-9._&-]+$/, "$1");
 
 	// Trailing bracketed / parenthesised tag blocks, peeled one at a time.
 	let prev: string;
